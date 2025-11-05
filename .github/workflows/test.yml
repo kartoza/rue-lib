@@ -10,6 +10,8 @@ jobs:
   test-with-nix:
     name: Test with Nix
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 
@@ -26,6 +28,8 @@ jobs:
   lint:
     name: Lint and Security Checks
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
       - uses: actions/checkout@v4
 

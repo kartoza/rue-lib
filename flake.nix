@@ -140,7 +140,7 @@
             wheel
           ];
 
-          checkInputs = with pkgs.python311Packages; [
+          nativeCheckInputs = with pkgs.python311Packages; [
             pytest
             pytest-cov
           ];

@@ -5,6 +5,8 @@ from typing import Optional
 from rich.console import Console
 from rich.table import Table
 
+from rue_lib import __version__
+
 console = Console()
 
 
@@ -32,6 +34,6 @@ def display_info() -> None:
 
     table.add_row("Name", "rue-lib")
     table.add_row("Purpose", "Rapid Urbanisation Explorer")
-    table.add_row("Version", "0.1.0")
+    table.add_row("Version", __version__)
 
     console.print(table)

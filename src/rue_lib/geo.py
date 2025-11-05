@@ -39,7 +39,7 @@ def get_gdal_version() -> str:
     return gdal.VersionInfo("VERSION_NUM")
 
 
-def create_sample_geodataframe():
+def create_sample_geodataframe() -> "gpd.GeoDataFrame":
     """
     Create a sample GeoDataFrame.
 
