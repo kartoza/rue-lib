@@ -2,6 +2,10 @@
 
 Python library for the Rapid Urbanisation Explorer project
 
+## Quick Start
+
+**New to the project?** See [QUICKSTART.md](QUICKSTART.md) for the fastest way to get started!
+
 ## Features
 
 - Geospatial data processing with GDAL/OGR and GeoPandas
