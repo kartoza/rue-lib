@@ -1,0 +1,51 @@
+{
+  "version": "0.2",
+  "language": "en",
+  "words": [
+    "kartoza",
+    "gdal",
+    "geopandas",
+    "ogr",
+    "osgeo",
+    "pypi",
+    "timvim",
+    "timlinux",
+    "nixos",
+    "nixpkgs",
+    "pytest",
+    "pyproject",
+    "bandit",
+    "cspell",
+    "ruff",
+    "setuptools",
+    "twine",
+    "geodataframe",
+    "shapely",
+    "urbanisation",
+    "neovim",
+    "nvim"
+  ],
+  "ignorePaths": [
+    "node_modules",
+    "dist",
+    "build",
+    ".git",
+    ".pytest_cache",
+    ".ruff_cache",
+    "__pycache__",
+    "*.egg-info",
+    ".venv",
+    "venv",
+    ".nix-*",
+    "flake.lock"
+  ],
+  "ignoreRegExpList": [
+    "/\\*[\\s\\S]*?\\*/",
+    "\"[^\"]*\"",
+    "'[^']*'",
+    "https?://[^\\s]+",
+    "[a-f0-9]{40}",
+    "[A-Z0-9_]+\\s*=",
+    "\\b[A-Z][A-Z0-9_]+\\b"
+  ]
+}
