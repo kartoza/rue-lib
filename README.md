@@ -87,14 +87,33 @@ pytest tests/ --cov=rue_lib --cov-report=html
 
 # Using Nix
 nix run .#test
+
+# Using Make
+make test
 ```
 
 ## Dependencies
 
 Core dependencies:
+- Rich >= 13.0.0
+
+Optional geo dependencies (install with `pip install rue-lib[geo]`):
 - GDAL >= 3.0.0
 - GeoPandas >= 0.10.0
-- Rich >= 13.0.0
+
+Development dependencies:
+- pytest >= 7.0.0
+- pytest-cov >= 4.0.0
+- ruff >= 0.1.0
+- bandit >= 1.7.0
+- pre-commit >= 3.0.0
+
+## Documentation
+
+- [CONTRIBUTING.md](CONTRIBUTING.md) - Development setup and contribution guidelines
+- [NIX_SETUP.md](NIX_SETUP.md) - Detailed Nix flake setup guide
+- [PUBLISHING.md](PUBLISHING.md) - How to publish to PyPI
+- [examples/](examples/) - Usage examples
 
 ## License
 
@@ -102,8 +121,8 @@ MIT License - see LICENSE file for details
 
 ## Contributing
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes
-4. Run pre-commit checks: `pre-commit run --all-files`
-5. Submit a pull request
+We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for detailed instructions on:
+- Setting up the development environment
+- Running tests and checks
+- Code style guidelines
+- Submitting pull requests
