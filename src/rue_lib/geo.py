@@ -1,7 +1,28 @@
-"""Geospatial functionality for rue-lib."""
+"""Geospatial functionality for rue-lib.
 
-import geopandas as gpd
-from osgeo import gdal, ogr
+Note: This module requires GDAL and GeoPandas to be installed.
+Install with: pip install rue-lib[geo]
+Or use the Nix development environment: nix develop
+"""
+
+try:
+    import geopandas as gpd
+    from osgeo import gdal, ogr
+
+    HAS_GEO = True
+except ImportError:
+    HAS_GEO = False
+    gdal = None
+    ogr = None
+    gpd = None
+
+
+def _check_geo_available():
+    """Check if geospatial dependencies are available."""
+    if not HAS_GEO:
+        raise ImportError(
+            "Geospatial dependencies not installed. Install with: pip install rue-lib[geo]"
+        )
 
 
 def get_gdal_version() -> str:
@@ -10,17 +31,25 @@ def get_gdal_version() -> str:
 
     Returns:
         GDAL version string.
+
+    Raises:
+        ImportError: If GDAL is not installed.
     """
+    _check_geo_available()
     return gdal.VersionInfo("VERSION_NUM")
 
 
-def create_sample_geodataframe() -> gpd.GeoDataFrame:
+def create_sample_geodataframe():
     """
     Create a sample GeoDataFrame.
 
     Returns:
         A simple GeoDataFrame with sample data.
+
+    Raises:
+        ImportError: If GeoPandas is not installed.
     """
+    _check_geo_available()
     from shapely.geometry import Point
 
     # Create sample data
@@ -43,5 +72,9 @@ def get_driver_count() -> int:
 
     Returns:
         Number of available OGR drivers.
+
+    Raises:
+        ImportError: If GDAL/OGR is not installed.
     """
+    _check_geo_available()
     return ogr.GetDriverCount()

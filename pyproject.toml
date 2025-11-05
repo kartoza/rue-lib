@@ -27,8 +27,6 @@ classifiers = [
 ]
 
 dependencies = [
-    "gdal>=3.0.0",
-    "geopandas>=0.10.0",
     "rich>=13.0.0",
 ]
 
@@ -39,6 +37,12 @@ dev = [
     "ruff>=0.1.0",
     "bandit>=1.7.0",
     "pre-commit>=3.0.0",
+    "build>=1.0.0",
+    "twine>=4.0.0",
+]
+geo = [
+    "gdal>=3.0.0",
+    "geopandas>=0.10.0",
 ]
 
 [project.urls]
