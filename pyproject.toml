@@ -43,7 +43,12 @@ dev = [
 geo = [
     "gdal>=3.0.0",
     "geopandas>=0.10.0",
+    "shapely>=2.0.0",
+    "pyproj>=3.6.0",
 ]
+
+[project.scripts]
+rue-step1 = "rue_lib.cli.step1:main"
 
 [project.urls]
 Homepage = "https://github.com/kartoza/rue-lib"
