@@ -47,7 +47,7 @@ class TestProjector:
         poly_back = projector.to_wgs84(poly_local)
 
         # Should be very close to original
-        assert poly.almost_equals(poly_back, decimal=6)
+        assert poly.equals_exact(poly_back, tolerance=1e-6)
 
     def test_area_calculation_accuracy(self):
         """Test that area calculations are more accurate in local CRS."""
