@@ -18,7 +18,12 @@ def clean_edges(poly: Polygon) -> Polygon:
 
     Returns:
         Cleaned polygon
+
+    Raises:
+        GeometryError: If the polygon is empty or invalid
     """
+    if poly.is_empty:
+        raise GeometryError("Cannot clean edges of an empty polygon")
     try:
         return poly.buffer(0)
     except Exception as e:
