@@ -28,6 +28,10 @@ classifiers = [
 
 dependencies = [
     "rich>=13.0.0",
+    "geopandas>=0.14.0",
+    "shapely>=2.0.0",
+    "pyproj>=3.6.0",
+    "pandas>=2.0.0",
 ]
 
 [project.optional-dependencies]
@@ -40,10 +44,9 @@ dev = [
     "build>=1.0.0",
     "twine>=4.0.0",
 ]
-geo = [
-    "gdal>=3.0.0",
-    "geopandas>=0.10.0",
-]
+
+[project.scripts]
+rue-step1 = "rue_lib.cli.step1:main"
 
 [project.urls]
 Homepage = "https://github.com/kartoza/rue-lib"
