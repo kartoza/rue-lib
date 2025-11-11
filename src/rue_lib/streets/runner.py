@@ -20,8 +20,8 @@ class StreetConfig:
     roads_path: str
     on_grid_partition_depth_arterial_roads: float = 40.0
     on_grid_partition_depth_secondary_roads: float = 30.0
-    off_grid_partitions_preferred_depth: float = 44.0
-    off_grid_partitions_preferred_width: float = 60.0
+    off_grid_partitions_preferred_depth: float = 80.0
+    off_grid_partitions_preferred_width: float = 90.0
     arterial_setback_depth: float = 60.0  # Depth of arterial road setback zone
     secondary_setback_depth: float = 60.0  # Depth of secondary road setback zone
     perpendicular_line_length: float = 1000.0  # Length of perpendicular lines
@@ -498,12 +498,10 @@ def create_division_points(gpkg_path, line_layer_name, output_layer_name, prefer
                 best_n = n
 
         w = L / best_n
+        n_full_bands = int(L / w)
 
-        for k in range(int(L / w)):
-            distance = (k + 0.5) * w
-
-            if (k + 1) * w > L:
-                break
+        for k in range(n_full_bands - 1):
+            distance = (k + 1) * w
 
             point = line_geom.Value(distance)
 
@@ -512,6 +510,7 @@ def create_division_points(gpkg_path, line_layer_name, output_layer_name, prefer
             out_feature.SetField("line_id", line_id)
             out_feature.SetField("point_id", k)
             out_feature.SetField("width", w)
+            out_feature.SetField("n_bands", n_full_bands)
             output_layer.CreateFeature(out_feature)
             out_feature = None
             total_points += 1
