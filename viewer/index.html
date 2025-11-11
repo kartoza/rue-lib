@@ -5,8 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Viewer</title>
 
-    <!-- Leaflet CSS -->
-    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <!-- MapLibre GL CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
 
     <style>
         * {
@@ -23,12 +23,13 @@
         }
 
         #sidebar {
-            width: 300px;
+            width: 350px;
             background: #2c3e50;
             color: #ecf0f1;
             padding: 20px;
             overflow-y: auto;
             box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+            z-index: 1;
         }
 
         #map {
@@ -151,9 +152,35 @@
             cursor: not-allowed;
         }
 
-        /* Custom Leaflet popup styling */
-        .leaflet-popup-content {
-            margin: 10px;
+        .view-controls {
+            margin-top: 15px;
+        }
+
+        .view-control-label {
+            font-size: 12px;
+            color: #95a5a6;
+            margin-bottom: 5px;
+        }
+
+        .slider-container {
+            margin: 10px 0;
+        }
+
+        .slider {
+            width: 100%;
+            margin: 5px 0;
+        }
+
+        .slider-value {
+            font-size: 11px;
+            color: #95a5a6;
+            text-align: right;
+        }
+
+        /* MapLibre popup styling */
+        .maplibregl-popup-content {
+            padding: 10px;
+            max-width: 300px;
         }
 
         .popup-table {
@@ -169,6 +196,28 @@
         .popup-table td:first-child {
             font-weight: bold;
             padding-right: 10px;
+        }
+
+        .api-key-input {
+            width: 100%;
+            padding: 6px;
+            margin: 10px 0;
+            background: #34495e;
+            color: #ecf0f1;
+            border: 1px solid #4a5f7f;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .api-note {
+            font-size: 11px;
+            color: #95a5a6;
+            margin-top: 5px;
+            line-height: 1.4;
+        }
+
+        .api-note a {
+            color: #3498db;
         }
     </style>
 </head>
@@ -193,26 +242,74 @@
         <div class="controls">
             <button id="fit-bounds-btn" class="btn" disabled>Fit to Visible Layers</button>
             <button id="clear-all-btn" class="btn" disabled>Clear All Layers</button>
+
+            <div class="view-controls">
+                <div class="view-control-label">Camera Controls:</div>
+                <button id="reset-north-btn" class="btn">Reset North</button>
+                <button id="toggle-3d-btn" class="btn">Toggle 3D View</button>
+
+                <div class="slider-container">
+                    <label for="pitch-slider" style="font-size: 12px; color: #ecf0f1;">Pitch (Tilt):</label>
+                    <input type="range" id="pitch-slider" class="slider" min="0" max="60" value="0">
+                    <div class="slider-value"><span id="pitch-value">0</span>°</div>
+                </div>
+
+                <div class="slider-container">
+                    <label for="bearing-slider" style="font-size: 12px; color: #ecf0f1;">Bearing (Rotation):</label>
+                    <input type="range" id="bearing-slider" class="slider" min="0" max="360" value="0">
+                    <div class="slider-value"><span id="bearing-value">0</span>°</div>
+                </div>
+            </div>
         </div>
+
     </div>
 
     <div id="map"></div>
 
-    <!-- Leaflet JS -->
-    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <!-- MapLibre GL JS -->
+    <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
 
     <script>
-        // Initialize map
-        const map = L.map('map').setView([0, 0], 2);
+        // API key management
+        let apiKey = '';
 
-        // Add base map
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-            attribution: '© OpenStreetMap contributors',
-            maxZoom: 19
-        }).addTo(map);
+        // Initialize map with MapLibre GL
+        const map = new maplibregl.Map({
+            container: 'map',
+            style: apiKey ?
+                `https://api.maptiler.com/maps/streets-v2/style.json?key=${apiKey}` :
+                {
+                    version: 8,
+                    sources: {
+                        'osm': {
+                            type: 'raster',
+                            tiles: ['https://a.tile.openstreetmap.org/{z}/{x}/{y}.png'],
+                            tileSize: 256,
+                            attribution: '© OpenStreetMap contributors'
+                        }
+                    },
+                    layers: [{
+                        id: 'osm',
+                        type: 'raster',
+                        source: 'osm',
+                        minzoom: 0,
+                        maxzoom: 19
+                    }]
+                },
+            center: [0, 0],
+            zoom: 2,
+            pitch: 0,
+            bearing: 0,
+            antialias: true
+        });
+
+        // Add navigation controls
+        map.addControl(new maplibregl.NavigationControl(), 'top-right');
+        map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
 
         // Store loaded layers
         const loadedLayers = new Map();
+        const layerSources = new Map();
 
         // Color palette for layers
         const colors = [
@@ -227,6 +324,49 @@
             colorIndex++;
             return color;
         }
+
+        // View control functions
+        document.getElementById('reset-north-btn').addEventListener('click', () => {
+            map.easeTo({ bearing: 0, pitch: 0, duration: 1000 });
+        });
+
+        let is3D = false;
+        document.getElementById('toggle-3d-btn').addEventListener('click', () => {
+            is3D = !is3D;
+            if (is3D) {
+                map.easeTo({ pitch: 60, duration: 1000 });
+            } else {
+                map.easeTo({ pitch: 0, duration: 1000 });
+            }
+        });
+
+        // Pitch slider
+        const pitchSlider = document.getElementById('pitch-slider');
+        const pitchValue = document.getElementById('pitch-value');
+        pitchSlider.addEventListener('input', (e) => {
+            const pitch = parseInt(e.target.value);
+            map.setPitch(pitch);
+            pitchValue.textContent = pitch;
+        });
+
+        // Bearing slider
+        const bearingSlider = document.getElementById('bearing-slider');
+        const bearingValue = document.getElementById('bearing-value');
+        bearingSlider.addEventListener('input', (e) => {
+            const bearing = parseInt(e.target.value);
+            map.setBearing(bearing);
+            bearingValue.textContent = bearing;
+        });
+
+        // Update sliders when map moves
+        map.on('move', () => {
+            const pitch = Math.round(map.getPitch());
+            const bearing = Math.round(map.getBearing());
+            pitchSlider.value = pitch;
+            pitchValue.textContent = pitch;
+            bearingSlider.value = bearing;
+            bearingValue.textContent = bearing;
+        });
 
         // Load GeoPackages
         async function loadGeoPackages() {
@@ -330,65 +470,138 @@
                 );
                 const geojson = await response.json();
 
-                // Style function
-                const style = (feature) => {
-                    const geomType = feature.geometry.type;
+                const sourceId = `source-${layerName}`;
+                const layerId = `layer-${layerName}`;
 
-                    if (geomType === 'Point' || geomType === 'MultiPoint') {
-                        return {
-                            radius: 5,
-                            fillColor: color,
-                            color: '#fff',
-                            weight: 1,
-                            opacity: 1,
-                            fillOpacity: 0.7
-                        };
-                    } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
-                        return {
-                            color: color,
-                            weight: 3,
-                            opacity: 0.8
-                        };
-                    } else {
-                        return {
-                            fillColor: color,
-                            color: color,
-                            weight: 2,
-                            opacity: 0.8,
-                            fillOpacity: 0.3
-                        };
-                    }
-                };
+                // Check if source already exists, if so remove the layer first
+                if (map.getSource(sourceId)) {
+                    console.log('Source already exists, removing old layer first');
+                    removeLayer(layerName);
+                }
 
-                // Create GeoJSON layer
-                const layer = L.geoJSON(geojson, {
-                    style: style,
-                    pointToLayer: (feature, latlng) => {
-                        return L.circleMarker(latlng);
-                    },
-                    onEachFeature: (feature, layer) => {
-                        if (feature.properties) {
-                            let popupContent = '<table class="popup-table">';
-                            for (const [key, value] of Object.entries(feature.properties)) {
-                                if (value !== null && value !== undefined) {
-                                    popupContent += `<tr><td>${key}</td><td>${value}</td></tr>`;
-                                }
-                            }
-                            popupContent += '</table>';
-                            layer.bindPopup(popupContent);
-                        }
-                    }
+                // Add source
+                map.addSource(sourceId, {
+                    type: 'geojson',
+                    data: geojson
                 });
 
-                layer.addTo(map);
-                loadedLayers.set(layerName, layer);
+                // Determine geometry type from first feature
+                const firstFeature = geojson.features[0];
+                const geomType = firstFeature ? firstFeature.geometry.type : 'Polygon';
 
-                // Fit bounds to this layer if it's the first one
-                if (loadedLayers.size === 1) {
-                    const bounds = layer.getBounds();
-                    if (bounds.isValid()) {
-                        map.fitBounds(bounds);
-                    }
+                // Add appropriate layer based on geometry type
+                if (geomType === 'Point' || geomType === 'MultiPoint') {
+                    map.addLayer({
+                        id: layerId,
+                        type: 'circle',
+                        source: sourceId,
+                        paint: {
+                            'circle-radius': 5,
+                            'circle-color': color,
+                            'circle-stroke-color': '#fff',
+                            'circle-stroke-width': 1,
+                            'circle-opacity': 0.8
+                        }
+                    });
+                } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+                    map.addLayer({
+                        id: layerId,
+                        type: 'line',
+                        source: sourceId,
+                        paint: {
+                            'line-color': color,
+                            'line-width': 3,
+                            'line-opacity': 0.8
+                        }
+                    });
+                } else {
+                    // Polygon - create both fill and outline layers
+                    const fillId = `${layerId}-fill`;
+                    const outlineId = `${layerId}-outline`;
+
+                    map.addLayer({
+                        id: fillId,
+                        type: 'fill',
+                        source: sourceId,
+                        paint: {
+                            'fill-color': color,
+                            'fill-opacity': 0.3
+                        }
+                    });
+                    map.addLayer({
+                        id: outlineId,
+                        type: 'line',
+                        source: sourceId,
+                        paint: {
+                            'line-color': color,
+                            'line-width': 2,
+                            'line-opacity': 0.8
+                        }
+                    });
+
+                    // Store fill and outline layer IDs
+                    loadedLayers.set(`${layerName}-fill`, fillId);
+                    loadedLayers.set(`${layerName}-outline`, outlineId);
+
+                    // Add click handler for fill layer
+                    map.on('click', fillId, (e) => {
+                        const properties = e.features[0].properties;
+                        let html = '<table class="popup-table">';
+                        for (const [key, value] of Object.entries(properties)) {
+                            if (value !== null && value !== undefined) {
+                                html += `<tr><td>${key}</td><td>${value}</td></tr>`;
+                            }
+                        }
+                        html += '</table>';
+
+                        new maplibregl.Popup()
+                            .setLngLat(e.lngLat)
+                            .setHTML(html)
+                            .addTo(map);
+                    });
+
+                    // Change cursor on hover for fill layer
+                    map.on('mouseenter', fillId, () => {
+                        map.getCanvas().style.cursor = 'pointer';
+                    });
+                    map.on('mouseleave', fillId, () => {
+                        map.getCanvas().style.cursor = '';
+                    });
+                }
+
+                loadedLayers.set(layerName, layerId);
+                layerSources.set(layerName, sourceId);
+
+                // Add click handler for popups (for points and lines)
+                if (geomType !== 'Polygon' && geomType !== 'MultiPolygon') {
+                    map.on('click', layerId, (e) => {
+                        const properties = e.features[0].properties;
+                        let html = '<table class="popup-table">';
+                        for (const [key, value] of Object.entries(properties)) {
+                            if (value !== null && value !== undefined) {
+                                html += `<tr><td>${key}</td><td>${value}</td></tr>`;
+                            }
+                        }
+                        html += '</table>';
+
+                        new maplibregl.Popup()
+                            .setLngLat(e.lngLat)
+                            .setHTML(html)
+                            .addTo(map);
+                    });
+
+                    // Change cursor on hover
+                    map.on('mouseenter', layerId, () => {
+                        map.getCanvas().style.cursor = 'pointer';
+                    });
+                    map.on('mouseleave', layerId, () => {
+                        map.getCanvas().style.cursor = '';
+                    });
+                }
+
+                // Fit bounds to first layer
+                if (layerSources.size === 1) {
+                    fitToGeoJSON(geojson);
                 }
             } catch (error) {
                 console.error('Error loading layer data:', error);
@@ -398,11 +611,35 @@
 
         // Remove layer from map
         function removeLayer(layerName) {
-            const layer = loadedLayers.get(layerName);
-            if (layer) {
-                map.removeLayer(layer);
-                loadedLayers.delete(layerName);
+            const layerId = loadedLayers.get(layerName);
+            const sourceId = layerSources.get(layerName);
+
+            // Remove fill layer for polygons (must be removed first)
+            const fillId = `${layerId}-fill`;
+            if (fillId && map.getLayer(fillId)) {
+                map.removeLayer(fillId);
             }
+
+            // Remove outline layer for polygons
+            const outlineId = `${layerId}-outline`;
+            if (outlineId && map.getLayer(outlineId)) {
+                map.removeLayer(outlineId);
+            }
+
+            // Remove main layer (for points/lines)
+            if (layerId && map.getLayer(layerId)) {
+                map.removeLayer(layerId);
+            }
+
+            // Now remove the source after all layers are removed
+            if (sourceId && map.getSource(sourceId)) {
+                map.removeSource(sourceId);
+            }
+
+            loadedLayers.delete(layerName);
+            loadedLayers.delete(`${layerName}-fill`);
+            loadedLayers.delete(`${layerName}-outline`);
+            layerSources.delete(layerName);
         }
 
         // Update control buttons
@@ -410,34 +647,67 @@
             const fitBtn = document.getElementById('fit-bounds-btn');
             const clearBtn = document.getElementById('clear-all-btn');
 
-            const hasLayers = loadedLayers.size > 0;
+            const hasLayers = layerSources.size > 0;
             fitBtn.disabled = !hasLayers;
             clearBtn.disabled = !hasLayers;
         }
 
-        // Fit bounds to all visible layers
-        function fitToVisibleLayers() {
-            if (loadedLayers.size === 0) return;
+        // Fit bounds to GeoJSON
+        function fitToGeoJSON(geojson) {
+            const bounds = new maplibregl.LngLatBounds();
 
-            const bounds = L.latLngBounds();
-            loadedLayers.forEach(layer => {
-                const layerBounds = layer.getBounds();
-                if (layerBounds.isValid()) {
-                    bounds.extend(layerBounds);
+            geojson.features.forEach(feature => {
+                if (feature.geometry.type === 'Point') {
+                    bounds.extend(feature.geometry.coordinates);
+                } else if (feature.geometry.type === 'LineString') {
+                    feature.geometry.coordinates.forEach(coord => bounds.extend(coord));
+                } else if (feature.geometry.type === 'Polygon') {
+                    feature.geometry.coordinates[0].forEach(coord => bounds.extend(coord));
+                } else if (feature.geometry.type === 'MultiPolygon') {
+                    feature.geometry.coordinates.forEach(polygon => {
+                        polygon[0].forEach(coord => bounds.extend(coord));
+                    });
                 }
             });
 
-            if (bounds.isValid()) {
-                map.fitBounds(bounds);
+            map.fitBounds(bounds, { padding: 50, duration: 1000 });
+        }
+
+        // Fit bounds to all visible layers
+        async function fitToVisibleLayers() {
+            if (layerSources.size === 0) return;
+
+            const bounds = new maplibregl.LngLatBounds();
+
+            for (const [layerName, sourceId] of layerSources.entries()) {
+                const source = map.getSource(sourceId);
+                if (source) {
+                    const data = source._data;
+                    data.features.forEach(feature => {
+                        if (feature.geometry.type === 'Point') {
+                            bounds.extend(feature.geometry.coordinates);
+                        } else if (feature.geometry.type === 'LineString') {
+                            feature.geometry.coordinates.forEach(coord => bounds.extend(coord));
+                        } else if (feature.geometry.type === 'Polygon') {
+                            feature.geometry.coordinates[0].forEach(coord => bounds.extend(coord));
+                        } else if (feature.geometry.type === 'MultiPolygon') {
+                            feature.geometry.coordinates.forEach(polygon => {
+                                polygon[0].forEach(coord => bounds.extend(coord));
+                            });
+                        }
+                    });
+                }
+            }
+
+            if (!bounds.isEmpty()) {
+                map.fitBounds(bounds, { padding: 50, duration: 1000 });
             }
         }
 
         // Clear all layers
         function clearAllLayers() {
-            loadedLayers.forEach((layer, name) => {
-                map.removeLayer(layer);
-            });
-            loadedLayers.clear();
+            const layerNames = Array.from(layerSources.keys());
+            layerNames.forEach(layerName => removeLayer(layerName));
 
             // Uncheck all checkboxes
             document.querySelectorAll('.layer-checkbox').forEach(cb => {
@@ -464,7 +734,9 @@
         document.getElementById('clear-all-btn').addEventListener('click', clearAllLayers);
 
         // Load GeoPackages on page load
-        loadGeoPackages();
+        map.on('load', () => {
+            loadGeoPackages();
+        });
     </script>
 </body>
 </html>
