@@ -4,7 +4,9 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
-from osgeo import gdal, ogr, osr
+from osgeo import gdal, ogr
+
+from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 
 # Enable GDAL exceptions
 gdal.UseExceptions()
@@ -27,97 +29,35 @@ class StreetConfig:
     road_local_width_m: float = 12.0  # ROAD_LOC_W_
 
 
-def get_utm_zone_from_layer(layer):
-    """Determine appropriate UTM zone from layer extent."""
-    extent = layer.GetExtent()
-    lon_center = (extent[0] + extent[1]) / 2
-    lat_center = (extent[2] + extent[3]) / 2
-
-    # Calculate UTM zone
-    zone = int((lon_center + 180) / 6) + 1
-
-    # Determine if northern or southern hemisphere
-    if lat_center >= 0:
-        epsg_code = 32600 + zone  # Northern hemisphere
-    else:
-        epsg_code = 32700 + zone  # Southern hemisphere
-
-    return epsg_code
-
-
-def reproject_layer(input_path, output_path, target_epsg):
-    """Reproject a layer to target CRS."""
-    source_ds = ogr.Open(input_path)
-    source_layer = source_ds.GetLayer()
-
-    source_srs = source_layer.GetSpatialRef()
-    target_srs = osr.SpatialReference()
-    target_srs.ImportFromEPSG(target_epsg)
-
-    transform = osr.CoordinateTransformation(source_srs, target_srs)
-
-    layer_name = os.path.splitext(os.path.basename(input_path))[0] + f"_{target_epsg}"
-
-    # Create output
-    driver = ogr.GetDriverByName("GPKG")
-    if os.path.exists(output_path):
-        output_ds = driver.Open(output_path, 1)
-    else:
-        output_ds = driver.CreateDataSource(output_path)
-
-    # Remove layer if exists
-    for i in range(output_ds.GetLayerCount()):
-        if output_ds.GetLayerByIndex(i).GetName() == layer_name:
-            output_ds.DeleteLayer(i)
-            break
-
-    output_layer = output_ds.CreateLayer(layer_name, target_srs, source_layer.GetGeomType())
-
-    # Copy field definitions
-    source_layer_defn = source_layer.GetLayerDefn()
-    for i in range(source_layer_defn.GetFieldCount()):
-        field_defn = source_layer_defn.GetFieldDefn(i)
-        output_layer.CreateField(field_defn)
-
-    # Transform and copy features
-    for feature in source_layer:
-        geom = feature.GetGeometryRef()
-        geom.Transform(transform)
-
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(geom)
-
-        for i in range(source_layer_defn.GetFieldCount()):
-            out_feature.SetField(
-                source_layer_defn.GetFieldDefn(i).GetNameRef(), feature.GetField(i)
-            )
-
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-
-    # Explicitly close datasets
-    source_ds = None
-    output_ds = None
-
-    return layer_name
-
-
 def extract_by_expression(input_path, layer_name, expression, output_path, output_layer_name):
-    """Extract features matching an expression."""
+    """Extract features by attribute expression and write to a GeoPackage layer.
+
+    Args:
+        input_path (str): Path to the input dataset (e.g., .gpkg, .geojson).
+        layer_name (str): Name of the layer within `input_path` to filter.
+        expression (str): OGR attribute filter expression
+            (e.g., "\"road_type\" = 'road_art'").
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors (dataset access, layer creation,
+            or feature writes).
+    """
     source_ds = ogr.Open(input_path)
     source_layer = source_ds.GetLayerByName(layer_name)
 
-    # Copy field definitions and geometry type before closing
     source_layer_defn = source_layer.GetLayerDefn()
     srs = source_layer.GetSpatialRef()
     geom_type = source_layer.GetGeomType()
 
-    # Get fields info
     field_defs = []
     for i in range(source_layer_defn.GetFieldCount()):
         field_defs.append(source_layer_defn.GetFieldDefn(i))
 
-    # Apply filter and get features
     source_layer.SetAttributeFilter(expression)
     features_data = []
     for feature in source_layer:
@@ -128,17 +68,14 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
             field_values[field_name] = feature.GetField(i)
         features_data.append((geom, field_values))
 
-    # Close source dataset
     source_ds = None
 
-    # Now open output dataset
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
         output_ds = driver.Open(output_path, 1)
     else:
         output_ds = driver.CreateDataSource(output_path)
 
-    # Remove layer if exists
     for i in range(output_ds.GetLayerCount()):
         if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
             output_ds.DeleteLayer(i)
@@ -146,11 +83,9 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
 
     output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
 
-    # Create fields
     for field_def in field_defs:
         output_layer.CreateField(field_def)
 
-    # Write features
     for geom, field_values in features_data:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
         out_feature.SetGeometry(geom)
@@ -164,58 +99,27 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
     output_ds = None
 
 
-def buffer_layer(input_path, layer_name, distance, output_path, output_layer_name, dissolve=True):
-    """Buffer a layer."""
-    source_ds = ogr.Open(input_path)
-    source_layer = source_ds.GetLayerByName(layer_name)
-
-    srs = source_layer.GetSpatialRef()
-
-    # Collect all geometries
-    geoms = []
-    for feature in source_layer:
-        geom = feature.GetGeometryRef().Clone()
-        buffered = geom.Buffer(distance)
-        geoms.append(buffered)
-
-    # Close source
-    source_ds = None
-
-    # Process geometries
-    if dissolve and geoms:
-        union_geom = geoms[0]
-        for geom in geoms[1:]:
-            union_geom = union_geom.Union(geom)
-        geoms = [union_geom]
-
-    # Open output
-    driver = ogr.GetDriverByName("GPKG")
-    if os.path.exists(output_path):
-        output_ds = driver.Open(output_path, 1)
-    else:
-        output_ds = driver.CreateDataSource(output_path)
-
-    # Remove layer if exists
-    for i in range(output_ds.GetLayerCount()):
-        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
-            output_ds.DeleteLayer(i)
-            break
-
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
-
-    for geom in geoms:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(geom)
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-
-    output_ds = None
-
-
 def clip_layer(
     input_path, input_layer_name, clip_path, clip_layer_name, output_path, output_layer_name
 ):
-    """Clip a layer by another layer."""
+    """Clip features of one layer by another and write the result to a GeoPackage.
+
+    Args:
+        input_path (str): Path to the dataset containing the input layer.
+        input_layer_name (str): Name of the layer to be clipped.
+        clip_path (str): Path to the dataset containing the clip layer
+            (may be the same as `input_path`).
+        clip_layer_name (str): Name of the layer whose geometries define the clip area.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors (dataset access, layer creation,
+            or geometry operations).
+    """
     # Open input
     input_ds = ogr.Open(input_path)
     input_layer = input_ds.GetLayerByName(input_layer_name)
@@ -223,13 +127,11 @@ def clip_layer(
     srs = input_layer.GetSpatialRef()
     geom_type = input_layer.GetGeomType()
 
-    # Copy field definitions
     input_layer_defn = input_layer.GetLayerDefn()
     field_defs = []
     for i in range(input_layer_defn.GetFieldCount()):
         field_defs.append(input_layer_defn.GetFieldDefn(i))
 
-    # Get input features
     input_features = []
     for feature in input_layer:
         geom = feature.GetGeometryRef().Clone()
@@ -241,7 +143,6 @@ def clip_layer(
 
     input_ds = None
 
-    # Open clip layer
     if clip_path == input_path:
         # Same file, need to be careful
         clip_ds = ogr.Open(clip_path)
@@ -250,7 +151,6 @@ def clip_layer(
 
     clip_layer = clip_ds.GetLayerByName(clip_layer_name)
 
-    # Get clip geometry
     clip_geoms = []
     for feature in clip_layer:
         clip_geoms.append(feature.GetGeometryRef().Clone())
@@ -261,14 +161,12 @@ def clip_layer(
     for geom in clip_geoms[1:]:
         clip_geom = clip_geom.Union(geom)
 
-    # Clip features
     clipped_features = []
     for geom, field_values in input_features:
         clipped_geom = geom.Intersection(clip_geom)
         if not clipped_geom.IsEmpty():
             clipped_features.append((clipped_geom, field_values))
 
-    # Open output
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
         output_ds = driver.Open(output_path, 1)
@@ -283,11 +181,9 @@ def clip_layer(
 
     output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
 
-    # Create fields
     for field_def in field_defs:
         output_layer.CreateField(field_def)
 
-    # Write clipped features
     for geom, field_values in clipped_features:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
         out_feature.SetGeometry(geom)
@@ -301,26 +197,69 @@ def clip_layer(
     output_ds = None
 
 
+def calculate_required_rings(gpkg_path, layer_name, ring_spacing):
+    """Calculate the number of rings needed to cover a layer's extent.
+
+    Args:
+        gpkg_path (str): Path to the GeoPackage
+        layer_name (str): Name of the layer to analyze
+        ring_spacing (float): Distance between rings
+
+    Returns:
+        int: Number of rings needed to cover the extent
+    """
+    ds = ogr.Open(gpkg_path)
+    layer = ds.GetLayerByName(layer_name)
+
+    extent = layer.GetExtent()
+    ds = None
+
+    width = extent[1] - extent[0]
+    height = extent[3] - extent[2]
+    diagonal = (width**2 + height**2) ** 0.5
+
+    rings = int(diagonal / ring_spacing) + 1
+
+    return rings
+
+
 def multiring_buffer(input_path, layer_name, rings, distance, output_path, output_layer_name):
-    """Create concentric ring buffers."""
+    """Create concentric ring buffers around the union of input features.
+
+    Args:
+        input_path (str): Path to the input dataset (e.g., .gpkg, .geojson).
+        layer_name (str): Name of the layer within `input_path` to buffer.
+        rings (int): Number of concentric rings to create.
+        distance (float): Step width between rings (in layer units).
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output polygon layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors when reading, buffering, or writing.
+
+    Notes:
+        * Source geometries are dissolved before ring generation.
+        * The output spatial reference matches the input layer.
+        * Ring polygons are non-overlapping annuli.
+    """
     source_ds = ogr.Open(input_path)
     source_layer = source_ds.GetLayerByName(layer_name)
 
     srs = source_layer.GetSpatialRef()
 
-    # Collect all source geometries
     source_geoms = []
     for feature in source_layer:
         source_geoms.append(feature.GetGeometryRef().Clone())
 
     source_ds = None
 
-    # Union source geometries
     base_geom = source_geoms[0]
     for geom in source_geoms[1:]:
         base_geom = base_geom.Union(geom)
 
-    # Create rings
     ring_geoms = []
     for ring_num in range(1, rings + 1):
         outer_distance = ring_num * distance
@@ -332,14 +271,12 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
         ring_geom = outer_buffer.Difference(inner_buffer)
         ring_geoms.append((ring_geom, ring_num))
 
-    # Open output
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
         output_ds = driver.Open(output_path, 1)
     else:
         output_ds = driver.CreateDataSource(output_path)
 
-    # Remove layer if exists
     for i in range(output_ds.GetLayerCount()):
         if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
             output_ds.DeleteLayer(i)
@@ -347,7 +284,6 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
 
     output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
 
-    # Add ring number field
     field_defn = ogr.FieldDefn("ring", ogr.OFTInteger)
     output_layer.CreateField(field_defn)
 
@@ -362,7 +298,23 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
 
 
 def cleanup_intermediate_layers(gpkg_path, layers_to_keep):
-    """Remove all layers except the ones specified."""
+    """Remove all layers from a GeoPackage except the ones specified.
+
+    Args:
+        gpkg_path (str): Path to the GeoPackage to modify.
+        layers_to_keep (Iterable[str]): Names of layers that must be preserved.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors if the GeoPackage cannot be opened
+            or layers cannot be deleted.
+
+    Notes:
+        * Deletion is done by name matching; missing names are ignored.
+        * Enumerates names first to avoid index-shift issues during deletion.
+    """
     ds = ogr.Open(gpkg_path, 1)
 
     # Get all layer names
@@ -440,10 +392,13 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print("Step 7: Creating street block rings...")
 
+    num_rings = calculate_required_rings(
+        output_path, site_layer_name, cfg.off_grid_partitions_preferred_depth
+    )
     multiring_buffer(
         output_path,
         "arterial_buffered_large",
-        10,  # Number of rings
+        num_rings,
         cfg.off_grid_partitions_preferred_depth,
         output_path,
         "arterial_offset_buffer_rings",
