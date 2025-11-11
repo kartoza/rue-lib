@@ -1,0 +1,470 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Viewer</title>
+
+    <!-- Leaflet CSS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            height: 100vh;
+            overflow: hidden;
+            display: flex;
+        }
+
+        #sidebar {
+            width: 300px;
+            background: #2c3e50;
+            color: #ecf0f1;
+            padding: 20px;
+            overflow-y: auto;
+            box-shadow: 2px 0 5px rgba(0,0,0,0.1);
+        }
+
+        #map {
+            flex: 1;
+            height: 100vh;
+        }
+
+        h1 {
+            font-size: 20px;
+            margin-bottom: 20px;
+            color: #3498db;
+        }
+
+        h2 {
+            font-size: 16px;
+            margin-top: 20px;
+            margin-bottom: 10px;
+            color: #3498db;
+            border-bottom: 1px solid #34495e;
+            padding-bottom: 5px;
+        }
+
+        .gpkg-select {
+            width: 100%;
+            padding: 8px;
+            margin-bottom: 15px;
+            background: #34495e;
+            color: #ecf0f1;
+            border: 1px solid #4a5f7f;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+
+        .layer-item {
+            padding: 10px;
+            margin: 5px 0;
+            background: #34495e;
+            border-radius: 4px;
+            cursor: pointer;
+            transition: background 0.2s;
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .layer-item:hover {
+            background: #4a5f7f;
+        }
+
+        .layer-item.active {
+            background: #3498db;
+        }
+
+        .layer-checkbox {
+            width: 18px;
+            height: 18px;
+            cursor: pointer;
+        }
+
+        .layer-info {
+            flex: 1;
+        }
+
+        .layer-name {
+            font-weight: 500;
+            margin-bottom: 2px;
+            color: #FFFFFF;
+        }
+
+        .layer-count {
+            font-size: 12px;
+            color: #95a5a6;
+        }
+
+        .color-indicator {
+            width: 20px;
+            height: 20px;
+            border-radius: 3px;
+            border: 2px solid #ecf0f1;
+        }
+
+        .no-layers {
+            color: #95a5a6;
+            font-style: italic;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .loading {
+            color: #3498db;
+            padding: 10px;
+            text-align: center;
+        }
+
+        .controls {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #34495e;
+        }
+
+        .btn {
+            width: 100%;
+            padding: 8px;
+            margin: 5px 0;
+            background: #3498db;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 14px;
+            transition: background 0.2s;
+        }
+
+        .btn:hover {
+            background: #2980b9;
+        }
+
+        .btn:disabled {
+            background: #7f8c8d;
+            cursor: not-allowed;
+        }
+
+        /* Custom Leaflet popup styling */
+        .leaflet-popup-content {
+            margin: 10px;
+        }
+
+        .popup-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .popup-table td {
+            padding: 5px;
+            border-bottom: 1px solid #ddd;
+        }
+
+        .popup-table td:first-child {
+            font-weight: bold;
+            padding-right: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div id="sidebar">
+        <h1>🗺️ Viewer</h1>
+
+        <div>
+            <label for="gpkg-select" style="display: block; margin-bottom: 5px; font-size: 14px;">
+                Select GeoPackage:
+            </label>
+            <select id="gpkg-select" class="gpkg-select">
+                <option value="">Loading...</option>
+            </select>
+        </div>
+
+        <h2>Layers</h2>
+        <div id="layers-list" class="loading">
+            Select a GeoPackage to view layers
+        </div>
+
+        <div class="controls">
+            <button id="fit-bounds-btn" class="btn" disabled>Fit to Visible Layers</button>
+            <button id="clear-all-btn" class="btn" disabled>Clear All Layers</button>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <!-- Leaflet JS -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+    <script>
+        // Initialize map
+        const map = L.map('map').setView([0, 0], 2);
+
+        // Add base map
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors',
+            maxZoom: 19
+        }).addTo(map);
+
+        // Store loaded layers
+        const loadedLayers = new Map();
+
+        // Color palette for layers
+        const colors = [
+            '#e74c3c', '#3498db', '#2ecc71', '#f39c12', '#9b59b6',
+            '#1abc9c', '#e67e22', '#34495e', '#16a085', '#27ae60'
+        ];
+
+        let colorIndex = 0;
+
+        function getNextColor() {
+            const color = colors[colorIndex % colors.length];
+            colorIndex++;
+            return color;
+        }
+
+        // Load GeoPackages
+        async function loadGeoPackages() {
+            try {
+                const response = await fetch('/api/geopackages');
+                const gpkgs = await response.json();
+
+                const select = document.getElementById('gpkg-select');
+                select.innerHTML = '<option value="">-- Select a GeoPackage --</option>';
+
+                gpkgs.forEach(gpkg => {
+                    const option = document.createElement('option');
+                    option.value = gpkg;
+                    option.textContent = gpkg;
+                    select.appendChild(option);
+                });
+
+                if (gpkgs.length === 1) {
+                    select.value = gpkgs[0];
+                    loadLayers(gpkgs[0]);
+                }
+            } catch (error) {
+                console.error('Error loading GeoPackages:', error);
+                document.getElementById('gpkg-select').innerHTML =
+                    '<option value="">Error loading files</option>';
+            }
+        }
+
+        // Load layers from selected GeoPackage
+        async function loadLayers(gpkgPath) {
+            const layersList = document.getElementById('layers-list');
+            layersList.innerHTML = '<div class="loading">Loading layers...</div>';
+
+            try {
+                const response = await fetch(`/api/layers/${encodeURIComponent(gpkgPath)}`);
+                const layers = await response.json();
+
+                if (layers.length === 0) {
+                    layersList.innerHTML = '<div class="no-layers">No layers found</div>';
+                    return;
+                }
+
+                layersList.innerHTML = '';
+
+                layers.forEach(layer => {
+                    const layerDiv = document.createElement('div');
+                    layerDiv.className = 'layer-item';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.className = 'layer-checkbox';
+                    checkbox.id = `layer-${layer.name}`;
+
+                    const colorIndicator = document.createElement('div');
+                    colorIndicator.className = 'color-indicator';
+                    const layerColor = getNextColor();
+                    colorIndicator.style.backgroundColor = layerColor;
+
+                    const infoDiv = document.createElement('div');
+                    infoDiv.className = 'layer-info';
+                    infoDiv.innerHTML = `
+                        <div class="layer-name">${layer.name}</div>
+                        <div class="layer-count">${layer.feature_count} features</div>
+                    `;
+
+                    layerDiv.appendChild(checkbox);
+                    layerDiv.appendChild(colorIndicator);
+                    layerDiv.appendChild(infoDiv);
+
+                    layerDiv.addEventListener('click', (e) => {
+                        if (e.target !== checkbox) {
+                            checkbox.checked = !checkbox.checked;
+                            checkbox.dispatchEvent(new Event('change'));
+                        }
+                    });
+
+                    checkbox.addEventListener('change', async () => {
+                        if (checkbox.checked) {
+                            await loadLayerData(gpkgPath, layer.name, layerColor);
+                            layerDiv.classList.add('active');
+                        } else {
+                            removeLayer(layer.name);
+                            layerDiv.classList.remove('active');
+                        }
+                        updateControls();
+                    });
+
+                    layersList.appendChild(layerDiv);
+                });
+            } catch (error) {
+                console.error('Error loading layers:', error);
+                layersList.innerHTML = '<div class="no-layers">Error loading layers</div>';
+            }
+        }
+
+        // Load layer data
+        async function loadLayerData(gpkgPath, layerName, color) {
+            try {
+                const response = await fetch(
+                    `/api/layer/${encodeURIComponent(gpkgPath)}/${encodeURIComponent(layerName)}`
+                );
+                const geojson = await response.json();
+
+                // Style function
+                const style = (feature) => {
+                    const geomType = feature.geometry.type;
+
+                    if (geomType === 'Point' || geomType === 'MultiPoint') {
+                        return {
+                            radius: 5,
+                            fillColor: color,
+                            color: '#fff',
+                            weight: 1,
+                            opacity: 1,
+                            fillOpacity: 0.7
+                        };
+                    } else if (geomType === 'LineString' || geomType === 'MultiLineString') {
+                        return {
+                            color: color,
+                            weight: 3,
+                            opacity: 0.8
+                        };
+                    } else {
+                        return {
+                            fillColor: color,
+                            color: color,
+                            weight: 2,
+                            opacity: 0.8,
+                            fillOpacity: 0.3
+                        };
+                    }
+                };
+
+                // Create GeoJSON layer
+                const layer = L.geoJSON(geojson, {
+                    style: style,
+                    pointToLayer: (feature, latlng) => {
+                        return L.circleMarker(latlng);
+                    },
+                    onEachFeature: (feature, layer) => {
+                        if (feature.properties) {
+                            let popupContent = '<table class="popup-table">';
+                            for (const [key, value] of Object.entries(feature.properties)) {
+                                if (value !== null && value !== undefined) {
+                                    popupContent += `<tr><td>${key}</td><td>${value}</td></tr>`;
+                                }
+                            }
+                            popupContent += '</table>';
+                            layer.bindPopup(popupContent);
+                        }
+                    }
+                });
+
+                layer.addTo(map);
+                loadedLayers.set(layerName, layer);
+
+                // Fit bounds to this layer if it's the first one
+                if (loadedLayers.size === 1) {
+                    const bounds = layer.getBounds();
+                    if (bounds.isValid()) {
+                        map.fitBounds(bounds);
+                    }
+                }
+            } catch (error) {
+                console.error('Error loading layer data:', error);
+                alert(`Error loading layer: ${layerName}`);
+            }
+        }
+
+        // Remove layer from map
+        function removeLayer(layerName) {
+            const layer = loadedLayers.get(layerName);
+            if (layer) {
+                map.removeLayer(layer);
+                loadedLayers.delete(layerName);
+            }
+        }
+
+        // Update control buttons
+        function updateControls() {
+            const fitBtn = document.getElementById('fit-bounds-btn');
+            const clearBtn = document.getElementById('clear-all-btn');
+
+            const hasLayers = loadedLayers.size > 0;
+            fitBtn.disabled = !hasLayers;
+            clearBtn.disabled = !hasLayers;
+        }
+
+        // Fit bounds to all visible layers
+        function fitToVisibleLayers() {
+            if (loadedLayers.size === 0) return;
+
+            const bounds = L.latLngBounds();
+            loadedLayers.forEach(layer => {
+                const layerBounds = layer.getBounds();
+                if (layerBounds.isValid()) {
+                    bounds.extend(layerBounds);
+                }
+            });
+
+            if (bounds.isValid()) {
+                map.fitBounds(bounds);
+            }
+        }
+
+        // Clear all layers
+        function clearAllLayers() {
+            loadedLayers.forEach((layer, name) => {
+                map.removeLayer(layer);
+            });
+            loadedLayers.clear();
+
+            // Uncheck all checkboxes
+            document.querySelectorAll('.layer-checkbox').forEach(cb => {
+                cb.checked = false;
+            });
+
+            document.querySelectorAll('.layer-item').forEach(item => {
+                item.classList.remove('active');
+            });
+
+            updateControls();
+        }
+
+        // Event listeners
+        document.getElementById('gpkg-select').addEventListener('change', (e) => {
+            if (e.target.value) {
+                clearAllLayers();
+                colorIndex = 0;
+                loadLayers(e.target.value);
+            }
+        });
+
+        document.getElementById('fit-bounds-btn').addEventListener('click', fitToVisibleLayers);
+        document.getElementById('clear-all-btn').addEventListener('click', clearAllLayers);
+
+        // Load GeoPackages on page load
+        loadGeoPackages();
+    </script>
+</body>
+</html>

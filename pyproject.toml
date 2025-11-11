@@ -90,7 +90,7 @@ ignore = []
 "__init__.py" = ["F401"]
 
 [tool.bandit]
-exclude_dirs = ["tests", "test_*.py"]
+exclude_dirs = ["tests", "test_*.py", "viewer/"]
 skips = ["B101"]
 
 [tool.coverage.run]
