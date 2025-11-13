@@ -136,11 +136,26 @@ def clip_layer(
     for geom in clip_geoms[1:]:
         clip_geom = clip_geom.Union(geom)
 
+    # Validate and fix the clip geometry
+    if not clip_geom.IsValid():
+        print("Warning: Clip geometry is invalid, attempting to fix...")
+        clip_geom = clip_geom.Buffer(0)
+
     clipped_features = []
     for geom, field_values in input_features:
+        # Validate input geometry before intersection
+        if not geom.IsValid():
+            geom = geom.Buffer(0)
+
         clipped_geom = geom.Intersection(clip_geom)
+
+        # Validate resulting geometry
         if not clipped_geom.IsEmpty():
-            clipped_features.append((clipped_geom, field_values))
+            if not clipped_geom.IsValid():
+                clipped_geom = clipped_geom.Buffer(0)
+
+            if not clipped_geom.IsEmpty():
+                clipped_features.append((clipped_geom, field_values))
 
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
@@ -156,18 +171,24 @@ def clip_layer(
 
     output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
 
+    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+    output_layer.CreateField(id_field)
+
     for field_def in field_defs:
         output_layer.CreateField(field_def)
 
+    feature_id = 1
     for geom, field_values in clipped_features:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
         out_feature.SetGeometry(geom)
+        out_feature.SetField("id", feature_id)
 
         for field_name, value in field_values.items():
             out_feature.SetField(field_name, value)
 
         output_layer.CreateFeature(out_feature)
         out_feature = None
+        feature_id += 1
 
     output_ds = None
 
@@ -235,6 +256,11 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
     for geom in source_geoms[1:]:
         base_geom = base_geom.Union(geom)
 
+    # Validate and fix the base geometry before creating rings
+    if not base_geom.IsValid():
+        print("Warning: Base geometry is invalid, attempting to fix...")
+        base_geom = base_geom.Buffer(0)
+
     ring_geoms = []
     for ring_num in range(1, rings + 1):
         outer_distance = ring_num * distance
@@ -243,8 +269,20 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
         outer_buffer = base_geom.Buffer(outer_distance)
         inner_buffer = base_geom.Buffer(inner_distance)
 
+        # Apply buffer(0) to fix any self-intersections or invalid geometries
+        if not outer_buffer.IsValid():
+            outer_buffer = outer_buffer.Buffer(0)
+        if not inner_buffer.IsValid():
+            inner_buffer = inner_buffer.Buffer(0)
+
         ring_geom = outer_buffer.Difference(inner_buffer)
-        ring_geoms.append((ring_geom, ring_num))
+
+        # Validate and fix the resulting ring geometry
+        if not ring_geom.IsValid():
+            ring_geom = ring_geom.Buffer(0)
+
+        if not ring_geom.IsEmpty():
+            ring_geoms.append((ring_geom, ring_num))
 
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
