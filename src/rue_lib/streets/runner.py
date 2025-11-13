@@ -197,8 +197,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Cleaning up intermediate layers...")
     final_layers = [
         "arterial_roads",
+        "secondary_roads",
         "arterial_road_setback",
         "street_blocks",
+        "secondary_roads_buffered_large",
         "secondary_road_setback",
         "arterial_edge_lines",
         "division_points",

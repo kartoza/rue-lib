@@ -7,6 +7,7 @@
 
     <!-- MapLibre GL CSS -->
     <link rel="stylesheet" href="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.css" />
+    <link rel="stylesheet" href="https://unpkg.com/@mapbox/mapbox-gl-draw@1.5.0/dist/mapbox-gl-draw.css" />
 
     <style>
         * {
@@ -219,6 +220,133 @@
         .api-note a {
             color: #3498db;
         }
+
+        .input-section {
+            margin-top: 20px;
+            padding: 15px;
+            background: #233140;
+            border-radius: 6px;
+            border: 1px solid #34495e;
+        }
+
+        .input-group {
+            margin-bottom: 15px;
+        }
+
+        .input-label {
+            font-size: 13px;
+            margin-bottom: 6px;
+            display: block;
+            color: #ecf0f1;
+        }
+
+        .file-input {
+            width: 100%;
+            padding: 6px;
+            background: #1f2a36;
+            color: #ecf0f1;
+            border: 1px solid #4a5f7f;
+            border-radius: 4px;
+            font-size: 13px;
+        }
+
+        .input-status {
+            font-size: 12px;
+            margin-top: 4px;
+            color: #95a5a6;
+        }
+
+        .input-status.error,
+        .status-message.error {
+            color: #e74c3c;
+        }
+
+        .status-message {
+            font-size: 12px;
+            margin-top: 8px;
+            min-height: 16px;
+        }
+
+        .draw-actions {
+            display: flex;
+            gap: 8px;
+            margin-top: 8px;
+        }
+
+        .btn-compact {
+            flex: 1;
+            padding: 6px;
+            font-size: 12px;
+            background: #1abc9c;
+        }
+
+        .btn-compact.arterial {
+            background: #e74c3c;
+        }
+
+        .btn-compact.secondary {
+            background: #f1c40f;
+            color: #2c3e50;
+        }
+
+        .btn-ghost {
+            flex: 1;
+            padding: 6px;
+            font-size: 12px;
+            background: #1f2a36;
+            border: 1px solid #4a5f7f;
+        }
+
+        .draw-hint {
+            font-size: 11px;
+            color: #95a5a6;
+            margin-top: 4px;
+        }
+
+        .params-section {
+            margin-top: 20px;
+            padding: 15px;
+            background: #233140;
+            border-radius: 6px;
+            border: 1px solid #34495e;
+        }
+
+        .param-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 10px;
+        }
+
+        .param-input {
+            width: 100%;
+            padding: 6px;
+            background: #1f2a36;
+            color: #ecf0f1;
+            border: 1px solid #4a5f7f;
+            border-radius: 4px;
+            font-size: 12px;
+        }
+
+        .param-input:focus {
+            outline: none;
+            border-color: #3498db;
+        }
+
+        .param-label {
+            font-size: 11px;
+            margin-bottom: 3px;
+            display: block;
+            color: #bdc3c7;
+        }
+
+        .section-subtitle {
+            font-size: 13px;
+            color: #95a5a6;
+            margin-top: 12px;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid #2c3e50;
+        }
     </style>
 </head>
 <body>
@@ -232,6 +360,120 @@
             <select id="gpkg-select" class="gpkg-select">
                 <option value="">Loading...</option>
             </select>
+        </div>
+
+        <div class="input-section">
+            <h2>Custom Inputs</h2>
+            <div class="input-group">
+                <label for="boundary-input" class="input-label">Boundary GeoJSON</label>
+                <input type="file" id="boundary-input" class="file-input" accept=".geojson,.json">
+                <div id="boundary-status" class="input-status">No file selected</div>
+                <div class="draw-actions">
+                    <button type="button" class="btn btn-compact" data-draw="boundary">Draw Boundary</button>
+                    <button type="button" class="btn btn-ghost" data-clear="boundary">Clear</button>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label for="arterial-input" class="input-label">Arterial Roads GeoJSON</label>
+                <input type="file" id="arterial-input" class="file-input" accept=".geojson,.json">
+                <div id="arterial-status" class="input-status">No file selected</div>
+                <div class="draw-actions">
+                    <button type="button" class="btn btn-compact arterial" data-draw="arterial">Draw Arterial</button>
+                    <button type="button" class="btn btn-ghost" data-clear="arterial">Clear</button>
+                </div>
+            </div>
+
+            <div class="input-group">
+                <label for="secondary-input" class="input-label">Secondary Roads GeoJSON</label>
+                <input type="file" id="secondary-input" class="file-input" accept=".geojson,.json">
+                <div id="secondary-status" class="input-status">No file selected</div>
+                <div class="draw-actions">
+                    <button type="button" class="btn btn-compact secondary" data-draw="secondary">Draw Secondary</button>
+                    <button type="button" class="btn btn-ghost" data-clear="secondary">Clear</button>
+                </div>
+            </div>
+
+            <div class="draw-hint">Tip: choose a Draw button, digitize on the map, then double-click to finish.</div>
+
+            <div class="draw-actions" style="margin-top: 12px;">
+                <button type="button" class="btn btn-compact" id="save-all-inputs-btn" disabled>Save All Inputs</button>
+                <button type="button" class="btn btn-compact" id="load-saved-inputs-btn">Load Saved</button>
+            </div>
+            <div id="save-inputs-status" class="status-message"></div>
+        </div>
+
+        <div class="params-section">
+            <h2>Processing Parameters</h2>
+
+            <div class="section-subtitle">Step 1: Parcel Generation</div>
+            <div class="param-grid">
+                <div>
+                    <label class="param-label">Grid Rows</label>
+                    <input type="number" id="param-rows" class="param-input" value="4" min="1">
+                </div>
+                <div>
+                    <label class="param-label">Grid Columns</label>
+                    <input type="number" id="param-cols" class="param-input" value="4" min="1">
+                </div>
+                <div>
+                    <label class="param-label">Padding (m)</label>
+                    <input type="number" id="param-pad" class="param-input" value="50" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Min Parcel Area (m²)</label>
+                    <input type="number" id="param-min-area" class="param-input" value="5" min="0" step="0.1">
+                </div>
+            </div>
+            <div style="margin-top: 8px;">
+                <label style="font-size: 12px; color: #ecf0f1; display: flex; align-items: center; gap: 6px; cursor: pointer;">
+                    <input type="checkbox" id="param-subtract-roads" style="width: 16px; height: 16px;">
+                    Subtract roads from parcels
+                </label>
+            </div>
+
+            <div class="section-subtitle">Step 2: Street Generation</div>
+            <div class="param-grid">
+                <div>
+                    <label class="param-label">Arterial Width (m)</label>
+                    <input type="number" id="param-arterial-width" class="param-input" value="20" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Secondary Width (m)</label>
+                    <input type="number" id="param-secondary-width" class="param-input" value="15" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Local Width (m)</label>
+                    <input type="number" id="param-local-width" class="param-input" value="12" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Arterial Setback (m)</label>
+                    <input type="number" id="param-arterial-setback" class="param-input" value="60" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Secondary Setback (m)</label>
+                    <input type="number" id="param-secondary-setback" class="param-input" value="60" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Preferred Depth (m)</label>
+                    <input type="number" id="param-pref-depth" class="param-input" value="45" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Preferred Width (m)</label>
+                    <input type="number" id="param-pref-width" class="param-input" value="45" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Grid Depth Arterial (m)</label>
+                    <input type="number" id="param-grid-depth-arterial" class="param-input" value="40" min="0" step="0.1">
+                </div>
+                <div>
+                    <label class="param-label">Grid Depth Secondary (m)</label>
+                    <input type="number" id="param-grid-depth-secondary" class="param-input" value="30" min="0" step="0.1">
+                </div>
+            </div>
+
+            <button id="apply-steps-btn" class="btn" disabled style="margin-top: 15px;">Apply Steps 1 &amp; 2</button>
+            <div id="apply-status" class="status-message"></div>
         </div>
 
         <h2>Layers</h2>
@@ -268,6 +510,10 @@
 
     <!-- MapLibre GL JS -->
     <script src="https://unpkg.com/maplibre-gl@3.6.2/dist/maplibre-gl.js"></script>
+    <script>
+        window.mapboxgl = maplibregl;
+    </script>
+    <script src="https://unpkg.com/@mapbox/mapbox-gl-draw@1.5.0/dist/mapbox-gl-draw.js"></script>
 
     <script>
         // API key management
@@ -307,6 +553,13 @@
         map.addControl(new maplibregl.NavigationControl(), 'top-right');
         map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
 
+        const draw = new MapboxDraw({ displayControlsDefault: false });
+        map.addControl(draw, 'top-left');
+
+        map.on('draw.create', handleDrawSync);
+        map.on('draw.update', handleDrawSync);
+        map.on('draw.delete', handleDrawSync);
+
         // Store loaded layers
         const loadedLayers = new Map();
         const layerSources = new Map();
@@ -318,11 +571,275 @@
         ];
 
         let colorIndex = 0;
+        let mapReady = false;
+        let currentDrawType = null;
+
+        const customInputs = {
+            boundary: null,
+            arterial: null,
+            secondary: null
+        };
+
+        const inputSource = {
+            boundary: null,
+            arterial: null,
+            secondary: null
+        };
+
+        const inputMetadata = {
+            boundary: null,
+            arterial: null,
+            secondary: null
+        };
+
+        const inputStatusElements = {
+            boundary: document.getElementById('boundary-status'),
+            arterial: document.getElementById('arterial-status'),
+            secondary: document.getElementById('secondary-status')
+        };
+
+        const inputColors = {
+            boundary: '#1abc9c',
+            arterial: '#e74c3c',
+            secondary: '#f1c40f'
+        };
 
         function getNextColor() {
             const color = colors[colorIndex % colors.length];
             colorIndex++;
             return color;
+        }
+
+        function updateApplyButtonState() {
+            const applyBtn = document.getElementById('apply-steps-btn');
+            const ready = customInputs.boundary && customInputs.arterial && customInputs.secondary;
+            applyBtn.disabled = !ready;
+        }
+
+        function updateSaveAllInputsButton() {
+            const saveBtn = document.getElementById('save-all-inputs-btn');
+            const hasAny = customInputs.boundary || customInputs.arterial || customInputs.secondary;
+            saveBtn.disabled = !hasAny;
+        }
+
+        function updateInputStatus(type, message, isError = false) {
+            const el = inputStatusElements[type];
+            if (!el) return;
+            el.textContent = message;
+            if (isError) {
+                el.classList.add('error');
+            } else {
+                el.classList.remove('error');
+            }
+        }
+
+        function removeInputLayer(type) {
+            const sourceId = `input-${type}`;
+            const fillId = `${sourceId}-fill`;
+            const outlineId = `${sourceId}-outline`;
+            const lineId = `${sourceId}-line`;
+
+            if (map.getLayer(fillId)) {
+                map.removeLayer(fillId);
+            }
+            if (map.getLayer(outlineId)) {
+                map.removeLayer(outlineId);
+            }
+            if (map.getLayer(lineId)) {
+                map.removeLayer(lineId);
+            }
+            if (map.getSource(sourceId)) {
+                map.removeSource(sourceId);
+            }
+        }
+
+        function addInputLayer(type, geojson) {
+            const sourceId = `input-${type}`;
+            const color = inputColors[type];
+
+            const addLayers = () => {
+                removeInputLayer(type);
+                if (map.getSource(sourceId)) {
+                    map.getSource(sourceId).setData(geojson);
+                } else {
+                    map.addSource(sourceId, { type: 'geojson', data: geojson });
+
+                    if (type === 'boundary') {
+                        map.addLayer({
+                            id: `${sourceId}-fill`,
+                            type: 'fill',
+                            source: sourceId,
+                            paint: {
+                                'fill-color': color,
+                                'fill-opacity': 0.2
+                            }
+                        });
+                        map.addLayer({
+                            id: `${sourceId}-outline`,
+                            type: 'line',
+                            source: sourceId,
+                            paint: {
+                                'line-color': color,
+                                'line-width': 3,
+                                'line-opacity': 1
+                            }
+                        });
+                    } else {
+                        // For roads (arterial/secondary)
+                        map.addLayer({
+                            id: `${sourceId}-line`,
+                            type: 'line',
+                            source: sourceId,
+                            paint: {
+                                'line-color': color,
+                                'line-width': 4,
+                                'line-opacity': 0.9,
+                                'line-dasharray': type === 'secondary' ? [2, 2] : [1, 0]
+                            }
+                        });
+                    }
+                }
+
+                if (type === 'boundary') {
+                    fitToGeoJSON(geojson);
+                }
+            };
+
+            if (mapReady) {
+                addLayers();
+            } else {
+                map.once('load', addLayers);
+            }
+        }
+
+        function setCustomInput(type, geojson, options = {}) {
+            const { source = 'file', label = null, fit = false } = options;
+
+            if (geojson) {
+                customInputs[type] = geojson;
+                inputSource[type] = source;
+                inputMetadata[type] = label ? { label } : null;
+
+                removeInputLayer(type);
+                // Always add the layer for visualization, regardless of source
+                addInputLayer(type, geojson);
+
+                const featureCount = geojson.features ? geojson.features.length : 0;
+                updateInputStatus(type, label || `${featureCount} features ready`);
+
+                if (fit && type === 'boundary') {
+                    fitToGeoJSON(geojson);
+                }
+            } else {
+                customInputs[type] = null;
+                inputSource[type] = null;
+                inputMetadata[type] = null;
+                removeInputLayer(type);
+                updateInputStatus(type, 'No data selected');
+            }
+
+            updateApplyButtonState();
+            updateSaveAllInputsButton();
+        }
+
+        function removeDrawFeatures(type) {
+            const allFeatures = draw.getAll().features;
+            const toDelete = allFeatures
+                .filter(feature => feature.properties && feature.properties.dataType === type)
+                .map(feature => feature.id);
+
+            if (toDelete.length) {
+                draw.delete(toDelete);
+            }
+        }
+
+        function clearCustomInput(type) {
+            removeDrawFeatures(type);
+            const inputEl = document.getElementById(`${type}-input`);
+            if (inputEl) {
+                inputEl.value = '';
+            }
+            setCustomInput(type, null);
+        }
+
+        function annotateDrawFeatures(features) {
+            if (!features || !features.length) return;
+
+            features.forEach(feature => {
+                const existingType = feature.properties?.dataType;
+                const typeToAssign = existingType || currentDrawType;
+                if (typeToAssign) {
+                    draw.setFeatureProperty(feature.id, 'dataType', typeToAssign);
+                }
+            });
+        }
+
+        function handleDrawSync(event) {
+            annotateDrawFeatures(event?.features || []);
+            syncDrawnFeatures();
+        }
+
+        function syncDrawnFeatures() {
+            const allFeatures = draw.getAll().features || [];
+            ['boundary', 'arterial', 'secondary'].forEach(type => {
+                const features = allFeatures
+                    .filter(feature => feature.properties && feature.properties.dataType === type)
+                    .map(feature => ({
+                        type: 'Feature',
+                        geometry: feature.geometry,
+                        properties: { ...(feature.properties || {}) },
+                    }));
+
+                if (features.length) {
+                    const wasDraw = inputSource[type] === 'draw';
+                    const label = `Drawn ${features.length} feature${features.length === 1 ? '' : 's'}`;
+                    setCustomInput(
+                        type,
+                        { type: 'FeatureCollection', features },
+                        { source: 'draw', label, fit: type === 'boundary' && !wasDraw }
+                    );
+                } else if (inputSource[type] === 'draw') {
+                    setCustomInput(type, null);
+                }
+            });
+        }
+
+        function startDrawing(type) {
+            if (!mapReady) return;
+            currentDrawType = type;
+            const mode = type === 'boundary' ? 'draw_polygon' : 'draw_line_string';
+            draw.changeMode(mode);
+            updateInputStatus(type, 'Drawing mode active — double-click to finish.');
+        }
+
+        function handleFileUpload(type, file) {
+            if (!file) return;
+
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                try {
+                    const geojson = JSON.parse(event.target.result);
+                    if (!geojson || geojson.type !== 'FeatureCollection' || !Array.isArray(geojson.features)) {
+                        throw new Error('Expected a GeoJSON FeatureCollection');
+                    }
+                    if (geojson.features.length === 0) {
+                        throw new Error('GeoJSON has no features');
+                    }
+                    removeDrawFeatures(type);
+                    setCustomInput(type, geojson, {
+                        source: 'file',
+                        label: `${file.name} • ${geojson.features.length} features`,
+                        fit: type === 'boundary'
+                    });
+                } catch (err) {
+                    console.error(`Error parsing ${type} file:`, err);
+                    updateInputStatus(type, err.message || 'Invalid GeoJSON', true);
+                }
+            };
+            reader.onerror = () => {
+                updateInputStatus(type, 'Failed to read file', true);
+            };
+            reader.readAsText(file);
         }
 
         // View control functions
@@ -653,24 +1170,37 @@
         }
 
         // Fit bounds to GeoJSON
+        function extendBoundsFromGeometry(bounds, geometry) {
+            if (!geometry) return;
+            const type = geometry.type;
+
+            if (type === 'Point') {
+                bounds.extend(geometry.coordinates);
+            } else if (type === 'MultiPoint') {
+                geometry.coordinates.forEach(coord => bounds.extend(coord));
+            } else if (type === 'LineString') {
+                geometry.coordinates.forEach(coord => bounds.extend(coord));
+            } else if (type === 'MultiLineString') {
+                geometry.coordinates.forEach(line => line.forEach(coord => bounds.extend(coord)));
+            } else if (type === 'Polygon') {
+                geometry.coordinates[0].forEach(coord => bounds.extend(coord));
+            } else if (type === 'MultiPolygon') {
+                geometry.coordinates.forEach(polygon => {
+                    polygon[0].forEach(coord => bounds.extend(coord));
+                });
+            }
+        }
+
         function fitToGeoJSON(geojson) {
             const bounds = new maplibregl.LngLatBounds();
 
             geojson.features.forEach(feature => {
-                if (feature.geometry.type === 'Point') {
-                    bounds.extend(feature.geometry.coordinates);
-                } else if (feature.geometry.type === 'LineString') {
-                    feature.geometry.coordinates.forEach(coord => bounds.extend(coord));
-                } else if (feature.geometry.type === 'Polygon') {
-                    feature.geometry.coordinates[0].forEach(coord => bounds.extend(coord));
-                } else if (feature.geometry.type === 'MultiPolygon') {
-                    feature.geometry.coordinates.forEach(polygon => {
-                        polygon[0].forEach(coord => bounds.extend(coord));
-                    });
-                }
+                extendBoundsFromGeometry(bounds, feature.geometry);
             });
 
-            map.fitBounds(bounds, { padding: 50, duration: 1000 });
+            if (!bounds.isEmpty()) {
+                map.fitBounds(bounds, { padding: 50, duration: 1000 });
+            }
         }
 
         // Fit bounds to all visible layers
@@ -684,17 +1214,7 @@
                 if (source) {
                     const data = source._data;
                     data.features.forEach(feature => {
-                        if (feature.geometry.type === 'Point') {
-                            bounds.extend(feature.geometry.coordinates);
-                        } else if (feature.geometry.type === 'LineString') {
-                            feature.geometry.coordinates.forEach(coord => bounds.extend(coord));
-                        } else if (feature.geometry.type === 'Polygon') {
-                            feature.geometry.coordinates[0].forEach(coord => bounds.extend(coord));
-                        } else if (feature.geometry.type === 'MultiPolygon') {
-                            feature.geometry.coordinates.forEach(polygon => {
-                                polygon[0].forEach(coord => bounds.extend(coord));
-                            });
-                        }
+                        extendBoundsFromGeometry(bounds, feature.geometry);
                     });
                 }
             }
@@ -733,8 +1253,217 @@
         document.getElementById('fit-bounds-btn').addEventListener('click', fitToVisibleLayers);
         document.getElementById('clear-all-btn').addEventListener('click', clearAllLayers);
 
+        document.getElementById('boundary-input').addEventListener('change', (event) => {
+            handleFileUpload('boundary', event.target.files[0]);
+            event.target.value = '';
+        });
+
+        document.getElementById('arterial-input').addEventListener('change', (event) => {
+            handleFileUpload('arterial', event.target.files[0]);
+            event.target.value = '';
+        });
+
+        document.getElementById('secondary-input').addEventListener('change', (event) => {
+            handleFileUpload('secondary', event.target.files[0]);
+            event.target.value = '';
+        });
+
+        document.querySelectorAll('[data-draw]').forEach(button => {
+            button.addEventListener('click', () => {
+                const type = button.getAttribute('data-draw');
+                startDrawing(type);
+            });
+        });
+
+        document.querySelectorAll('[data-clear]').forEach(button => {
+            button.addEventListener('click', () => {
+                const type = button.getAttribute('data-clear');
+                clearCustomInput(type);
+            });
+        });
+
+        document.getElementById('save-all-inputs-btn').addEventListener('click', async () => {
+            const statusEl = document.getElementById('save-inputs-status');
+            const saveBtn = document.getElementById('save-all-inputs-btn');
+
+            statusEl.textContent = 'Saving inputs...';
+            statusEl.classList.remove('error');
+            saveBtn.disabled = true;
+
+            try {
+                const response = await fetch('/api/save-inputs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        boundary: customInputs.boundary,
+                        arterial: customInputs.arterial,
+                        secondary: customInputs.secondary
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to save inputs');
+                }
+
+                statusEl.textContent = 'Inputs saved to outputs/saved_inputs/';
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+            } catch (error) {
+                console.error('Save failed:', error);
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.classList.add('error');
+            }
+
+            updateSaveAllInputsButton();
+        });
+
+        document.getElementById('load-saved-inputs-btn').addEventListener('click', async () => {
+            const statusEl = document.getElementById('save-inputs-status');
+            statusEl.textContent = 'Loading saved inputs...';
+            statusEl.classList.remove('error');
+
+            try {
+                const response = await fetch('/api/load-saved-inputs');
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to load inputs');
+                }
+
+                if (!data.exists || !data.files || Object.keys(data.files).length === 0) {
+                    statusEl.textContent = 'No saved inputs found';
+                    statusEl.classList.add('error');
+                    return;
+                }
+
+                let loadedCount = 0;
+
+                if (data.files.boundary) {
+                    setCustomInput('boundary', data.files.boundary, {
+                        source: 'file',
+                        label: 'Loaded from saved_inputs',
+                        fit: true
+                    });
+                    loadedCount++;
+                }
+
+                if (data.files.arterial) {
+                    setCustomInput('arterial', data.files.arterial, {
+                        source: 'file',
+                        label: 'Loaded from saved_inputs'
+                    });
+                    loadedCount++;
+                }
+
+                if (data.files.secondary) {
+                    setCustomInput('secondary', data.files.secondary, {
+                        source: 'file',
+                        label: 'Loaded from saved_inputs'
+                    });
+                    loadedCount++;
+                }
+
+                statusEl.textContent = `Loaded ${loadedCount} input(s)`;
+                setTimeout(() => {
+                    statusEl.textContent = '';
+                }, 3000);
+            } catch (error) {
+                console.error('Load failed:', error);
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.classList.add('error');
+            }
+        });
+
+        document.getElementById('apply-steps-btn').addEventListener('click', async () => {
+            const applyBtn = document.getElementById('apply-steps-btn');
+            const statusEl = document.getElementById('apply-status');
+            statusEl.textContent = 'Running steps...';
+            statusEl.classList.remove('error');
+            applyBtn.disabled = true;
+
+            // Collect parameters from form
+            const params = {
+                // Step 1 parameters
+                rows: parseInt(document.getElementById('param-rows').value) || 4,
+                cols: parseInt(document.getElementById('param-cols').value) || 4,
+                pad_m: parseFloat(document.getElementById('param-pad').value) || 50.0,
+                min_parcel_area_m2: parseFloat(document.getElementById('param-min-area').value) || 5.0,
+                subtract_roads: document.getElementById('param-subtract-roads').checked,
+
+                // Step 2 parameters
+                road_arterial_width_m: parseFloat(document.getElementById('param-arterial-width').value) || 20.0,
+                road_secondary_width_m: parseFloat(document.getElementById('param-secondary-width').value) || 15.0,
+                road_local_width_m: parseFloat(document.getElementById('param-local-width').value) || 12.0,
+                arterial_setback_depth: parseFloat(document.getElementById('param-arterial-setback').value) || 60.0,
+                secondary_setback_depth: parseFloat(document.getElementById('param-secondary-setback').value) || 60.0,
+                off_grid_partitions_preferred_depth: parseFloat(document.getElementById('param-pref-depth').value) || 140.0,
+                off_grid_partitions_preferred_width: parseFloat(document.getElementById('param-pref-width').value) || 140.0,
+                on_grid_partition_depth_arterial_roads: parseFloat(document.getElementById('param-grid-depth-arterial').value) || 40.0,
+                on_grid_partition_depth_secondary_roads: parseFloat(document.getElementById('param-grid-depth-secondary').value) || 30.0
+            };
+
+            try {
+                const response = await fetch('/api/run-steps', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        boundary: customInputs.boundary,
+                        arterial: customInputs.arterial,
+                        secondary: customInputs.secondary,
+                        params: params
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Processing failed');
+                }
+
+                statusEl.textContent = `Steps complete. Loading results...`;
+
+                // Reload GeoPackages list and auto-load the result
+                setTimeout(async () => {
+                    await loadGeoPackages();
+
+                    // The output is a .gpkg file in the step2 directory
+                    const select = document.getElementById('gpkg-select');
+
+                    // Extract the run directory from the path
+                    // e.g., "outputs/viewer_runs/20250113_123456/step2/outputs.gpkg"
+                    const pathParts = data.step2_output.split('/');
+                    const runDir = pathParts.find(part => part.match(/^\d{8}_\d{6}$/));
+
+                    if (runDir) {
+                        // Find and select the GeoPackage option
+                        for (let i = 0; i < select.options.length; i++) {
+                            if (select.options[i].value.includes(runDir) &&
+                                select.options[i].value.includes('step2') &&
+                                select.options[i].value.endsWith('.gpkg')) {
+                                select.value = select.options[i].value;
+                                clearAllLayers();
+                                await loadLayers(select.options[i].value);
+                                statusEl.textContent = `Complete! Loaded results from ${select.options[i].value}`;
+                                break;
+                            }
+                        }
+                    } else {
+                        statusEl.textContent = `Complete! Output: ${data.step2_output}`;
+                    }
+                }, 1500);
+            } catch (error) {
+                console.error('Step processing failed:', error);
+                statusEl.textContent = `Error: ${error.message}`;
+                statusEl.classList.add('error');
+            }
+
+            updateApplyButtonState();
+        });
+
         // Load GeoPackages on page load
         map.on('load', () => {
+            mapReady = true;
             loadGeoPackages();
         });
     </script>
