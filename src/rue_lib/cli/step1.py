@@ -4,7 +4,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from rue_lib.site.runner import GridConfig, generate_parcels
+from rue_lib.site.runner import SiteConfig, generate_parcels
 
 
 def main():
@@ -53,7 +53,7 @@ def main():
         print(f"✖ Roads file not found: {args.roads_path}", file=sys.stderr)
         sys.exit(1)
 
-    cfg = GridConfig(
+    cfg = SiteConfig(
         site_path=args.site_path,
         roads_path=args.roads_path,
         output_dir=args.out,

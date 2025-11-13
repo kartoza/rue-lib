@@ -33,7 +33,7 @@ def to_metric_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
 
 @dataclass
-class GridConfig:
+class SiteConfig:
     """Configuration for grid-based parcel generation."""
 
     site_path: str
@@ -46,7 +46,7 @@ class GridConfig:
     subtract_roads: bool = False
 
 
-def generate_parcels(cfg: GridConfig) -> Path:
+def generate_parcels(cfg: SiteConfig) -> Path:
     """
     Generate parcels using a grid-based approach.
 
@@ -54,13 +54,13 @@ def generate_parcels(cfg: GridConfig) -> Path:
     on the site and optionally subtracting road corridors.
 
     Args:
-        cfg: GridConfig with all settings
+        cfg: SiteConfig with all settings
 
     Returns:
         Path to output GeoJSON file containing parcel polygons
 
     Example:
-        >>> config = GridConfig(
+        >>> config = SiteConfig(
         ...     site_path="site.geojson",
         ...     roads_path="roads.geojson",
         ...     rows=5,

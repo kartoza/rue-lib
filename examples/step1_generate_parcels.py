@@ -11,7 +11,7 @@ Usage:
     python examples/step1_generate_parcels.py
 """
 
-from rue_lib.site.runner import GridConfig, generate_parcels
+from rue_lib.site.runner import SiteConfig, generate_parcels
 
 
 def main():
@@ -26,7 +26,7 @@ def main():
     """
 
     # Configure grid generation
-    config = GridConfig(
+    config = SiteConfig(
         site_path="data/site.geojson",
         roads_path="data/roads.geojson",
         output_dir="outputs/step1_parcels",

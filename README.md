@@ -16,9 +16,31 @@ Python library for the Rapid Urbanisation Explorer project
 
 ## Installation
 
+### System Requirements
+
+This library requires GDAL to be installed on your system. Install it before installing rue-lib:
+
+**macOS (using Homebrew):**
+```bash
+brew install gdal
+```
+
+**Ubuntu/Debian:**
+```bash
+sudo apt-get update
+sudo apt-get install -y gdal-bin libgdal-dev
+```
+
+**Windows:**
+Download from [OSGeo4W](https://trac.osgeo.org/osgeo4w/) or use conda.
+
 ### From PyPI (when published)
 
 ```bash
+# Install GDAL Python bindings matching your system GDAL version
+pip install GDAL=="$(gdal-config --version)"
+
+# Then install rue-lib
 pip install rue-lib
 ```
 
@@ -27,6 +49,11 @@ pip install rue-lib
 ```bash
 git clone https://github.com/kartoza/rue-lib.git
 cd rue-lib
+
+# Install GDAL Python bindings first
+pip install GDAL=="$(gdal-config --version)"
+
+# Then install rue-lib
 pip install -e .
 ```
 
@@ -100,10 +127,11 @@ make test
 
 Core dependencies:
 - Rich >= 13.0.0
-
-Optional geo dependencies (install with `pip install rue-lib[geo]`):
-- GDAL >= 3.0.0
-- GeoPandas >= 0.10.0
+- GeoPandas >= 0.14.0
+- Shapely >= 2.0.0
+- PyProj >= 3.6.0
+- Pandas >= 2.0.0
+- GDAL >= 3.4.0 (must be installed separately to match system library)
 
 Development dependencies:
 - pytest >= 7.0.0
@@ -111,6 +139,8 @@ Development dependencies:
 - ruff >= 0.1.0
 - bandit >= 1.7.0
 - pre-commit >= 3.0.0
+
+**Note:** GDAL must be installed separately and match your system's GDAL library version. See the Installation section above for details.
 
 ## Documentation
 
