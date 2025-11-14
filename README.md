@@ -107,6 +107,17 @@ gdf = create_sample_geodataframe()
 print(gdf.head())
 ```
 
+## GeoPackage Viewer
+
+Use the lightweight viewer in `viewer/` to inspect inputs/outputs and run site + street processing in a browser.
+
+1. Create/activate a virtual environment (optional but recommended).
+2. Install the viewer dependencies (GDAL must already be available):
+   `pip install -r viewer/requirements.txt`
+3. Start the server from the repository root:
+   `./viewer/start_viewer.sh` (or `python viewer/server.py` on Windows).
+4. Open `http://localhost:5555` in a browser and upload the boundary/road GeoJSON to trigger processing. Outputs are written under `outputs/viewer_runs/<timestamp>/`.
+
 ## Testing
 
 ```bash
