@@ -75,16 +75,16 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
 
 
 def clip_layer(
-    input_path, input_layer_name, clip_path, clip_layer_name, output_path, output_layer_name
+    input_path, input_layer_name, erase_path, erase_layer_name, output_path, output_layer_name
 ):
-    """Clip features of one layer by another and write the result to a GeoPackage.
+    """Erase (subtract) features of one layer from another using difference operation.
 
     Args:
         input_path (str): Path to the dataset containing the input layer.
-        input_layer_name (str): Name of the layer to be clipped.
-        clip_path (str): Path to the dataset containing the clip layer
+        input_layer_name (str): Name of the layer to be erased from.
+        erase_path (str): Path to the dataset containing the erase layer
             (may be the same as `input_path`).
-        clip_layer_name (str): Name of the layer whose geometries define the clip area.
+        erase_layer_name (str): Name of the layer whose geometries will be subtracted.
         output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
         output_layer_name (str): Name of the output layer to create.
 
@@ -118,44 +118,45 @@ def clip_layer(
 
     input_ds = None
 
-    if clip_path == input_path:
-        # Same file, need to be careful
-        clip_ds = ogr.Open(clip_path)
+    if erase_path == input_path:
+        erase_ds = ogr.Open(erase_path)
     else:
-        clip_ds = ogr.Open(clip_path)
+        erase_ds = ogr.Open(erase_path)
 
-    clip_layer = clip_ds.GetLayerByName(clip_layer_name)
+    erase_layer = erase_ds.GetLayerByName(erase_layer_name)
 
-    clip_geoms = []
-    for feature in clip_layer:
-        clip_geoms.append(feature.GetGeometryRef().Clone())
+    erase_geoms = []
+    for feature in erase_layer:
+        erase_geoms.append(feature.GetGeometryRef().Clone())
 
-    clip_ds = None
+    erase_ds = None
 
-    clip_geom = clip_geoms[0]
-    for geom in clip_geoms[1:]:
-        clip_geom = clip_geom.Union(geom)
+    # Union all erase geometries
+    erase_geom = erase_geoms[0]
+    for geom in erase_geoms[1:]:
+        erase_geom = erase_geom.Union(geom)
 
-    # Validate and fix the clip geometry
-    if not clip_geom.IsValid():
-        print("Warning: Clip geometry is invalid, attempting to fix...")
-        clip_geom = clip_geom.Buffer(0)
+    # Validate and fix the erase geometry
+    if not erase_geom.IsValid():
+        print("Warning: Erase geometry is invalid, attempting to fix...")
+        erase_geom = erase_geom.Buffer(0)
 
-    clipped_features = []
+    # Perform difference operation (subtract erase geometry from input)
+    erased_features = []
     for geom, field_values in input_features:
-        # Validate input geometry before intersection
+        # Validate input geometry before difference
         if not geom.IsValid():
             geom = geom.Buffer(0)
 
-        clipped_geom = geom.Intersection(clip_geom)
+        erased_geom = geom.Difference(erase_geom)
 
         # Validate resulting geometry
-        if not clipped_geom.IsEmpty():
-            if not clipped_geom.IsValid():
-                clipped_geom = clipped_geom.Buffer(0)
+        if not erased_geom.IsEmpty():
+            if not erased_geom.IsValid():
+                erased_geom = erased_geom.Buffer(0)
 
-            if not clipped_geom.IsEmpty():
-                clipped_features.append((clipped_geom, field_values))
+            if not erased_geom.IsEmpty():
+                erased_features.append((erased_geom, field_values))
 
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
@@ -171,17 +172,27 @@ def clip_layer(
 
     output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
 
-    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
-    output_layer.CreateField(id_field)
+    # Check if 'id' field already exists in the input layer
+    has_id_field = any(field_def.GetNameRef() == "id" for field_def in field_defs)
+
+    if not has_id_field:
+        id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+        output_layer.CreateField(id_field)
 
     for field_def in field_defs:
         output_layer.CreateField(field_def)
 
     feature_id = 1
-    for geom, field_values in clipped_features:
+    for geom, field_values in erased_features:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
         out_feature.SetGeometry(geom)
-        out_feature.SetField("id", feature_id)
+
+        # Set id field if we created it, or update it if it already existed
+        if not has_id_field:
+            out_feature.SetField("id", feature_id)
+        elif "id" in field_values:
+            # Preserve existing id
+            pass
 
         for field_name, value in field_values.items():
             out_feature.SetField(field_name, value)

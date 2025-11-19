@@ -282,6 +282,8 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
     Returns:
         None
     """
+    from shapely import wkb as shapely_wkb
+
     source_ds = ogr.Open(input_path)
     source_layer = source_ds.GetLayerByName(layer_name)
 
@@ -290,7 +292,18 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
     geoms = []
     for feature in source_layer:
         geom = feature.GetGeometryRef().Clone()
-        buffered = geom.Buffer(distance)
+
+        # Convert to Shapely for sharp-edged buffers
+        wkb_data = geom.ExportToWkb()
+        if isinstance(wkb_data, bytearray):
+            wkb_data = bytes(wkb_data)
+        shapely_geom = shapely_wkb.loads(wkb_data)
+
+        # Buffer with sharp edges: join_style=2 (mitre), cap_style=2 (square)
+        buffered_shapely = shapely_geom.buffer(distance, join_style=2, cap_style=2)
+
+        # Convert back to OGR
+        buffered = ogr.CreateGeometryFromWkb(buffered_shapely.wkb)
         geoms.append(buffered)
 
     source_ds = None

@@ -211,6 +211,18 @@ def create_division_points(gpkg_path, line_layer_name, output_layer_name, prefer
         w = L / best_n
         n_full_bands = int(L / w)
 
+        # Draw first point
+        point = line_geom.Value(0)
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(point)
+        out_feature.SetField("line_id", line_id)
+        out_feature.SetField("point_id", 0)
+        out_feature.SetField("width", w)
+        out_feature.SetField("n_bands", n_full_bands)
+        output_layer.CreateFeature(out_feature)
+        out_feature = None
+        total_points += 1
+
         for k in range(n_full_bands - 1):
             distance = (k + 1) * w
 
@@ -338,8 +350,8 @@ def create_perpendicular_lines(
                 y2 = y - perp_dy * perpendicular_length
 
                 perp_line = ogr.Geometry(ogr.wkbLineString)
-                perp_line.AddPoint(x1, y1)
                 perp_line.AddPoint(x2, y2)
+                perp_line.AddPoint(x1, y1)
 
                 try:
                     clipped_line = perp_line.Intersection(site_union)
@@ -351,7 +363,6 @@ def create_perpendicular_lines(
                     geom_type = ogr.GT_Flatten(clipped_line.GetGeometryType())
 
                     if geom_type == ogr.wkbLineString:
-                        # Validate that the linestring has at least 2 points
                         if clipped_line.GetPointCount() >= 2:
                             out_feature = ogr.Feature(output_layer.GetLayerDefn())
                             out_feature.SetGeometry(clipped_line)
@@ -363,7 +374,6 @@ def create_perpendicular_lines(
                     elif geom_type == ogr.wkbMultiLineString:
                         for i in range(clipped_line.GetGeometryCount()):
                             line_part = clipped_line.GetGeometryRef(i)
-                            # Validate that each line part has at least 2 points
                             if line_part.GetPointCount() >= 2:
                                 out_feature = ogr.Feature(output_layer.GetLayerDefn())
                                 out_feature.SetGeometry(line_part)

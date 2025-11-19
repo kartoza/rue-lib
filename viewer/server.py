@@ -152,7 +152,7 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
 
     step2_dir = run_dir / "step2"
     street_cfg = StreetConfig(
-        parcel_path=str(step1_output),
+        parcel_path=str(boundary_path),
         roads_path=str(roads_path),
         output_dir=str(step2_dir),
         road_arterial_width_m=arterial_width,
