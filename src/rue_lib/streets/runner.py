@@ -97,7 +97,7 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
         cfg.off_grid_partitions_preferred_width,
         output_path,
         "arterial_setback_grid",
-        cfg.road_arterial_width_m,
+        road_buffer_distance=cfg.road_arterial_width_m,
     )
 
     print("Clean up grid blocks...")
@@ -117,7 +117,8 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
         cfg.off_grid_partitions_preferred_width,
         output_path,
         "secondary_setback_grid",
-        cfg.road_secondary_width_m,
+        intersected_setbacks_layer_name="intersected_setbacks",
+        road_buffer_distance=cfg.road_secondary_width_m,
     )
 
     print("Clean up grid blocks...")

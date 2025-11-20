@@ -996,13 +996,18 @@ def create_grid_from_on_grid(
     grid_width,
     output_path,
     output_layer_name,
-    arterial_buffer_distance=15,
+    intersected_setbacks_layer_name=None,
+    road_buffer_distance=15,
 ):
-    """Create grid polygons from arterial setback by creating division points and splitting polygons
+    """Create grid polygons from arterial setback by division points and splitting.
 
     This function combines the creation of division points and the splitting of polygons into
     a single operation. It generates division points along edges closest to arterial roads,
     then splits the setback polygons using perpendicular lines from these points.
+
+    If intersected_setbacks is provided, division points start from the corner of the merged
+    edge that is closest to the intersected setback, ensuring grids align properly with
+    intersection areas.
 
     Args:
         input_path (str): Path to the dataset containing the setback & arterial layers.
@@ -1011,9 +1016,11 @@ def create_grid_from_on_grid(
         grid_width (float): Width for division points spacing.
         output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
         output_layer_name (str): Name of the output layer to create.
-        arterial_buffer_distance (float | None): Optional buffer distance (same
+        intersected_setbacks_layer_name (str | None): Optional name of intersected setbacks layer.
+            If provided, division points start from the corner closest to intersected setbacks.
+        road_buffer_distance (float | None): Optional buffer distance (same
             units as layer CRS). If provided and > 0, only edges that intersect
-            the buffered arterial roads are considered.
+            the buffered roads are considered.
 
     Returns:
         None
@@ -1052,8 +1059,19 @@ def create_grid_from_on_grid(
 
     # Optional buffer geometry for selecting relevant edges
     arterial_buffer_geom = None
-    if arterial_buffer_distance is not None and arterial_buffer_distance > 0:
-        arterial_buffer_geom = arterial_union.Buffer(arterial_buffer_distance)
+    if road_buffer_distance is not None and road_buffer_distance > 0:
+        arterial_buffer_geom = arterial_union.Buffer(road_buffer_distance)
+
+    # Load intersected setbacks geometries if provided
+    intersected_geoms = []
+    if intersected_setbacks_layer_name is not None:
+        intersected_layer = input_ds.GetLayerByName(intersected_setbacks_layer_name)
+        if intersected_layer is not None:
+            for feature in intersected_layer:
+                geom = feature.GetGeometryRef()
+                if geom is None:
+                    continue
+                intersected_geoms.append(geom.Clone())
 
     # Extract and merge edges closest to arterial roads
     selected_edges = []
@@ -1143,6 +1161,33 @@ def create_grid_from_on_grid(
         if n < 2:
             continue
 
+        # Find the closest corner (start or end) to the intersected setback if available
+        if intersected_geoms:
+            # Get the closest intersected setback for this setback_id
+            # We need to find which setback geometry this edge belongs to
+            # For now, find the closest intersected geometry to either endpoint
+            start_point = ogr.Geometry(ogr.wkbPoint)
+            start_point.AddPoint(edge_geom.GetX(0), edge_geom.GetY(0))
+            end_point = ogr.Geometry(ogr.wkbPoint)
+            end_point.AddPoint(edge_geom.GetX(n - 1), edge_geom.GetY(n - 1))
+
+            min_start_dist = float("inf")
+            min_end_dist = float("inf")
+            for intersected_geom in intersected_geoms:
+                start_dist = start_point.Distance(intersected_geom)
+                end_dist = end_point.Distance(intersected_geom)
+                if start_dist < min_start_dist:
+                    min_start_dist = start_dist
+                if end_dist < min_end_dist:
+                    min_end_dist = end_dist
+
+            # If the end point is closer to intersected setback, reverse the direction
+            # by starting from total_length and going backwards
+            reverse_direction = min_end_dist < min_start_dist
+        else:
+            reverse_direction = False
+
+        # Calculate cumulative distances along the line
         segment_distances = [0]
         for i in range(n - 1):
             x1, y1 = edge_geom.GetX(i), edge_geom.GetY(i)
@@ -1152,41 +1197,71 @@ def create_grid_from_on_grid(
 
         total_length = segment_distances[-1]
 
-        current_distance = 0
-        while current_distance <= total_length:
-            # Find which segment this distance falls on
-            segment_idx = 0
-            for i in range(len(segment_distances) - 1):
-                if segment_distances[i] <= current_distance <= segment_distances[i + 1]:
-                    segment_idx = i
-                    break
+        # Generate division points starting from the closest corner
+        if reverse_direction:
+            # Start from the end and go backwards
+            current_distance = total_length
+            while current_distance >= 0:
+                # Find which segment this distance falls on
+                segment_idx = 0
+                for i in range(len(segment_distances) - 1):
+                    if segment_distances[i] <= current_distance <= segment_distances[i + 1]:
+                        segment_idx = i
+                        break
 
-            # Calculate position within the segment
-            segment_start_dist = segment_distances[segment_idx]
-            segment_end_dist = segment_distances[segment_idx + 1]
-            segment_length = segment_end_dist - segment_start_dist
+                # Calculate position within the segment
+                segment_start_dist = segment_distances[segment_idx]
+                segment_end_dist = segment_distances[segment_idx + 1]
+                segment_length = segment_end_dist - segment_start_dist
 
-            if segment_length > 0:
-                t = (current_distance - segment_start_dist) / segment_length
-            else:
-                t = 0
+                if segment_length > 0:
+                    t = (current_distance - segment_start_dist) / segment_length
+                else:
+                    t = 0
 
-            # Interpolate position
-            x1, y1 = edge_geom.GetX(segment_idx), edge_geom.GetY(segment_idx)
-            x2, y2 = edge_geom.GetX(segment_idx + 1), edge_geom.GetY(segment_idx + 1)
+                # Interpolate position
+                x1, y1 = edge_geom.GetX(segment_idx), edge_geom.GetY(segment_idx)
+                x2, y2 = edge_geom.GetX(segment_idx + 1), edge_geom.GetY(segment_idx + 1)
 
-            point_x = x1 + t * (x2 - x1)
-            point_y = y1 + t * (y2 - y1)
+                point_x = x1 + t * (x2 - x1)
+                point_y = y1 + t * (y2 - y1)
 
-            points_by_setback[setback_id].append((point_x, point_y, current_distance))
+                # Store with distance from the chosen start (reversed)
+                dist_from_start = total_length - current_distance
+                points_by_setback[setback_id].append((point_x, point_y, dist_from_start))
 
-            current_distance += grid_width
+                current_distance -= grid_width
+        else:
+            # Start from the beginning (original behavior)
+            current_distance = 0
+            while current_distance <= total_length:
+                # Find which segment this distance falls on
+                segment_idx = 0
+                for i in range(len(segment_distances) - 1):
+                    if segment_distances[i] <= current_distance <= segment_distances[i + 1]:
+                        segment_idx = i
+                        break
 
-        # Always add the end point if not already included
-        if current_distance - grid_width < total_length:
-            points_by_setback[setback_id].append(
-                (edge_geom.GetX(n - 1), edge_geom.GetY(n - 1), total_length)
-            )
+                # Calculate position within the segment
+                segment_start_dist = segment_distances[segment_idx]
+                segment_end_dist = segment_distances[segment_idx + 1]
+                segment_length = segment_end_dist - segment_start_dist
+
+                if segment_length > 0:
+                    t = (current_distance - segment_start_dist) / segment_length
+                else:
+                    t = 0
+
+                # Interpolate position
+                x1, y1 = edge_geom.GetX(segment_idx), edge_geom.GetY(segment_idx)
+                x2, y2 = edge_geom.GetX(segment_idx + 1), edge_geom.GetY(segment_idx + 1)
+
+                point_x = x1 + t * (x2 - x1)
+                point_y = y1 + t * (y2 - y1)
+
+                points_by_setback[setback_id].append((point_x, point_y, current_distance))
+
+                current_distance += grid_width
 
     # Sort points by distance for each setback
     for setback_id in points_by_setback:
