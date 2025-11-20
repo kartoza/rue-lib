@@ -193,6 +193,136 @@ def clip_layer(
     output_ds = None
 
 
+def erase_layer(
+    input_path, input_layer_name, erase_path, erase_layer_name, output_path, output_layer_name
+):
+    """Erase (subtract) features of one layer from another using difference operation.
+
+    Args:
+        input_path (str): Path to the dataset containing the input layer.
+        input_layer_name (str): Name of the layer to be erased from.
+        erase_path (str): Path to the dataset containing the erase layer
+            (may be the same as `input_path`).
+        erase_layer_name (str): Name of the layer whose geometries will be subtracted.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors (dataset access, layer creation,
+            or geometry operations).
+    """
+    # Open input
+    input_ds = ogr.Open(input_path)
+    input_layer = input_ds.GetLayerByName(input_layer_name)
+
+    srs = input_layer.GetSpatialRef()
+    geom_type = input_layer.GetGeomType()
+
+    input_layer_defn = input_layer.GetLayerDefn()
+    field_defs = []
+    for i in range(input_layer_defn.GetFieldCount()):
+        field_defs.append(input_layer_defn.GetFieldDefn(i))
+
+    input_features = []
+    for feature in input_layer:
+        geom = feature.GetGeometryRef().Clone()
+        field_values = {}
+        for i in range(input_layer_defn.GetFieldCount()):
+            field_name = input_layer_defn.GetFieldDefn(i).GetNameRef()
+            field_values[field_name] = feature.GetField(i)
+        input_features.append((geom, field_values))
+
+    input_ds = None
+
+    if erase_path == input_path:
+        erase_ds = ogr.Open(erase_path)
+    else:
+        erase_ds = ogr.Open(erase_path)
+
+    erase_layer = erase_ds.GetLayerByName(erase_layer_name)
+
+    erase_geoms = []
+    for feature in erase_layer:
+        erase_geoms.append(feature.GetGeometryRef().Clone())
+
+    erase_ds = None
+
+    # Union all erase geometries
+    erase_geom = erase_geoms[0]
+    for geom in erase_geoms[1:]:
+        erase_geom = erase_geom.Union(geom)
+
+    # Validate and fix the erase geometry
+    if not erase_geom.IsValid():
+        print("Warning: Erase geometry is invalid, attempting to fix...")
+        erase_geom = erase_geom.Buffer(0)
+
+    # Perform difference operation (subtract erase geometry from input)
+    erased_features = []
+    for geom, field_values in input_features:
+        # Validate input geometry before difference
+        if not geom.IsValid():
+            geom = geom.Buffer(0)
+
+        erased_geom = geom.Difference(erase_geom)
+
+        # Validate resulting geometry
+        if not erased_geom.IsEmpty():
+            if not erased_geom.IsValid():
+                erased_geom = erased_geom.Buffer(0)
+
+            if not erased_geom.IsEmpty():
+                erased_features.append((erased_geom, field_values))
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Remove layer if exists
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
+
+    # Check if 'id' field already exists in the input layer
+    has_id_field = any(field_def.GetNameRef() == "id" for field_def in field_defs)
+
+    if not has_id_field:
+        id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+        output_layer.CreateField(id_field)
+
+    for field_def in field_defs:
+        output_layer.CreateField(field_def)
+
+    feature_id = 1
+    for geom, field_values in erased_features:
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(geom)
+
+        # Set id field if we created it, or update it if it already existed
+        if not has_id_field:
+            out_feature.SetField("id", feature_id)
+        elif "id" in field_values:
+            # Preserve existing id
+            pass
+
+        for field_name, value in field_values.items():
+            out_feature.SetField(field_name, value)
+
+        output_layer.CreateFeature(out_feature)
+        out_feature = None
+        feature_id += 1
+
+    output_ds = None
+
+
 def calculate_required_rings(gpkg_path, layer_name, ring_spacing):
     """Calculate the number of rings needed to cover a layer's extent.
 
