@@ -11,7 +11,7 @@ from .blocks_orthogonal import (
 )
 from .config import StreetConfig
 from .operations import (
-    clip_layer,
+    erase_layer,
     extract_by_expression,
 )
 
@@ -84,7 +84,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 8: Removing arterial setback from site...")
-    clip_layer(
+    erase_layer(
         output_path,
         clipped_site_layer,
         output_path,
@@ -94,7 +94,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 9: Removing secondary setback from site...")
-    clip_layer(
+    erase_layer(
         output_path,
         "site_minus_arterial_setback",
         output_path,
@@ -146,7 +146,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 12: Creating residual polygons (site minus grid)...")
-    clip_layer(
+    erase_layer(
         output_path,
         "site_minus_all_setbacks",
         output_path,

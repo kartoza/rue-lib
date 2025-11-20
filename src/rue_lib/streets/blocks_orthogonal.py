@@ -29,6 +29,21 @@ class BlockRecord:
     keep: bool = True
 
 
+def _coord_xy(coord) -> tuple[float, float]:
+    """Return XY components from a coordinate tuple that may include Z."""
+
+    if coord is None:
+        return (0.0, 0.0)
+
+    try:
+        x = coord[0]
+        y = coord[1]
+    except (TypeError, IndexError):
+        raise ValueError(f"Invalid coordinate encountered: {coord}") from None
+
+    return (float(x), float(y))
+
+
 def _ogr_delete_layer(dataset: ogr.DataSource, layer_name: str) -> None:
     """Remove layer if it already exists."""
 
@@ -155,8 +170,8 @@ def _get_polygon_edges(
         p1 = coords[i]
         p2 = coords[(i + 1) % len(coords)]
 
-        x1, y1 = p1
-        x2, y2 = p2
+        x1, y1 = _coord_xy(p1)
+        x2, y2 = _coord_xy(p2)
 
         # Calculate edge length
         length = math.sqrt((x2 - x1) ** 2 + (y2 - y1) ** 2)
@@ -208,8 +223,8 @@ def _find_best_grid_snap(
     vertical_edges = []
 
     for i in range(len(coords) - 1):
-        x1, y1 = coords[i]
-        x2, y2 = coords[i + 1]
+        x1, y1 = _coord_xy(coords[i])
+        x2, y2 = _coord_xy(coords[i + 1])
 
         dx = abs(x2 - x1)
         dy = abs(y2 - y1)

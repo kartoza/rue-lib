@@ -75,6 +75,125 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
 
 
 def clip_layer(
+    input_path, input_layer_name, clip_path, clip_layer_name, output_path, output_layer_name
+):
+    """Clip features of one layer by another and write the result to a GeoPackage.
+
+    Args:
+        input_path (str): Path to the dataset containing the input layer.
+        input_layer_name (str): Name of the layer to be clipped.
+        clip_path (str): Path to the dataset containing the clip layer
+            (may be the same as `input_path`).
+        clip_layer_name (str): Name of the layer whose geometries define the clip area.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors (dataset access, layer creation,
+            or geometry operations).
+    """
+    # Open input
+    input_ds = ogr.Open(input_path)
+    input_layer = input_ds.GetLayerByName(input_layer_name)
+
+    srs = input_layer.GetSpatialRef()
+    geom_type = input_layer.GetGeomType()
+
+    input_layer_defn = input_layer.GetLayerDefn()
+    field_defs = []
+    for i in range(input_layer_defn.GetFieldCount()):
+        field_defs.append(input_layer_defn.GetFieldDefn(i))
+
+    input_features = []
+    for feature in input_layer:
+        geom = feature.GetGeometryRef().Clone()
+        field_values = {}
+        for i in range(input_layer_defn.GetFieldCount()):
+            field_name = input_layer_defn.GetFieldDefn(i).GetNameRef()
+            field_values[field_name] = feature.GetField(i)
+        input_features.append((geom, field_values))
+
+    input_ds = None
+
+    if clip_path == input_path:
+        # Same file, need to be careful
+        clip_ds = ogr.Open(clip_path)
+    else:
+        clip_ds = ogr.Open(clip_path)
+
+    clip_layer = clip_ds.GetLayerByName(clip_layer_name)
+
+    clip_geoms = []
+    for feature in clip_layer:
+        clip_geoms.append(feature.GetGeometryRef().Clone())
+
+    clip_ds = None
+
+    clip_geom = clip_geoms[0]
+    for geom in clip_geoms[1:]:
+        clip_geom = clip_geom.Union(geom)
+
+    # Validate and fix the clip geometry
+    if not clip_geom.IsValid():
+        print("Warning: Clip geometry is invalid, attempting to fix...")
+        clip_geom = clip_geom.Buffer(0)
+
+    clipped_features = []
+    for geom, field_values in input_features:
+        # Validate input geometry before intersection
+        if not geom.IsValid():
+            geom = geom.Buffer(0)
+
+        clipped_geom = geom.Intersection(clip_geom)
+
+        # Validate resulting geometry
+        if not clipped_geom.IsEmpty():
+            if not clipped_geom.IsValid():
+                clipped_geom = clipped_geom.Buffer(0)
+
+            if not clipped_geom.IsEmpty():
+                clipped_features.append((clipped_geom, field_values))
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Remove layer if exists
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
+
+    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+    output_layer.CreateField(id_field)
+
+    for field_def in field_defs:
+        output_layer.CreateField(field_def)
+
+    feature_id = 1
+    for geom, field_values in clipped_features:
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(geom)
+        out_feature.SetField("id", feature_id)
+
+        for field_name, value in field_values.items():
+            out_feature.SetField(field_name, value)
+
+        output_layer.CreateFeature(out_feature)
+        out_feature = None
+        feature_id += 1
+
+    output_ds = None
+
+
+def erase_layer(
     input_path, input_layer_name, erase_path, erase_layer_name, output_path, output_layer_name
 ):
     """Erase (subtract) features of one layer from another using difference operation.
