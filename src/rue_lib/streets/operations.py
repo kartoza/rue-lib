@@ -1085,6 +1085,55 @@ def create_grid_from_on_grid(
 
     merged_edges = merge_connected_edges(selected_edges)
 
+    # Write merged edges to debug layer for visualization
+    driver = ogr.GetDriverByName("GPKG")
+    if driver is None:
+        raise RuntimeError("Could not get GPKG driver.")
+
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+        if output_ds is None:
+            raise RuntimeError(f"Could not open existing output: {output_path}")
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+        if output_ds is None:
+            raise RuntimeError(f"Could not create output: {output_path}")
+
+    # Delete existing debug layer if it exists
+    debug_layer_name = f"{output_layer_name}_merged_edges_debug"
+    for i in range(output_ds.GetLayerCount()):
+        layer = output_ds.GetLayerByIndex(i)
+        if layer.GetName() == debug_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    # Create debug layer for merged edges
+    debug_layer = output_ds.CreateLayer(debug_layer_name, srs, ogr.wkbLineString)
+    if debug_layer is None:
+        raise RuntimeError("Could not create debug layer.")
+
+    # Add fields
+    debug_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+    debug_layer.CreateField(ogr.FieldDefn("setback_id", ogr.OFTInteger))
+    debug_layer.CreateField(ogr.FieldDefn("dist_to_road", ogr.OFTReal))
+    debug_layer.CreateField(ogr.FieldDefn("length", ogr.OFTReal))
+
+    # Write merged edges
+    feature_id = 1
+    for edge_geom, setback_id, distance_to_road, edge_length in merged_edges:
+        out_feature = ogr.Feature(debug_layer.GetLayerDefn())
+        out_feature.SetGeometry(edge_geom)
+        out_feature.SetField("id", feature_id)
+        if setback_id is not None:
+            out_feature.SetField("setback_id", int(setback_id))
+        out_feature.SetField("dist_to_road", distance_to_road)
+        out_feature.SetField("length", edge_length)
+        debug_layer.CreateFeature(out_feature)
+        out_feature = None
+        feature_id += 1
+
+    output_ds = None
+
     points_by_setback = {}
     for edge_geom, setback_id, _distance_to_road, _edge_length in merged_edges:
         if setback_id not in points_by_setback:
@@ -1142,6 +1191,57 @@ def create_grid_from_on_grid(
     # Sort points by distance for each setback
     for setback_id in points_by_setback:
         points_by_setback[setback_id].sort(key=lambda p: p[2])
+
+    # Write division points to debug layer for visualization
+    driver = ogr.GetDriverByName("GPKG")
+    if driver is None:
+        raise RuntimeError("Could not get GPKG driver.")
+
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+        if output_ds is None:
+            raise RuntimeError(f"Could not open existing output: {output_path}")
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+        if output_ds is None:
+            raise RuntimeError(f"Could not create output: {output_path}")
+
+    # Delete existing debug layer if it exists
+    points_debug_layer_name = f"{output_layer_name}_division_points_debug"
+    for i in range(output_ds.GetLayerCount()):
+        layer = output_ds.GetLayerByIndex(i)
+        if layer.GetName() == points_debug_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    # Create debug layer for division points
+    points_debug_layer = output_ds.CreateLayer(points_debug_layer_name, srs, ogr.wkbPoint)
+    if points_debug_layer is None:
+        raise RuntimeError("Could not create points debug layer.")
+
+    # Add fields
+    points_debug_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+    points_debug_layer.CreateField(ogr.FieldDefn("setback_id", ogr.OFTInteger))
+    points_debug_layer.CreateField(ogr.FieldDefn("distance", ogr.OFTReal))
+
+    # Write division points
+    feature_id = 1
+    for setback_id, points in points_by_setback.items():
+        for point_x, point_y, distance in points:
+            point_geom = ogr.Geometry(ogr.wkbPoint)
+            point_geom.AddPoint(point_x, point_y)
+
+            out_feature = ogr.Feature(points_debug_layer.GetLayerDefn())
+            out_feature.SetGeometry(point_geom)
+            out_feature.SetField("id", feature_id)
+            if setback_id is not None:
+                out_feature.SetField("setback_id", int(setback_id))
+            out_feature.SetField("distance", distance)
+            points_debug_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
+
+    output_ds = None
 
     grid_polygons = []
 
