@@ -19,12 +19,14 @@
     "pyproject",
     "pytest",
     "ruff",
+    "scipy",
     "setuptools",
     "shapely",
     "timlinux",
     "timvim",
     "twine",
-    "urbanisation"
+    "urbanisation",
+    "voronoi"
   ],
   "ignorePaths": [
     "node_modules",
