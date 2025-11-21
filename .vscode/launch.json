@@ -22,6 +22,16 @@
                 "tests"
             ],
             "preLaunchTask": "Run Tests"
+        },
+        {
+            "name": "Python: Viewer Server",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/viewer/server.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true,
+            "preLaunchTask": "Run Viewer Server"
         }
     ]
 }

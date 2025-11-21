@@ -11,11 +11,126 @@ from .blocks_orthogonal import (
 )
 from .config import StreetConfig
 from .operations import (
+    break_multipart_features,
+    cleanup_grid_blocks,
+    clip_layer,
+    create_grid_from_on_grid,
     erase_layer,
     extract_by_expression,
 )
 
 gdal.UseExceptions()
+
+
+def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
+    print("Clip arterial setback to site boundary...")
+    clip_layer(
+        output_path,
+        "arterial_setback",
+        output_path,
+        "site_clipped_by_roads",
+        output_path,
+        "arterial_setback_clipped",
+    )
+
+    print("Clip secondary setback to site boundary...")
+    clip_layer(
+        output_path,
+        "secondary_setback",
+        output_path,
+        "site_clipped_by_roads",
+        output_path,
+        "secondary_setback_clipped",
+    )
+
+    print("Intersect arterial and secondary setbacks...")
+    clip_layer(
+        output_path,
+        "arterial_setback_clipped",
+        output_path,
+        "secondary_setback_clipped",
+        output_path,
+        "intersected_setbacks",
+    )
+
+    print("Arterial setback without intersection...")
+    erase_layer(
+        output_path,
+        "arterial_setback_clipped",
+        output_path,
+        "intersected_setbacks",
+        output_path,
+        "arterial_setback_final",
+    )
+
+    print("Secondary setback without intersection...")
+    erase_layer(
+        output_path,
+        "secondary_setback_clipped",
+        output_path,
+        "intersected_setbacks",
+        output_path,
+        "secondary_setback_final",
+    )
+
+    print("Breaking arterial setback multipart features...")
+    break_multipart_features(
+        output_path,
+        "arterial_setback_final",
+        output_path,
+        "arterial_setback_final",
+    )
+
+    print("Breaking secondary setback multipart features...")
+    break_multipart_features(
+        output_path,
+        "secondary_setback_final",
+        output_path,
+        "secondary_setback_final",
+    )
+
+    print("Create grid from on-grid arterial setback...")
+    create_grid_from_on_grid(
+        output_path,
+        "arterial_setback_final",
+        "arterial_roads",
+        cfg.off_grid_partitions_preferred_width,
+        output_path,
+        "arterial_setback_grid",
+        road_buffer_distance=cfg.road_arterial_width_m,
+    )
+
+    print("Clean up grid blocks...")
+    cleanup_grid_blocks(
+        output_path,
+        "arterial_setback_grid",
+        output_path,
+        "arterial_setback_grid_cleaned",
+        cfg.arterial_setback_depth * cfg.off_grid_partitions_preferred_width * 0.5,
+    )
+
+    print("Create grid from on-grid secondary setback...")
+    create_grid_from_on_grid(
+        output_path,
+        "secondary_setback_final",
+        "secondary_roads",
+        cfg.off_grid_partitions_preferred_width,
+        output_path,
+        "secondary_setback_grid",
+        intersected_setbacks_layer_name="intersected_setbacks",
+        road_buffer_distance=cfg.road_secondary_width_m,
+    )
+
+    print("Clean up grid blocks...")
+    cleanup_grid_blocks(
+        output_path,
+        "secondary_setback_grid",
+        output_path,
+        "secondary_setback_grid_cleaned",
+        cfg.secondary_setback_depth * cfg.off_grid_partitions_preferred_width * 0.5,
+    )
+
+    return output_path
 
 
 def generate_streets(cfg: StreetConfig) -> Path:
@@ -168,6 +283,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
         use_ternary_search=cfg.use_ternary_search,
         clip_to_boundary=False,  # Only perfect interior cells for residual
     )
+
+    generate_on_grid_blocks(output_gpkg, cfg)
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
