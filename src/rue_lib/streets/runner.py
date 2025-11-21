@@ -15,6 +15,7 @@ from .operations import (
     cleanup_grid_blocks,
     clip_layer,
     create_grid_from_on_grid,
+    create_local_streets_zone,
     erase_layer,
     extract_by_expression,
 )
@@ -131,6 +132,39 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
     )
 
     return output_path
+
+
+def generate_local_streets(output_path: Path, cfg: StreetConfig, input_layer_name: str) -> str:
+    """Generate local streets zone from grid blocks.
+
+    Creates a zone for local streets with sidewalks by:
+    1. Creating an inner buffer: -(sidewalk_width + road_width/2)
+    2. Creating an outer rounded buffer: +sidewalk_width
+
+    Args:
+        output_path (Path): Path to the GeoPackage containing grid blocks.
+        cfg (StreetConfig): Configuration with sidewalk and road width parameters.
+        input_layer_name (str): Name of the input grid blocks layer.
+
+    Returns:
+        str: Name of the created local streets zone layer.
+    """
+    output_layer_name = f"{input_layer_name}_local_streets"
+
+    print(f"Creating local streets zone from {input_layer_name}...")
+
+    create_local_streets_zone(
+        str(output_path),
+        input_layer_name,
+        str(output_path),
+        output_layer_name,
+        cfg.sidewalk_width_m,
+        cfg.road_locals_width_m,
+    )
+
+    print(f"  Created layer: {output_layer_name}")
+
+    return output_layer_name
 
 
 def generate_streets(cfg: StreetConfig) -> Path:

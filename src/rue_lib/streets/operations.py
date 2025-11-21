@@ -477,6 +477,116 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
     output_ds = None
 
 
+def create_local_streets_zone(
+    input_path,
+    input_layer_name,
+    output_path,
+    output_layer_name,
+    sidewalk_width_m,
+    road_width_m,
+):
+    """Create local streets zone with sidewalks from grid blocks.
+
+    This creates a zone for local streets by:
+    1. Creating an inner (negative) buffer using sidewalk_width + half of road_width
+    2. Creating an outer (positive) rounded buffer of sidewalk_width from the inner result
+
+    The result represents the area where local streets and sidewalks will be placed.
+
+    Args:
+        input_path (str): Path to the input dataset containing grid blocks.
+        input_layer_name (str): Name of the layer with grid blocks.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+        sidewalk_width_m (float): Width of sidewalk in meters.
+        road_width_m (float): Width of local road in meters.
+
+    Returns:
+        str: Name of the created output layer.
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors.
+    """
+    from shapely import wkb as shapely_wkb
+
+    # Calculate buffer distances
+    # Inner buffer: negative, to shrink by sidewalk + half road width
+    inner_buffer_distance = -(sidewalk_width_m + road_width_m / 2.0)
+    # Outer buffer: positive, rounded buffer for sidewalk
+    outer_buffer_distance = sidewalk_width_m
+
+    # Open input dataset
+    input_ds = ogr.Open(input_path)
+    if input_ds is None:
+        raise RuntimeError(f"Could not open input dataset: {input_path}")
+
+    input_layer = input_ds.GetLayerByName(input_layer_name)
+    if input_layer is None:
+        raise RuntimeError(f"Could not find layer: {input_layer_name}")
+
+    srs = input_layer.GetSpatialRef()
+
+    # Step 1: Create inner buffer (sharp-edged negative buffer)
+    inner_geoms = []
+    for feature in input_layer:
+        geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
+
+        # Convert to Shapely
+        wkb_data = geom.ExportToWkb()
+        if isinstance(wkb_data, bytearray):
+            wkb_data = bytes(wkb_data)
+        shapely_geom = shapely_wkb.loads(wkb_data)
+
+        # Inner buffer with sharp edges (mitre join, square cap)
+        inner_buffered = shapely_geom.buffer(inner_buffer_distance, join_style=2, cap_style=2)
+
+        if not inner_buffered.is_empty:
+            inner_geoms.append(inner_buffered)
+
+    input_ds = None
+
+    if not inner_geoms:
+        raise RuntimeError(f"No valid geometries after inner buffer from {input_layer_name}")
+
+    # Dissolve all inner buffers
+    dissolved_inner = unary_union(inner_geoms)
+
+    # Step 2: Create outer buffer (rounded buffer) from dissolved inner
+    # Use rounded buffer: join_style=1 (round), cap_style=1 (round)
+    final_geom = dissolved_inner.buffer(outer_buffer_distance, join_style=1, cap_style=1)
+
+    # Convert back to OGR
+    final_ogr_geom = ogr.CreateGeometryFromWkb(final_geom.wkb)
+
+    # Write to output
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Remove existing layer if present
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    # Create output layer
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
+
+    # Write the feature
+    out_feature = ogr.Feature(output_layer.GetLayerDefn())
+    out_feature.SetGeometry(final_ogr_geom)
+    output_layer.CreateFeature(out_feature)
+    out_feature = None
+
+    output_ds = None
+
+    return output_layer_name
+
+
 def break_multipart_features(input_path, input_layer_name, output_path, output_layer_name):
     """Break multipart geometries into single-part features.
 
