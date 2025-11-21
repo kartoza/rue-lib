@@ -580,17 +580,39 @@ def create_local_streets_zone(
                 output_ds.DeleteLayer(i)
                 break
 
-    # Create inner layer (shrunk grid blocks)
+    # Create inner layer (shrunk grid blocks) with attributes
     inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbPolygon)
+    inner_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
+
     inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
     inner_feature.SetGeometry(inner_ogr_geom)
+    inner_feature.SetField("area_m2", inner_ogr_geom.GetArea())
+    inner_feature.SetField("buffer_dist", inner_buffer_distance)
+    inner_feature.SetField("sidewalk_w", sidewalk_width_m)
+    inner_feature.SetField("road_w", road_width_m)
+    inner_feature.SetField("zone_type", "buildable")
     inner_layer.CreateFeature(inner_feature)
     inner_feature = None
 
-    # Create outer layer (with sidewalk buffer)
+    # Create outer layer (with sidewalk buffer) with attributes
     outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbPolygon)
+    outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
+
     outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
     outer_feature.SetGeometry(outer_ogr_geom)
+    outer_feature.SetField("area_m2", outer_ogr_geom.GetArea())
+    outer_feature.SetField("buffer_dist", outer_buffer_distance)
+    outer_feature.SetField("sidewalk_w", sidewalk_width_m)
+    outer_feature.SetField("road_w", road_width_m)
+    outer_feature.SetField("zone_type", "street_sidewalk")
     outer_layer.CreateFeature(outer_feature)
     outer_feature = None
 
