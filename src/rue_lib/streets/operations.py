@@ -477,6 +477,161 @@ def multiring_buffer(input_path, layer_name, rings, distance, output_path, outpu
     output_ds = None
 
 
+def create_local_streets_zone(
+    input_path,
+    input_layer_name,
+    output_path,
+    output_layer_name,
+    sidewalk_width_m,
+    road_width_m,
+):
+    """Create local streets zone with sidewalks from grid blocks.
+
+    This creates a zone for local streets by:
+    1. Creating an inner (negative) buffer using sidewalk_width + half of road_width
+    2. Creating an outer (positive) rounded buffer of sidewalk_width from the inner result
+
+    The result represents the area where local streets and sidewalks will be placed.
+    Both inner and outer buffer zones are saved as separate layers.
+
+    Args:
+        input_path (str): Path to the input dataset containing grid blocks.
+        input_layer_name (str): Name of the layer with grid blocks.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Base name for the output layers.
+        sidewalk_width_m (float): Width of sidewalk in meters.
+        road_width_m (float): Width of local road in meters.
+
+    Returns:
+        tuple[str, str]: Names of (outer_layer, inner_layer) created.
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors.
+    """
+    from shapely import wkb as shapely_wkb
+
+    # Calculate buffer distances
+    # Inner buffer: negative, to shrink by sidewalk + half road width
+    inner_buffer_distance = -(sidewalk_width_m + road_width_m / 2.0)
+    # Outer buffer: positive, rounded buffer for sidewalk
+    outer_buffer_distance = sidewalk_width_m
+
+    # Open input dataset
+    input_ds = ogr.Open(input_path)
+    if input_ds is None:
+        raise RuntimeError(f"Could not open input dataset: {input_path}")
+
+    input_layer = input_ds.GetLayerByName(input_layer_name)
+    if input_layer is None:
+        raise RuntimeError(f"Could not find layer: {input_layer_name}")
+
+    srs = input_layer.GetSpatialRef()
+
+    # Step 1: Create inner buffer (sharp-edged negative buffer)
+    inner_geoms = []
+    for feature in input_layer:
+        geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
+
+        # Convert to Shapely
+        wkb_data = geom.ExportToWkb()
+        if isinstance(wkb_data, bytearray):
+            wkb_data = bytes(wkb_data)
+        shapely_geom = shapely_wkb.loads(wkb_data)
+
+        # Inner buffer with sharp edges (mitre join, square cap)
+        inner_buffered = shapely_geom.buffer(inner_buffer_distance, join_style=2, cap_style=2)
+
+        if not inner_buffered.is_empty:
+            inner_geoms.append(inner_buffered)
+
+    input_ds = None
+
+    if not inner_geoms:
+        raise RuntimeError(f"No valid geometries after inner buffer from {input_layer_name}")
+
+    # Dissolve all inner buffers
+    dissolved_inner = unary_union(inner_geoms)
+
+    # Step 2: Create outer buffer (rounded buffer) from dissolved inner
+    # Use rounded buffer: join_style=1 (round), cap_style=1 (round)
+    outer_geom = dissolved_inner.buffer(outer_buffer_distance, join_style=1, cap_style=1)
+
+    # Convert geometries back to OGR
+    inner_ogr_geom = ogr.CreateGeometryFromWkb(dissolved_inner.wkb)
+    outer_ogr_geom = ogr.CreateGeometryFromWkb(outer_geom.wkb)
+
+    # Write to output
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Layer names
+    inner_layer_name = f"{output_layer_name}_inner"
+    outer_layer_name = f"{output_layer_name}_outer"
+
+    # Remove existing layers if present
+    for layer_name in [inner_layer_name, outer_layer_name]:
+        for i in range(output_ds.GetLayerCount()):
+            if output_ds.GetLayerByIndex(i).GetName() == layer_name:
+                output_ds.DeleteLayer(i)
+                break
+
+    # Calculate areas
+    inner_area = inner_ogr_geom.GetArea()
+    outer_area = outer_ogr_geom.GetArea()
+    sidewalk_area = outer_area - inner_area
+
+    # Create inner layer (shrunk grid blocks) with attributes
+    # Use wkbUnknown to allow both Polygon and MultiPolygon
+    inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbUnknown)
+    inner_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
+    inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
+
+    inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
+    inner_feature.SetGeometry(inner_ogr_geom)
+    inner_feature.SetField("area_m2", inner_area)
+    inner_feature.SetField("sidewalk_area", sidewalk_area)
+    inner_feature.SetField("buffer_dist", abs(inner_buffer_distance))
+    inner_feature.SetField("sidewalk_w", sidewalk_width_m)
+    inner_feature.SetField("road_w", road_width_m)
+    inner_feature.SetField("zone_type", "buildable")
+    inner_layer.CreateFeature(inner_feature)
+    inner_feature = None
+
+    # Create outer layer (with sidewalk buffer) with attributes
+    # Use wkbUnknown to allow both Polygon and MultiPolygon
+    outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbUnknown)
+    outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
+    outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
+
+    outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
+    outer_feature.SetGeometry(outer_ogr_geom)
+    outer_feature.SetField("area_m2", outer_area)
+    outer_feature.SetField("sidewalk_area", sidewalk_area)
+    outer_feature.SetField("buffer_dist", abs(road_width_m / 2.0))
+    outer_feature.SetField("sidewalk_w", sidewalk_width_m)
+    outer_feature.SetField("road_w", road_width_m)
+    outer_feature.SetField("zone_type", "street_sidewalk")
+    outer_layer.CreateFeature(outer_feature)
+    outer_feature = None
+
+    output_ds = None
+
+    return (outer_layer_name, inner_layer_name)
+
+
 def break_multipart_features(input_path, input_layer_name, output_path, output_layer_name):
     """Break multipart geometries into single-part features.
 
