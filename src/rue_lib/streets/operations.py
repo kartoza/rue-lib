@@ -586,7 +586,8 @@ def create_local_streets_zone(
     sidewalk_area = outer_area - inner_area
 
     # Create inner layer (shrunk grid blocks) with attributes
-    inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbPolygon)
+    # Use wkbUnknown to allow both Polygon and MultiPolygon
+    inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbUnknown)
     inner_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
@@ -606,7 +607,8 @@ def create_local_streets_zone(
     inner_feature = None
 
     # Create outer layer (with sidewalk buffer) with attributes
-    outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbPolygon)
+    # Use wkbUnknown to allow both Polygon and MultiPolygon
+    outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbUnknown)
     outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
     outer_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
     outer_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
