@@ -134,12 +134,16 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
     return output_path
 
 
-def generate_local_streets(output_path: Path, cfg: StreetConfig, input_layer_name: str) -> str:
+def generate_local_streets(
+    output_path: Path, cfg: StreetConfig, input_layer_name: str
+) -> tuple[str, str]:
     """Generate local streets zone from grid blocks.
 
     Creates a zone for local streets with sidewalks by:
     1. Creating an inner buffer: -(sidewalk_width + road_width/2)
     2. Creating an outer rounded buffer: +sidewalk_width
+
+    Both inner and outer zones are saved as separate layers.
 
     Args:
         output_path (Path): Path to the GeoPackage containing grid blocks.
@@ -147,13 +151,13 @@ def generate_local_streets(output_path: Path, cfg: StreetConfig, input_layer_nam
         input_layer_name (str): Name of the input grid blocks layer.
 
     Returns:
-        str: Name of the created local streets zone layer.
+        tuple[str, str]: Names of (outer_layer, inner_layer) created.
     """
     output_layer_name = f"{input_layer_name}_local_streets"
 
     print(f"Creating local streets zone from {input_layer_name}...")
 
-    create_local_streets_zone(
+    outer_layer, inner_layer = create_local_streets_zone(
         str(output_path),
         input_layer_name,
         str(output_path),
@@ -162,9 +166,9 @@ def generate_local_streets(output_path: Path, cfg: StreetConfig, input_layer_nam
         cfg.road_locals_width_m,
     )
 
-    print(f"  Created layer: {output_layer_name}")
+    print(f"  Created layers: {outer_layer} (outer), {inner_layer} (inner)")
 
-    return output_layer_name
+    return (outer_layer, inner_layer)
 
 
 def generate_streets(cfg: StreetConfig) -> Path:
@@ -319,6 +323,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     generate_on_grid_blocks(output_gpkg, cfg)
+
+    generate_local_streets(
+        output_gpkg,
+        cfg,
+        "arterial_setback_grid_cleaned",
+    )
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")

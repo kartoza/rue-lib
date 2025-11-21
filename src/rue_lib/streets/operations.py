@@ -492,17 +492,18 @@ def create_local_streets_zone(
     2. Creating an outer (positive) rounded buffer of sidewalk_width from the inner result
 
     The result represents the area where local streets and sidewalks will be placed.
+    Both inner and outer buffer zones are saved as separate layers.
 
     Args:
         input_path (str): Path to the input dataset containing grid blocks.
         input_layer_name (str): Name of the layer with grid blocks.
         output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
-        output_layer_name (str): Name of the output layer to create.
+        output_layer_name (str): Base name for the output layers.
         sidewalk_width_m (float): Width of sidewalk in meters.
         road_width_m (float): Width of local road in meters.
 
     Returns:
-        str: Name of the created output layer.
+        tuple[str, str]: Names of (outer_layer, inner_layer) created.
 
     Raises:
         Exception: Propagated GDAL/OGR errors.
@@ -555,10 +556,11 @@ def create_local_streets_zone(
 
     # Step 2: Create outer buffer (rounded buffer) from dissolved inner
     # Use rounded buffer: join_style=1 (round), cap_style=1 (round)
-    final_geom = dissolved_inner.buffer(outer_buffer_distance, join_style=1, cap_style=1)
+    outer_geom = dissolved_inner.buffer(outer_buffer_distance, join_style=1, cap_style=1)
 
-    # Convert back to OGR
-    final_ogr_geom = ogr.CreateGeometryFromWkb(final_geom.wkb)
+    # Convert geometries back to OGR
+    inner_ogr_geom = ogr.CreateGeometryFromWkb(dissolved_inner.wkb)
+    outer_ogr_geom = ogr.CreateGeometryFromWkb(outer_geom.wkb)
 
     # Write to output
     driver = ogr.GetDriverByName("GPKG")
@@ -567,24 +569,34 @@ def create_local_streets_zone(
     else:
         output_ds = driver.CreateDataSource(output_path)
 
-    # Remove existing layer if present
-    for i in range(output_ds.GetLayerCount()):
-        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
-            output_ds.DeleteLayer(i)
-            break
+    # Layer names
+    inner_layer_name = f"{output_layer_name}_inner"
+    outer_layer_name = f"{output_layer_name}_outer"
 
-    # Create output layer
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
+    # Remove existing layers if present
+    for layer_name in [inner_layer_name, outer_layer_name]:
+        for i in range(output_ds.GetLayerCount()):
+            if output_ds.GetLayerByIndex(i).GetName() == layer_name:
+                output_ds.DeleteLayer(i)
+                break
 
-    # Write the feature
-    out_feature = ogr.Feature(output_layer.GetLayerDefn())
-    out_feature.SetGeometry(final_ogr_geom)
-    output_layer.CreateFeature(out_feature)
-    out_feature = None
+    # Create inner layer (shrunk grid blocks)
+    inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbPolygon)
+    inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
+    inner_feature.SetGeometry(inner_ogr_geom)
+    inner_layer.CreateFeature(inner_feature)
+    inner_feature = None
+
+    # Create outer layer (with sidewalk buffer)
+    outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbPolygon)
+    outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
+    outer_feature.SetGeometry(outer_ogr_geom)
+    outer_layer.CreateFeature(outer_feature)
+    outer_feature = None
 
     output_ds = None
 
-    return output_layer_name
+    return (outer_layer_name, inner_layer_name)
 
 
 def break_multipart_features(input_path, input_layer_name, output_path, output_layer_name):
