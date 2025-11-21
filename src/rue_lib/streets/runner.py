@@ -18,6 +18,7 @@ from .operations import (
     create_local_streets_zone,
     erase_layer,
     extract_by_expression,
+    extract_site_boundary_lines,
 )
 
 gdal.UseExceptions()
@@ -334,6 +335,15 @@ def generate_streets(cfg: StreetConfig) -> Path:
         output_gpkg,
         cfg,
         "secondary_setback_grid_cleaned",
+    )
+
+    extract_site_boundary_lines(
+        output_gpkg,
+        "site_minus_all_setbacks",
+        "arterial_setback_final",
+        "secondary_setback_final",
+        output_gpkg,
+        "site_boundary_lines",
     )
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")

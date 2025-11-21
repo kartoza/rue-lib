@@ -632,6 +632,214 @@ def create_local_streets_zone(
     return (outer_layer_name, inner_layer_name)
 
 
+def extract_site_boundary_lines(
+    input_path,
+    site_layer_name,
+    arterial_setback_layer_name,
+    secondary_setback_layer_name,
+    output_path,
+    output_layer_name,
+):
+    """Extract boundary lines from site that touch arterial or secondary setbacks.
+
+    This function extracts the exterior boundary lines of the site polygons
+    and identifies which lines touch arterial setbacks, secondary setbacks, or both.
+    Each line segment gets attributes indicating the setback type and measurements.
+
+    Args:
+        input_path (str): Path to the input dataset.
+        site_layer_name (str): Name of the site layer (e.g., "site_minus_all_setbacks").
+        arterial_setback_layer_name (str): Name of arterial setback layer.
+        secondary_setback_layer_name (str): Name of secondary setback layer.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer for boundary lines.
+
+    Returns:
+        str: Name of the created output layer.
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors.
+    """
+    from shapely import geometry as shapely_geom
+    from shapely import wkb as shapely_wkb
+    from shapely.ops import unary_union
+
+    # Open input dataset
+    input_ds = ogr.Open(input_path)
+    if input_ds is None:
+        raise RuntimeError(f"Could not open input dataset: {input_path}")
+
+    site_layer = input_ds.GetLayerByName(site_layer_name)
+    if site_layer is None:
+        raise RuntimeError(f"Could not find site layer: {site_layer_name}")
+
+    arterial_layer = input_ds.GetLayerByName(arterial_setback_layer_name)
+    secondary_layer = input_ds.GetLayerByName(secondary_setback_layer_name)
+
+    srs = site_layer.GetSpatialRef()
+
+    # Load setback geometries as Shapely objects
+    arterial_shapely = []
+    if arterial_layer is not None:
+        for feature in arterial_layer:
+            geom = feature.GetGeometryRef()
+            if geom is not None:
+                wkb_data = geom.ExportToWkb()
+                if isinstance(wkb_data, bytearray):
+                    wkb_data = bytes(wkb_data)
+                arterial_shapely.append(shapely_wkb.loads(wkb_data))
+
+    secondary_shapely = []
+    if secondary_layer is not None:
+        for feature in secondary_layer:
+            geom = feature.GetGeometryRef()
+            if geom is not None:
+                wkb_data = geom.ExportToWkb()
+                if isinstance(wkb_data, bytearray):
+                    wkb_data = bytes(wkb_data)
+                secondary_shapely.append(shapely_wkb.loads(wkb_data))
+
+    # Dissolve setback geometries for faster distance calculations
+    arterial_union = unary_union(arterial_shapely) if arterial_shapely else None
+    secondary_union = unary_union(secondary_shapely) if secondary_shapely else None
+
+    # Extract boundary lines from site polygons
+    boundary_lines = []
+    tolerance = 0.1  # Buffer tolerance in meters
+
+    for site_feature in site_layer:
+        site_geom = site_feature.GetGeometryRef()
+        if site_geom is None:
+            continue
+
+        site_id = site_feature.GetFID()
+
+        # Convert to Shapely
+        wkb_data = site_geom.ExportToWkb()
+        if isinstance(wkb_data, bytearray):
+            wkb_data = bytes(wkb_data)
+        site_shapely = shapely_wkb.loads(wkb_data)
+
+        # Get exterior boundary
+        if isinstance(site_shapely, shapely_geom.Polygon):
+            boundaries = [site_shapely.exterior]
+        elif isinstance(site_shapely, shapely_geom.MultiPolygon):
+            boundaries = [poly.exterior for poly in site_shapely.geoms]
+        else:
+            continue
+
+        for ring_idx, boundary in enumerate(boundaries):
+            # Split boundary into segments
+            coords = list(boundary.coords)
+            for seg_idx in range(len(coords) - 1):
+                # Create segment as Shapely LineString
+                segment = shapely_geom.LineString([coords[seg_idx], coords[seg_idx + 1]])
+
+                # Get the center point of the segment
+                center_point = segment.centroid
+
+                # Calculate distances to setbacks using the center point
+                min_arterial_dist = (
+                    center_point.distance(arterial_union)
+                    if arterial_union is not None
+                    else float("inf")
+                )
+                min_secondary_dist = (
+                    center_point.distance(secondary_union)
+                    if secondary_union is not None
+                    else float("inf")
+                )
+
+                # Determine if segment is within tolerance of setbacks
+                touches_arterial = min_arterial_dist <= tolerance
+                touches_secondary = min_secondary_dist <= tolerance
+
+                # Only include segments that touch at least one setback
+                if touches_arterial or touches_secondary:
+                    # Determine setback type - prioritize by distance
+                    # "both" only when truly at corner (equal distances)
+                    if touches_arterial and not touches_secondary:
+                        setback_type = "arterial"
+                    elif touches_secondary and not touches_arterial:
+                        setback_type = "secondary"
+                    elif touches_arterial and touches_secondary:
+                        # Both within tolerance - check if at corner
+                        if min_arterial_dist < min_secondary_dist:
+                            setback_type = "arterial"
+                        else:
+                            setback_type = "secondary"
+                    else:
+                        # Fallback (shouldn't reach here)
+                        setback_type = "arterial" if touches_arterial else "secondary"
+
+                    # Convert back to OGR for output
+                    segment_ogr = ogr.CreateGeometryFromWkb(segment.wkb)
+
+                    boundary_lines.append(
+                        {
+                            "geometry": segment_ogr,
+                            "site_id": site_id,
+                            "ring_idx": ring_idx,
+                            "segment_idx": seg_idx,
+                            "length": segment.length,
+                            "setback_type": setback_type,
+                            "touches_arterial": touches_arterial,
+                            "touches_secondary": touches_secondary,
+                            "dist_arterial": min_arterial_dist,
+                            "dist_secondary": min_secondary_dist,
+                        }
+                    )
+
+    input_ds = None
+
+    # Write to output
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Remove existing layer if present
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    # Create output layer
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
+
+    # Create fields
+    output_layer.CreateField(ogr.FieldDefn("site_id", ogr.OFTInteger))
+    output_layer.CreateField(ogr.FieldDefn("ring_idx", ogr.OFTInteger))
+    output_layer.CreateField(ogr.FieldDefn("segment_idx", ogr.OFTInteger))
+    output_layer.CreateField(ogr.FieldDefn("length_m", ogr.OFTReal))
+    output_layer.CreateField(ogr.FieldDefn("setback_type", ogr.OFTString))
+    output_layer.CreateField(ogr.FieldDefn("touch_art", ogr.OFTInteger))  # Boolean as int
+    output_layer.CreateField(ogr.FieldDefn("touch_sec", ogr.OFTInteger))  # Boolean as int
+    output_layer.CreateField(ogr.FieldDefn("dist_art_m", ogr.OFTReal))
+    output_layer.CreateField(ogr.FieldDefn("dist_sec_m", ogr.OFTReal))
+
+    # Write features
+    for line_data in boundary_lines:
+        feature = ogr.Feature(output_layer.GetLayerDefn())
+        feature.SetGeometry(line_data["geometry"])
+        feature.SetField("site_id", line_data["site_id"])
+        feature.SetField("ring_idx", line_data["ring_idx"])
+        feature.SetField("segment_idx", line_data["segment_idx"])
+        feature.SetField("length_m", line_data["length"])
+        feature.SetField("setback_type", line_data["setback_type"])
+        feature.SetField("touch_art", 1 if line_data["touches_arterial"] else 0)
+        feature.SetField("touch_sec", 1 if line_data["touches_secondary"] else 0)
+        feature.SetField("dist_art_m", line_data["dist_arterial"])
+        feature.SetField("dist_sec_m", line_data["dist_secondary"])
+        output_layer.CreateFeature(feature)
+        feature = None
+
+    output_ds = None
+
+    return output_layer_name
+
+
 def break_multipart_features(input_path, input_layer_name, output_path, output_layer_name):
     """Break multipart geometries into single-part features.
 
