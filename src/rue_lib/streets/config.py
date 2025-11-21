@@ -29,3 +29,5 @@ class StreetConfig:
     tolerance_boundary_distance: float = (
         10.0  # Allow cells within this distance of boundary (meters). 0.0=no touching
     )
+    sidewalk_width_m: float = 3.0
+    road_locals_width_m: float = 10.0

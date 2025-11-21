@@ -330,6 +330,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "arterial_setback_grid_cleaned",
     )
 
+    generate_local_streets(
+        output_gpkg,
+        cfg,
+        "secondary_setback_grid_cleaned",
+    )
+
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {clipped_site_layer}: Site polygon with roads subtracted")
