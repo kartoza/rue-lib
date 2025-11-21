@@ -640,25 +640,30 @@ def extract_site_boundary_lines(
     output_path,
     output_layer_name,
 ):
-    """Extract boundary lines from site that touch arterial or secondary setbacks.
+    """Extract and merge boundary lines from site that touch arterial or secondary setbacks.
 
-    This function extracts the exterior boundary lines of the site polygons
-    and identifies which lines touch arterial setbacks, secondary setbacks, or both.
-    Each line segment gets attributes indicating the setback type and measurements.
+    This function extracts the exterior boundary lines of the site polygons,
+    identifies which lines touch arterial or secondary setbacks, and merges
+    connected edges of the same setback type into continuous linestrings.
 
     Args:
         input_path (str): Path to the input dataset.
-        site_layer_name (str): Name of the site layer (e.g., "site_minus_all_setbacks").
+        site_layer_name (str): Name of the site layer (e.g., "arterial_setback_final").
         arterial_setback_layer_name (str): Name of arterial setback layer.
         secondary_setback_layer_name (str): Name of secondary setback layer.
         output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
-        output_layer_name (str): Name of the output layer for boundary lines.
+        output_layer_name (str): Name of the output layer for merged boundary lines.
 
     Returns:
         str: Name of the created output layer.
 
     Raises:
         Exception: Propagated GDAL/OGR errors.
+
+    Output Attributes:
+        - id: Feature ID
+        - length_m: Length of the merged line in meters
+        - setback_type: Type of setback ('arterial' or 'secondary')
     """
     from shapely import geometry as shapely_geom
     from shapely import wkb as shapely_wkb
@@ -757,13 +762,12 @@ def extract_site_boundary_lines(
                 # Only include segments that touch at least one setback
                 if touches_arterial or touches_secondary:
                     # Determine setback type - prioritize by distance
-                    # "both" only when truly at corner (equal distances)
                     if touches_arterial and not touches_secondary:
                         setback_type = "arterial"
                     elif touches_secondary and not touches_arterial:
                         setback_type = "secondary"
                     elif touches_arterial and touches_secondary:
-                        # Both within tolerance - check if at corner
+                        # Both within tolerance - check which is closer
                         if min_arterial_dist < min_secondary_dist:
                             setback_type = "arterial"
                         else:
@@ -772,12 +776,9 @@ def extract_site_boundary_lines(
                         # Fallback (shouldn't reach here)
                         setback_type = "arterial" if touches_arterial else "secondary"
 
-                    # Convert back to OGR for output
-                    segment_ogr = ogr.CreateGeometryFromWkb(segment.wkb)
-
                     boundary_lines.append(
                         {
-                            "geometry": segment_ogr,
+                            "segment": segment,
                             "site_id": site_id,
                             "ring_idx": ring_idx,
                             "segment_idx": seg_idx,
@@ -791,6 +792,35 @@ def extract_site_boundary_lines(
                     )
 
     input_ds = None
+
+    # Merge connected edges by setback_type
+    from shapely.ops import linemerge
+
+    # Group segments by setback_type
+    segments_by_type = {"arterial": [], "secondary": []}
+
+    for line_data in boundary_lines:
+        setback_type = line_data["setback_type"]
+        segment = line_data["segment"]
+        segments_by_type[setback_type].append(segment)
+
+    # Merge connected segments for each type
+    merged_lines = []
+    for setback_type, segments in segments_by_type.items():
+        if segments:
+            # Use linemerge to connect adjacent segments
+            merged = linemerge(segments)
+
+            # Handle both LineString and MultiLineString results
+            if merged.geom_type == "LineString":
+                merged_lines.append({"geometry": merged, "setback_type": setback_type})
+            elif merged.geom_type == "MultiLineString":
+                for line in merged.geoms:
+                    merged_lines.append({"geometry": line, "setback_type": setback_type})
+            else:
+                # If merge didn't work, keep original segments
+                for seg in segments:
+                    merged_lines.append({"geometry": seg, "setback_type": setback_type})
 
     # Write to output
     driver = ogr.GetDriverByName("GPKG")
@@ -808,32 +838,29 @@ def extract_site_boundary_lines(
     # Create output layer
     output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
 
-    # Create fields
-    output_layer.CreateField(ogr.FieldDefn("site_id", ogr.OFTInteger))
-    output_layer.CreateField(ogr.FieldDefn("ring_idx", ogr.OFTInteger))
-    output_layer.CreateField(ogr.FieldDefn("segment_idx", ogr.OFTInteger))
+    # Create fields for merged lines
+    output_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
     output_layer.CreateField(ogr.FieldDefn("length_m", ogr.OFTReal))
     output_layer.CreateField(ogr.FieldDefn("setback_type", ogr.OFTString))
-    output_layer.CreateField(ogr.FieldDefn("touch_art", ogr.OFTInteger))  # Boolean as int
-    output_layer.CreateField(ogr.FieldDefn("touch_sec", ogr.OFTInteger))  # Boolean as int
-    output_layer.CreateField(ogr.FieldDefn("dist_art_m", ogr.OFTReal))
-    output_layer.CreateField(ogr.FieldDefn("dist_sec_m", ogr.OFTReal))
 
-    # Write features
-    for line_data in boundary_lines:
+    # Write merged features
+    feature_id = 1
+    for line_data in merged_lines:
+        geometry = line_data["geometry"]
+        setback_type = line_data["setback_type"]
+
+        # Convert Shapely geometry to OGR
+        line_ogr = ogr.CreateGeometryFromWkb(geometry.wkb)
+
         feature = ogr.Feature(output_layer.GetLayerDefn())
-        feature.SetGeometry(line_data["geometry"])
-        feature.SetField("site_id", line_data["site_id"])
-        feature.SetField("ring_idx", line_data["ring_idx"])
-        feature.SetField("segment_idx", line_data["segment_idx"])
-        feature.SetField("length_m", line_data["length"])
-        feature.SetField("setback_type", line_data["setback_type"])
-        feature.SetField("touch_art", 1 if line_data["touches_arterial"] else 0)
-        feature.SetField("touch_sec", 1 if line_data["touches_secondary"] else 0)
-        feature.SetField("dist_art_m", line_data["dist_arterial"])
-        feature.SetField("dist_sec_m", line_data["dist_secondary"])
+        feature.SetGeometry(line_ogr)
+        feature.SetField("id", feature_id)
+        feature.SetField("length_m", geometry.length)
+        feature.SetField("setback_type", setback_type)
+
         output_layer.CreateFeature(feature)
         feature = None
+        feature_id += 1
 
     output_ds = None
 
