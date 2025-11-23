@@ -3,23 +3,11 @@ from pathlib import Path
 import numpy as np
 from osgeo import ogr
 from scipy.spatial import Voronoi
-from shapely import wkt
 from shapely.affinity import rotate
 from shapely.geometry import Point, Polygon
 from shapely.prepared import prep
 
-
-def _feature_geom_to_shapely(feat):
-    """
-    Helper: convert a feature geometry (QGIS or OGR) to Shapely.
-    """
-    if hasattr(feat, "geometry"):  # QGIS QgsFeature-style
-        geom = feat.geometry()
-        wkt_str = geom.asWkt() if hasattr(geom, "asWkt") else geom.ExportToWkt()
-    else:  # OGR Feature
-        geom = feat.GetGeometryRef()
-        wkt_str = geom.ExportToWkt()
-    return wkt.loads(wkt_str)
+from rue_lib.core.helpers import feature_geom_to_shapely
 
 
 def _voronoi_finite_polygons_2d(vor, radius=None):
@@ -81,7 +69,6 @@ def _voronoi_finite_polygons_2d(vor, radius=None):
 def grids_from_polygon(
     polygon,
     arterial_line,
-    srs,
     grid_width: float = 100.0,
     grid_depth: float = 100.0,
 ):
@@ -105,12 +92,12 @@ def grids_from_polygon(
         grid_cells: list[Polygon] in original coordinates
         mesh_points: list[Point] in original coordinates
     """
-    polygon_shply = _feature_geom_to_shapely(polygon)
+    polygon_shply = feature_geom_to_shapely(polygon)
 
     # If we have an arterial line, use it to define rotation. Otherwise,
     # fall back to a simple alignment based on the polygon centroid.
     if arterial_line is not None:
-        arterial_line_shply = _feature_geom_to_shapely(arterial_line)
+        arterial_line_shply = feature_geom_to_shapely(arterial_line)
         # Use the midpoint of the arterial as rotation origin and to
         # compute the angle.
         global_mid_point = arterial_line_shply.interpolate(arterial_line_shply.length / 2.0)
@@ -170,7 +157,6 @@ def grids_from_polygon(
                 x += grid_width
             y += grid_depth
 
-        # Voronoi requires at least 4 points in 2D
         if len(mesh_points_rot) < 4:
             return [], [], 0
 
@@ -233,7 +219,6 @@ def grids_from_polygon(
 
     # --- Horizontal search (along the arterial / width direction) ---
     if arterial_line is None:
-        # Single candidate: no arterial to optimise against.
         cells_rot, mesh_points_rot, _ = build_mesh_and_cells(minx)
     else:
         # Move the mesh origin left/right in the rotated frame. We only
@@ -288,7 +273,6 @@ def grids_from_polygon(
         grid_cells = cells_rot
         mesh_points = mesh_points_rot
 
-    # Final clip with the original polygon to be safe
     final_cells = []
     for c in grid_cells:
         clipped = c.intersection(polygon_shply)
@@ -348,25 +332,19 @@ def grids_from_site(
     grid_id = 1
     pt_id = 1
 
-    # Iterate over polygons
     for polygon in site_layer:
-        # Reset boundary cursor for each polygon
         site_boundary_lines.ResetReading()
 
         arterial_line = None
 
         for site_boundary_line in site_boundary_lines:
             if site_boundary_line.GetGeometryRef().Intersects(polygon.GetGeometryRef()):
-                # adjust field index if needed
                 if site_boundary_line.GetFieldAsString(2) == "arterial":
                     arterial_line = site_boundary_line
                     break
 
-        grid_cells, mesh_points = grids_from_polygon(
-            polygon, arterial_line, srs, grid_width, grid_depth
-        )
+        grid_cells, mesh_points = grids_from_polygon(polygon, arterial_line, grid_width, grid_depth)
 
-        # Write grid cells
         for cell in grid_cells:
             feat = ogr.Feature(grid_layer.GetLayerDefn())
             feat.SetField("grid_id", grid_id)
@@ -377,7 +355,6 @@ def grids_from_site(
             grid_layer.CreateFeature(feat)
             feat = None
 
-        # Write mesh points
         for p in mesh_points:
             feat = ogr.Feature(point_layer.GetLayerDefn())
             feat.SetField("pt_id", pt_id)
@@ -388,4 +365,4 @@ def grids_from_site(
             point_layer.CreateFeature(feat)
             feat = None
 
-    ds = None  # flush and close
+    ds = None
