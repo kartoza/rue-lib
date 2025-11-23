@@ -75,16 +75,19 @@ def grids_from_polygon(
     """Create a mesh-based grid (Voronoi cells from equidistant mesh points)
     aligned to the arterial line and clipped to ``polygon``.
 
-    The algorithm:
-    - Rotate the polygon so that the arterial line (if present) is
-      approximately horizontal.
-    - Choose a vertical alignment (start_y) so the arterial sits roughly
-      halfway between grid rows (padding ~ grid_depth/2).
-    - Then, *horizontally* shift the mesh origin left/right in the rotated
-      frame in small steps (e.g. 10 m) and, for each shift, build a mesh,
-      create Voronoi cells, and count "good" cells where area >=
-      grid_width * grid_depth.
-    - The shift that yields the most good cells is chosen.
+    Algorithm:
+    - If an arterial line exists, sample local tangent angles along the line
+      from start to end and use them as candidate rotations.
+    - For each candidate angle:
+        * Rotate polygon around a fixed origin (midpoint of arterial).
+        * Align rows so the arterial sits roughly halfway between rows.
+        * Search horizontally (left/right) for the best grid shift.
+        * Count "good" cells with area in [width*depth, 1.10 * width*depth).
+          Also accumulate the total area of those good cells.
+    - Choose the angle+shift combination with:
+        1. the most good cells;
+        2. if tied, the largest total good-cell area
+           (equivalent to highest good-area / polygon-area ratio).
 
     Returns
     -------
@@ -94,184 +97,201 @@ def grids_from_polygon(
     """
     polygon_shply = feature_geom_to_shapely(polygon)
 
-    # If we have an arterial line, use it to define rotation. Otherwise,
-    # fall back to a simple alignment based on the polygon centroid.
+    def _norm_angle_deg(angle: float) -> float:
+        return ((angle + 90.0) % 180.0) - 90.0
+
+    candidate_angles_deg: set[float] = set()
+
     if arterial_line is not None:
         arterial_line_shply = feature_geom_to_shapely(arterial_line)
-        # Use the midpoint of the arterial as rotation origin and to
-        # compute the angle.
-        global_mid_point = arterial_line_shply.interpolate(arterial_line_shply.length / 2.0)
-        right_mid_point = arterial_line_shply.interpolate(
-            (arterial_line_shply.length / 2.0) + (arterial_line_shply.length / 10.0)
-        )
+        length = arterial_line_shply.length
 
-        dx = right_mid_point.x - global_mid_point.x
-        dy = right_mid_point.y - global_mid_point.y
-        angle = np.arctan2(dy, dx)
-        angle_deg = np.degrees(angle)
+        origin_point = arterial_line_shply.interpolate(length / 2.0)
 
-        # Rotate polygon into a local frame where the arterial is
-        # approximately horizontal.
+        if length > 0:
+            sample_step = max(grid_width, length / 20.0)
+            d = 0.0
+            while d < length:
+                d2 = min(d + sample_step, length)
+                if d2 <= d:
+                    break
+                p1 = arterial_line_shply.interpolate(d)
+                p2 = arterial_line_shply.interpolate(d2)
+                dx = p2.x - p1.x
+                dy = p2.y - p1.y
+                if not (np.isclose(dx, 0.0) and np.isclose(dy, 0.0)):
+                    angle = np.degrees(np.arctan2(dy, dx))
+                    candidate_angles_deg.add(round(_norm_angle_deg(angle), 3))
+                d += sample_step
+
+        if not candidate_angles_deg:
+            candidate_angles_deg = {0.0}
+    else:
+        origin_point = polygon_shply.centroid
+        candidate_angles_deg = {0.0}
+
+    best_overall_cells = []
+    best_overall_points = []
+    best_overall_good = -1
+    best_overall_good_area = -1.0
+    best_angle_deg = 0.0
+
+    for angle_deg in candidate_angles_deg:
         polygon_rot = rotate(
             polygon_shply,
             -angle_deg,
-            origin=(global_mid_point.x, global_mid_point.y),
+            origin=(origin_point.x, origin_point.y),
             use_radians=False,
         )
-    else:
-        # No arterial line: no rotation, just work in original coords.
-        global_mid_point = polygon_shply.centroid
-        angle_deg = 0.0
-        polygon_rot = polygon_shply
 
-    minx, miny, maxx, maxy = polygon_rot.bounds
-    prepared_poly = prep(polygon_rot)
+        minx, miny, maxx, maxy = polygon_rot.bounds
+        prepared_poly = prep(polygon_rot)
 
-    # --- Vertical alignment (depth direction) ---
-    # If we have an arterial, align rows so that the arterial sits
-    # roughly halfway between two rows (padding ~ grid_depth/2).
-    if arterial_line is not None:
-        mid_y = global_mid_point.y
-        dy = mid_y - miny
-        remainder_y = dy % grid_depth
-        start_y = miny + remainder_y - (grid_depth / 2.0)
-    else:
-        start_y = miny
+        if arterial_line is not None:
+            mid_y = origin_point.y
+            dy = mid_y - miny
+            remainder_y = dy % grid_depth
+            start_y = miny + remainder_y - (grid_depth / 2.0)
+        else:
+            start_y = miny
 
-    def build_mesh_and_cells(start_x: float):
-        """Build a mesh with a given horizontal start (start_x) and the
-        fixed vertical start (start_y), then compute Voronoi cells and
-        count "good" cells (area >= grid_width * grid_depth).
-        """
-        mesh_points_rot = []
+        def build_mesh_and_cells(
+            start_x: float,
+            *,
+            start_y=start_y,
+            maxx=maxx,
+            maxy=maxy,
+            prepared_poly=prepared_poly,
+            polygon_rot=polygon_rot,
+        ):
+            mesh_points_rot = []
 
-        y = start_y
-        # Extend slightly beyond the polygon bounds so that edge cells can
-        # still form complete rectangles before clipping.
-        while y <= maxy + grid_depth:
-            x = start_x
-            while x <= maxx + grid_width:
-                p = Point(x, y)
-                if prepared_poly.contains(p):
-                    mesh_points_rot.append(p)
-                x += grid_width
-            y += grid_depth
+            y = start_y
+            while y <= maxy + grid_depth:
+                x = start_x
+                while x <= maxx + grid_width:
+                    p = Point(x, y)
+                    if prepared_poly.contains(p):
+                        mesh_points_rot.append(p)
+                    x += grid_width
+                y += grid_depth
 
-        if len(mesh_points_rot) < 4:
-            return [], [], 0
+            if len(mesh_points_rot) < 4:
+                return [], [], 0, 0.0
 
-        # Voronoi on rotated mesh points
-        pts = np.array([[p.x, p.y] for p in mesh_points_rot])
+            pts = np.array([[p.x, p.y] for p in mesh_points_rot])
 
-        # Check if points are collinear or degenerate (all same x or y coordinate)
-        # This happens when polygon is too narrow for the grid spacing
-        x_coords = pts[:, 0]
-        y_coords = pts[:, 1]
-        if np.allclose(x_coords, x_coords[0]) or np.allclose(y_coords, y_coords[0]):
-            return [], [], 0
+            x_coords = pts[:, 0]
+            y_coords = pts[:, 1]
+            if np.allclose(x_coords, x_coords[0]) or np.allclose(y_coords, y_coords[0]):
+                return [], [], 0, 0.0
+            if np.ptp(x_coords) < 1e-6 or np.ptp(y_coords) < 1e-6:
+                return [], [], 0, 0.0
 
-        # Check if points have sufficient spread in both dimensions
-        x_range = np.ptp(x_coords)
-        y_range = np.ptp(y_coords)
-        if x_range < 1e-6 or y_range < 1e-6:
-            return [], [], 0
+            vor = Voronoi(pts)
+            regions, vertices = _voronoi_finite_polygons_2d(vor)
 
-        vor = Voronoi(pts)
-        regions, vertices = _voronoi_finite_polygons_2d(vor)
+            cells_rot = []
+            good_cells = 0
+            good_area = 0.0
+            target_area = grid_width * grid_depth
 
-        cells_rot = []
-        good_cells = 0
-        target_area = grid_width * grid_depth
+            for region in regions:
+                if not region:
+                    continue
+                coords = vertices[region]
+                cell_rot = Polygon(coords)
 
-        for region in regions:
-            if not region:
-                continue
-            coords = vertices[region]
-            cell_rot = Polygon(coords)
-
-            if cell_rot.is_empty:
-                continue
-            if not cell_rot.is_valid:
-                cell_rot = cell_rot.buffer(0)
                 if cell_rot.is_empty:
                     continue
-
-            # Clip to rotated polygon
-            clipped = cell_rot.intersection(polygon_rot)
-            if clipped.is_empty or clipped.area <= 0:
-                continue
-
-            # Collect polygons and count 'good' cells
-            if clipped.geom_type == "Polygon":
-                area = clipped.area
-                cells_rot.append(clipped)
-                if area >= target_area and area < target_area * 1.10:
-                    good_cells += 1
-            elif clipped.geom_type == "MultiPolygon":
-                for g in clipped.geoms:
-                    if g.is_empty or g.area <= 0:
+                if not cell_rot.is_valid:
+                    cell_rot = cell_rot.buffer(0)
+                    if cell_rot.is_empty:
                         continue
-                    cells_rot.append(g)
-                    if g.area >= target_area and area < target_area * 1.10:
+
+                clipped = cell_rot.intersection(polygon_rot)
+                if clipped.is_empty or clipped.area <= 0:
+                    continue
+
+                if clipped.geom_type == "Polygon":
+                    area = clipped.area
+                    cells_rot.append(clipped)
+                    if target_area <= area < target_area * 1.10:
                         good_cells += 1
+                        good_area += area
+                elif clipped.geom_type == "MultiPolygon":
+                    for g in clipped.geoms:
+                        if g.is_empty or g.area <= 0:
+                            continue
+                        area = g.area
+                        cells_rot.append(g)
+                        if target_area <= area < target_area * 1.10:
+                            good_cells += 1
+                            good_area += area
 
-        return cells_rot, mesh_points_rot, good_cells
+            return cells_rot, mesh_points_rot, good_cells, good_area
 
-    # --- Horizontal search (along the arterial / width direction) ---
-    if arterial_line is None:
-        cells_rot, mesh_points_rot, _ = build_mesh_and_cells(minx)
-    else:
-        # Move the mesh origin left/right in the rotated frame. We only
-        # need to search within one period of the grid (grid_width), but
-        # we go from -grid_width to +grid_width to mimic "moving left" and
-        # "moving right" from the current position. Step is ~10 m, but
-        # never larger than grid_width.
-        best_cells_rot = []
-        best_mesh_points_rot = []
-        best_good_cells = -1
+        if arterial_line is None:
+            cells_rot, mesh_points_rot, best_good, best_good_area = build_mesh_and_cells(minx)
+        else:
+            best_cells_rot = []
+            best_mesh_points_rot = []
+            best_good = -1
+            best_good_area = -1.0
 
-        shift_step = min(10.0, grid_width)
-        shift = -grid_width
-        while shift <= grid_width + 1e-6:
-            start_x = minx + shift
-            cells_cand, mesh_points_cand, good_cells = build_mesh_and_cells(start_x)
+            shift_step = min(10.0, grid_width)
+            shift = -grid_width
+            while shift <= grid_width + 1e-6:
+                start_x = minx + shift
+                cells_cand, mesh_points_cand, good_cells, good_area = build_mesh_and_cells(start_x)
 
-            if good_cells > best_good_cells:
-                best_good_cells = good_cells
-                best_cells_rot = cells_cand
-                best_mesh_points_rot = mesh_points_cand
+                if good_cells > best_good or (
+                    good_cells == best_good and good_area > best_good_area
+                ):
+                    best_good = good_cells
+                    best_good_area = good_area
+                    best_cells_rot = cells_cand
+                    best_mesh_points_rot = mesh_points_cand
 
-            shift += shift_step
+                shift += shift_step
 
-        cells_rot = best_cells_rot
-        mesh_points_rot = best_mesh_points_rot
+            cells_rot = best_cells_rot
+            mesh_points_rot = best_mesh_points_rot
 
-    if not mesh_points_rot:
+        if best_good > best_overall_good or (
+            best_good == best_overall_good and best_good_area > best_overall_good_area
+        ):
+            best_overall_good = best_good
+            best_overall_good_area = best_good_area
+            best_overall_cells = cells_rot
+            best_overall_points = mesh_points_rot
+            best_angle_deg = angle_deg
+
+    if not best_overall_points:
         return [], []
 
-    # Rotate cells and mesh points back to original coordinates
-    if angle_deg != 0.0:
+    if best_angle_deg != 0.0:
         grid_cells = [
             rotate(
                 c,
-                angle_deg,
-                origin=(global_mid_point.x, global_mid_point.y),
+                best_angle_deg,
+                origin=(origin_point.x, origin_point.y),
                 use_radians=False,
             )
-            for c in cells_rot
+            for c in best_overall_cells
         ]
         mesh_points = [
             rotate(
                 p,
-                angle_deg,
-                origin=(global_mid_point.x, global_mid_point.y),
+                best_angle_deg,
+                origin=(origin_point.x, origin_point.y),
                 use_radians=False,
             )
-            for p in mesh_points_rot
+            for p in best_overall_points
         ]
     else:
-        grid_cells = cells_rot
-        mesh_points = mesh_points_rot
+        grid_cells = best_overall_cells
+        mesh_points = best_overall_points
 
     final_cells = []
     for c in grid_cells:
