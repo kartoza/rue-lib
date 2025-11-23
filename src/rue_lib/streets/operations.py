@@ -632,6 +632,241 @@ def create_local_streets_zone(
     return (outer_layer_name, inner_layer_name)
 
 
+def extract_site_boundary_lines(
+    input_path,
+    site_layer_name,
+    arterial_setback_layer_name,
+    secondary_setback_layer_name,
+    output_path,
+    output_layer_name,
+):
+    """Extract and merge boundary lines from site that touch arterial or secondary setbacks.
+
+    This function extracts the exterior boundary lines of the site polygons,
+    identifies which lines touch arterial or secondary setbacks, and merges
+    connected edges of the same setback type into continuous linestrings.
+
+    Args:
+        input_path (str): Path to the input dataset.
+        site_layer_name (str): Name of the site layer (e.g., "arterial_setback_final").
+        arterial_setback_layer_name (str): Name of arterial setback layer.
+        secondary_setback_layer_name (str): Name of secondary setback layer.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer for merged boundary lines.
+
+    Returns:
+        str: Name of the created output layer.
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors.
+
+    Output Attributes:
+        - id: Feature ID
+        - length_m: Length of the merged line in meters
+        - setback_type: Type of setback ('arterial' or 'secondary')
+    """
+    from shapely import geometry as shapely_geom
+    from shapely import wkb as shapely_wkb
+    from shapely.ops import unary_union
+
+    # Open input dataset
+    input_ds = ogr.Open(input_path)
+    if input_ds is None:
+        raise RuntimeError(f"Could not open input dataset: {input_path}")
+
+    site_layer = input_ds.GetLayerByName(site_layer_name)
+    if site_layer is None:
+        raise RuntimeError(f"Could not find site layer: {site_layer_name}")
+
+    arterial_layer = input_ds.GetLayerByName(arterial_setback_layer_name)
+    secondary_layer = input_ds.GetLayerByName(secondary_setback_layer_name)
+
+    srs = site_layer.GetSpatialRef()
+
+    # Load setback geometries as Shapely objects
+    arterial_shapely = []
+    if arterial_layer is not None:
+        for feature in arterial_layer:
+            geom = feature.GetGeometryRef()
+            if geom is not None:
+                wkb_data = geom.ExportToWkb()
+                if isinstance(wkb_data, bytearray):
+                    wkb_data = bytes(wkb_data)
+                arterial_shapely.append(shapely_wkb.loads(wkb_data))
+
+    secondary_shapely = []
+    if secondary_layer is not None:
+        for feature in secondary_layer:
+            geom = feature.GetGeometryRef()
+            if geom is not None:
+                wkb_data = geom.ExportToWkb()
+                if isinstance(wkb_data, bytearray):
+                    wkb_data = bytes(wkb_data)
+                secondary_shapely.append(shapely_wkb.loads(wkb_data))
+
+    # Dissolve setback geometries for faster distance calculations
+    arterial_union = unary_union(arterial_shapely) if arterial_shapely else None
+    secondary_union = unary_union(secondary_shapely) if secondary_shapely else None
+
+    # Extract boundary lines from site polygons
+    boundary_lines = []
+    tolerance = 0.1  # Buffer tolerance in meters
+
+    for site_feature in site_layer:
+        site_geom = site_feature.GetGeometryRef()
+        if site_geom is None:
+            continue
+
+        site_id = site_feature.GetFID()
+
+        # Convert to Shapely
+        wkb_data = site_geom.ExportToWkb()
+        if isinstance(wkb_data, bytearray):
+            wkb_data = bytes(wkb_data)
+        site_shapely = shapely_wkb.loads(wkb_data)
+
+        # Get exterior boundary
+        if isinstance(site_shapely, shapely_geom.Polygon):
+            boundaries = [site_shapely.exterior]
+        elif isinstance(site_shapely, shapely_geom.MultiPolygon):
+            boundaries = [poly.exterior for poly in site_shapely.geoms]
+        else:
+            continue
+
+        for ring_idx, boundary in enumerate(boundaries):
+            # Split boundary into segments
+            coords = list(boundary.coords)
+            for seg_idx in range(len(coords) - 1):
+                # Create segment as Shapely LineString
+                segment = shapely_geom.LineString([coords[seg_idx], coords[seg_idx + 1]])
+
+                # Get the center point of the segment
+                center_point = segment.centroid
+
+                # Calculate distances to setbacks using the center point
+                min_arterial_dist = (
+                    center_point.distance(arterial_union)
+                    if arterial_union is not None
+                    else float("inf")
+                )
+                min_secondary_dist = (
+                    center_point.distance(secondary_union)
+                    if secondary_union is not None
+                    else float("inf")
+                )
+
+                # Determine if segment is within tolerance of setbacks
+                touches_arterial = min_arterial_dist <= tolerance
+                touches_secondary = min_secondary_dist <= tolerance
+
+                # Only include segments that touch at least one setback
+                if touches_arterial or touches_secondary:
+                    # Determine setback type - prioritize by distance
+                    if touches_arterial and not touches_secondary:
+                        setback_type = "arterial"
+                    elif touches_secondary and not touches_arterial:
+                        setback_type = "secondary"
+                    elif touches_arterial and touches_secondary:
+                        # Both within tolerance - check which is closer
+                        if min_arterial_dist < min_secondary_dist:
+                            setback_type = "arterial"
+                        else:
+                            setback_type = "secondary"
+                    else:
+                        # Fallback (shouldn't reach here)
+                        setback_type = "arterial" if touches_arterial else "secondary"
+
+                    boundary_lines.append(
+                        {
+                            "segment": segment,
+                            "site_id": site_id,
+                            "ring_idx": ring_idx,
+                            "segment_idx": seg_idx,
+                            "length": segment.length,
+                            "setback_type": setback_type,
+                            "touches_arterial": touches_arterial,
+                            "touches_secondary": touches_secondary,
+                            "dist_arterial": min_arterial_dist,
+                            "dist_secondary": min_secondary_dist,
+                        }
+                    )
+
+    input_ds = None
+
+    # Merge connected edges by setback_type
+    from shapely.ops import linemerge
+
+    # Group segments by setback_type
+    segments_by_type = {"arterial": [], "secondary": []}
+
+    for line_data in boundary_lines:
+        setback_type = line_data["setback_type"]
+        segment = line_data["segment"]
+        segments_by_type[setback_type].append(segment)
+
+    # Merge connected segments for each type
+    merged_lines = []
+    for setback_type, segments in segments_by_type.items():
+        if segments:
+            # Use linemerge to connect adjacent segments
+            merged = linemerge(segments)
+
+            # Handle both LineString and MultiLineString results
+            if merged.geom_type == "LineString":
+                merged_lines.append({"geometry": merged, "setback_type": setback_type})
+            elif merged.geom_type == "MultiLineString":
+                for line in merged.geoms:
+                    merged_lines.append({"geometry": line, "setback_type": setback_type})
+            else:
+                # If merge didn't work, keep original segments
+                for seg in segments:
+                    merged_lines.append({"geometry": seg, "setback_type": setback_type})
+
+    # Write to output
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    # Remove existing layer if present
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    # Create output layer
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
+
+    # Create fields for merged lines
+    output_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+    output_layer.CreateField(ogr.FieldDefn("length_m", ogr.OFTReal))
+    output_layer.CreateField(ogr.FieldDefn("setback_type", ogr.OFTString))
+
+    # Write merged features
+    feature_id = 1
+    for line_data in merged_lines:
+        geometry = line_data["geometry"]
+        setback_type = line_data["setback_type"]
+
+        # Convert Shapely geometry to OGR
+        line_ogr = ogr.CreateGeometryFromWkb(geometry.wkb)
+
+        feature = ogr.Feature(output_layer.GetLayerDefn())
+        feature.SetGeometry(line_ogr)
+        feature.SetField("id", feature_id)
+        feature.SetField("length_m", geometry.length)
+        feature.SetField("setback_type", setback_type)
+
+        output_layer.CreateFeature(feature)
+        feature = None
+        feature_id += 1
+
+    output_ds = None
+
+    return output_layer_name
+
+
 def break_multipart_features(input_path, input_layer_name, output_path, output_layer_name):
     """Break multipart geometries into single-part features.
 

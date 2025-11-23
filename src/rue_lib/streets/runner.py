@@ -4,10 +4,10 @@ from pathlib import Path
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
+from rue_lib.streets.grids import grids_from_site
 
 from .blocks_orthogonal import (
     clip_site_by_roads,
-    create_grid_for_polygons,
 )
 from .config import StreetConfig
 from .operations import (
@@ -18,6 +18,7 @@ from .operations import (
     create_local_streets_zone,
     erase_layer,
     extract_by_expression,
+    extract_site_boundary_lines,
 )
 
 gdal.UseExceptions()
@@ -256,71 +257,71 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "site_minus_all_setbacks",
     )
 
-    print("Step 10: Creating grid for each site polygon...")
-    if cfg.optimize_grid_rotation:
-        search_method = (
-            "ternary search"
-            if cfg.use_ternary_search
-            else f"linear search ({cfg.grid_rotation_angle_step}° step)"
-        )
-        print(f"  Optimizing grid rotation using {search_method}...")
-    grid_layer = create_grid_for_polygons(
-        output_path,
-        "site_minus_all_setbacks",
-        "site_grid",
-        cfg.off_grid_partitions_preferred_width,
-        cfg.off_grid_partitions_preferred_depth,
-        optimize_rotation=cfg.optimize_grid_rotation,
-        rotation_angle_step=cfg.grid_rotation_angle_step,
-        use_ternary_search=cfg.use_ternary_search,
-        clip_to_boundary=cfg.clip_to_boundary,
-    )
+    # print("Step 10: Creating grid for each site polygon...")
+    # if cfg.optimize_grid_rotation:
+    #     search_method = (
+    #         "ternary search"
+    #         if cfg.use_ternary_search
+    #         else f"linear search ({cfg.grid_rotation_angle_step}° step)"
+    #     )
+    #     print(f"  Optimizing grid rotation using {search_method}...")
+    # grid_layer = create_grid_for_polygons(
+    #     output_path,
+    #     "site_minus_all_setbacks",
+    #     "site_grid",
+    #     cfg.off_grid_partitions_preferred_width,
+    #     cfg.off_grid_partitions_preferred_depth,
+    #     optimize_rotation=cfg.optimize_grid_rotation,
+    #     rotation_angle_step=cfg.grid_rotation_angle_step,
+    #     use_ternary_search=cfg.use_ternary_search,
+    #     clip_to_boundary=cfg.clip_to_boundary,
+    # )
 
-    print("Step 11: Filter grid for each site polygon...")
-    if cfg.optimize_grid_rotation:
-        search_method = (
-            "ternary search"
-            if cfg.use_ternary_search
-            else f"linear search ({cfg.grid_rotation_angle_step}° step)"
-        )
-        print(f"  Optimizing grid rotation using {search_method}...")
-    grid_layer_filtered = create_grid_for_polygons(
-        output_path,
-        "site_minus_all_setbacks",
-        "site_grid_filtered",
-        cfg.off_grid_partitions_preferred_width,
-        cfg.off_grid_partitions_preferred_depth,
-        optimize_rotation=cfg.optimize_grid_rotation,
-        rotation_angle_step=cfg.grid_rotation_angle_step,
-        use_ternary_search=cfg.use_ternary_search,
-        clip_to_boundary=False,
-        tolerance_area_ratio=cfg.tolerance_area_ratio,
-        tolerance_boundary_distance=cfg.tolerance_boundary_distance,
-    )
+    # print("Step 11: Filter grid for each site polygon...")
+    # if cfg.optimize_grid_rotation:
+    #     search_method = (
+    #         "ternary search"
+    #         if cfg.use_ternary_search
+    #         else f"linear search ({cfg.grid_rotation_angle_step}° step)"
+    #     )
+    #     print(f"  Optimizing grid rotation using {search_method}...")
+    # grid_layer_filtered = create_grid_for_polygons(
+    #     output_path,
+    #     "site_minus_all_setbacks",
+    #     "site_grid_filtered",
+    #     cfg.off_grid_partitions_preferred_width,
+    #     cfg.off_grid_partitions_preferred_depth,
+    #     optimize_rotation=cfg.optimize_grid_rotation,
+    #     rotation_angle_step=cfg.grid_rotation_angle_step,
+    #     use_ternary_search=cfg.use_ternary_search,
+    #     clip_to_boundary=False,
+    #     tolerance_area_ratio=cfg.tolerance_area_ratio,
+    #     tolerance_boundary_distance=cfg.tolerance_boundary_distance,
+    # )
 
-    print("Step 12: Creating residual polygons (site minus grid)...")
-    erase_layer(
-        output_path,
-        "site_minus_all_setbacks",
-        output_path,
-        grid_layer_filtered,
-        output_path,
-        "site_residual",
-    )
+    # print("Step 12: Creating residual polygons (site minus grid)...")
+    # erase_layer(
+    #     output_path,
+    #     "site_minus_all_setbacks",
+    #     output_path,
+    #     grid_layer_filtered,
+    #     output_path,
+    #     "site_residual",
+    # )
 
-    print("Step 13: Finding additional grid cells in residual areas...")
-    print("  Searching for optimal rotations in leftover spaces...")
-    create_grid_for_polygons(
-        output_path,
-        "site_residual",
-        "site_residual_grid",
-        cfg.off_grid_partitions_preferred_width,
-        cfg.off_grid_partitions_preferred_depth,
-        optimize_rotation=True,  # Always optimize for residual areas
-        rotation_angle_step=cfg.grid_rotation_angle_step,
-        use_ternary_search=cfg.use_ternary_search,
-        clip_to_boundary=False,  # Only perfect interior cells for residual
-    )
+    # print("Step 13: Finding additional grid cells in residual areas...")
+    # print("  Searching for optimal rotations in leftover spaces...")
+    # create_grid_for_polygons(
+    #     output_path,
+    #     "site_residual",
+    #     "site_residual_grid",
+    #     cfg.off_grid_partitions_preferred_width,
+    #     cfg.off_grid_partitions_preferred_depth,
+    #     optimize_rotation=True,  # Always optimize for residual areas
+    #     rotation_angle_step=cfg.grid_rotation_angle_step,
+    #     use_ternary_search=cfg.use_ternary_search,
+    #     clip_to_boundary=False,  # Only perfect interior cells for residual
+    # )
 
     generate_on_grid_blocks(output_gpkg, cfg)
 
@@ -336,12 +337,25 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "secondary_setback_grid_cleaned",
     )
 
+    extract_site_boundary_lines(
+        output_gpkg,
+        "site_minus_all_setbacks",
+        "arterial_setback_final",
+        "secondary_setback_final",
+        output_gpkg,
+        "site_boundary_lines",
+    )
+
+    grids_from_site(
+        output_gpkg,
+        "site_minus_all_setbacks",
+        "site_boundary_lines",
+        cfg.off_grid_partitions_preferred_width,
+        cfg.off_grid_partitions_preferred_depth,
+    )
+
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {clipped_site_layer}: Site polygon with roads subtracted")
-    print(
-        f"  - {grid_layer}: Grid cells ({cfg.off_grid_partitions_preferred_width}m x "
-        f"{cfg.off_grid_partitions_preferred_depth}m)"
-    )
 
     return output_gpkg
