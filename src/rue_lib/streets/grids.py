@@ -563,7 +563,6 @@ def grids_from_site(
             feat.SetField("grid_id", grid_id)
             feat.SetField("area", cell.area)
 
-            # Add quality information from dictionary
             quality_info = cell_quality[i]
             feat.SetField("is_good", 1 if quality_info["is_good"] else 0)
             feat.SetField("quality", quality_info["reason"])
