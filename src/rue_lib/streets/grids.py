@@ -99,8 +99,19 @@ def is_good_cell(poly: Polygon, target_area) -> dict:
 
 
 def _voronoi_finite_polygons_2d(vor, radius=None):
-    """
-    Reconstruct infinite Voronoi regions in a 2D diagram to finite regions.
+    """Reconstruct infinite Voronoi regions in a 2D diagram to finite regions.
+
+    Args:
+        vor: Voronoi diagram from scipy.spatial.Voronoi
+        radius: Optional radius for bounding infinite regions. If None, computed
+            from point cloud extent.
+
+    Returns:
+        tuple: (regions, vertices) where regions is list of vertex indices per region
+            and vertices is array of vertex coordinates.
+
+    Raises:
+        ValueError: If input is not 2D.
     """
     if vor.points.shape[1] != 2:
         raise ValueError("Requires 2D input")
@@ -154,35 +165,141 @@ def _voronoi_finite_polygons_2d(vor, radius=None):
     return new_regions, np.asarray(new_vertices)
 
 
+def _build_mesh_and_cells(
+    start_x: float,
+    start_y: float,
+    maxx: float,
+    maxy: float,
+    grid_width: float,
+    grid_depth: float,
+    prepared_poly,
+    polygon_rot: Polygon,
+):
+    """Build mesh points and Voronoi cells within a rotated polygon.
+
+    Args:
+        start_x: Starting x coordinate for mesh generation.
+        start_y: Starting y coordinate for mesh generation.
+        maxx: Maximum x bound of rotated polygon.
+        maxy: Maximum y bound of rotated polygon.
+        grid_width: Width of each grid cell.
+        grid_depth: Depth of each grid cell.
+        prepared_poly: Prepared geometry for efficient spatial queries.
+        polygon_rot: Rotated polygon for clipping cells.
+
+    Returns:
+        tuple: (cells_rot, quality_rot, mesh_points_rot, good_cells, good_area)
+            - cells_rot: List of clipped Voronoi polygons
+            - quality_rot: List of quality dictionaries for each cell
+            - mesh_points_rot: List of mesh points used to generate Voronoi
+            - good_cells: Count of cells meeting quality criteria
+            - good_area: Total area of good cells
+    """
+    mesh_points_rot = []
+
+    y = start_y
+    while y <= maxy + grid_depth:
+        x = start_x
+        while x <= maxx + grid_width:
+            p = Point(x, y)
+            if prepared_poly.contains(p):
+                mesh_points_rot.append(p)
+            x += grid_width
+        y += grid_depth
+
+    if len(mesh_points_rot) < 4:
+        return [], [], [], 0, 0.0
+
+    pts = np.array([[p.x, p.y] for p in mesh_points_rot])
+
+    x_coords = pts[:, 0]
+    y_coords = pts[:, 1]
+    if np.allclose(x_coords, x_coords[0]) or np.allclose(y_coords, y_coords[0]):
+        return [], [], [], 0, 0.0
+    if np.ptp(x_coords) < 1e-6 or np.ptp(y_coords) < 1e-6:
+        return [], [], [], 0, 0.0
+
+    vor = Voronoi(pts)
+    regions, vertices = _voronoi_finite_polygons_2d(vor)
+
+    cells_rot = []
+    quality_rot = []
+    good_cells = 0
+    good_area = 0.0
+    target_area = grid_width * grid_depth
+
+    for region in regions:
+        if not region:
+            continue
+        coords = vertices[region]
+        cell_rot = Polygon(coords)
+
+        if cell_rot.is_empty:
+            continue
+        if not cell_rot.is_valid:
+            cell_rot = cell_rot.buffer(0)
+            if cell_rot.is_empty:
+                continue
+
+        clipped = cell_rot.intersection(polygon_rot)
+        if clipped.is_empty or clipped.area <= 0:
+            continue
+
+        if clipped.geom_type == "Polygon":
+            cells_rot.append(clipped)
+            quality_info = is_good_cell(clipped, target_area)
+            quality_rot.append(quality_info)
+            if quality_info["is_good"]:
+                good_cells += 1
+                good_area += clipped.area
+        elif clipped.geom_type == "MultiPolygon":
+            for g in clipped.geoms:
+                if g.is_empty or g.area <= 0:
+                    continue
+                cells_rot.append(g)
+                quality_info = is_good_cell(g, target_area)
+                quality_rot.append(quality_info)
+                if quality_info["is_good"]:
+                    good_cells += 1
+                    good_area += g.area
+
+    return cells_rot, quality_rot, mesh_points_rot, good_cells, good_area
+
+
 def grids_from_polygon(
     polygon,
     arterial_line,
     grid_width: float = 100.0,
     grid_depth: float = 100.0,
 ):
-    """Create a mesh-based grid (Voronoi cells from equidistant mesh points)
-    aligned to the arterial line and clipped to ``polygon``.
+    """Create a mesh-based grid (Voronoi cells from equidistant mesh points).
+
+    The grid is aligned to the arterial line and clipped to the polygon boundary.
 
     Algorithm:
-    - If an arterial line exists, sample local tangent angles along the line
-      from start to end and use them as candidate rotations.
-    - For each candidate angle:
-        * Rotate polygon around a fixed origin (midpoint of arterial).
-        * Align rows so the arterial sits roughly halfway between rows.
-        * Search horizontally (left/right) for the best grid shift.
-        * Count "good" cells with area in [width*depth, 1.10 * width*depth).
-          Also accumulate the total area of those good cells.
-    - Choose the angle+shift combination with:
-        1. the most good cells;
-        2. if tied, the largest total good-cell area
-           (equivalent to highest good-area / polygon-area ratio).
+        1. If an arterial line exists, sample local tangent angles along the line
+           from start to end and use them as candidate rotations.
+        2. For each candidate angle:
+            - Rotate polygon around a fixed origin (midpoint of arterial).
+            - Align rows so the arterial sits roughly halfway between rows.
+            - Search horizontally (left/right) for the best grid shift.
+            - Count "good" cells with area in [95%, 105%] of target area.
+            - Accumulate the total area of those good cells.
+        3. Choose the angle+shift combination with:
+            - The most good cells
+            - If tied, the largest total good-cell area
 
-    Returns
-    -------
-    (grid_cells, mesh_points, cell_quality)
-        grid_cells: list[Polygon] in original coordinates
-        mesh_points: list[Point] in original coordinates
-        cell_quality: list[dict] quality info dictionaries for each cell
+    Args:
+        polygon: Input polygon geometry (OGR or Shapely).
+        arterial_line: Arterial line geometry for alignment (OGR or Shapely), or None.
+        grid_width: Width of each grid cell in coordinate units. Default 100.0.
+        grid_depth: Depth of each grid cell in coordinate units. Default 100.0.
+
+    Returns:
+        tuple: (grid_cells, mesh_points, cell_quality)
+            - grid_cells: List of Polygon objects in original coordinates
+            - mesh_points: List of Point objects in original coordinates
+            - cell_quality: List of quality dictionaries for each cell
     """
     polygon_shply = feature_geom_to_shapely(polygon)
 
@@ -245,88 +362,18 @@ def grids_from_polygon(
         else:
             start_y = miny
 
-        def build_mesh_and_cells(
-            start_x: float,
-            *,
-            start_y=start_y,
-            maxx=maxx,
-            maxy=maxy,
-            prepared_poly=prepared_poly,
-            polygon_rot=polygon_rot,
-        ):
-            mesh_points_rot = []
-
-            y = start_y
-            while y <= maxy + grid_depth:
-                x = start_x
-                while x <= maxx + grid_width:
-                    p = Point(x, y)
-                    if prepared_poly.contains(p):
-                        mesh_points_rot.append(p)
-                    x += grid_width
-                y += grid_depth
-
-            if len(mesh_points_rot) < 4:
-                return [], [], [], 0, 0.0
-
-            pts = np.array([[p.x, p.y] for p in mesh_points_rot])
-
-            x_coords = pts[:, 0]
-            y_coords = pts[:, 1]
-            if np.allclose(x_coords, x_coords[0]) or np.allclose(y_coords, y_coords[0]):
-                return [], [], [], 0, 0.0
-            if np.ptp(x_coords) < 1e-6 or np.ptp(y_coords) < 1e-6:
-                return [], [], [], 0, 0.0
-
-            vor = Voronoi(pts)
-            regions, vertices = _voronoi_finite_polygons_2d(vor)
-
-            cells_rot = []
-            quality_rot = []
-            good_cells = 0
-            good_area = 0.0
-            target_area = grid_width * grid_depth
-
-            for region in regions:
-                if not region:
-                    continue
-                coords = vertices[region]
-                cell_rot = Polygon(coords)
-
-                if cell_rot.is_empty:
-                    continue
-                if not cell_rot.is_valid:
-                    cell_rot = cell_rot.buffer(0)
-                    if cell_rot.is_empty:
-                        continue
-
-                clipped = cell_rot.intersection(polygon_rot)
-                if clipped.is_empty or clipped.area <= 0:
-                    continue
-
-                if clipped.geom_type == "Polygon":
-                    cells_rot.append(clipped)
-                    quality_info = is_good_cell(clipped, target_area)
-                    quality_rot.append(quality_info)
-                    if quality_info["is_good"]:
-                        good_cells += 1
-                        good_area += clipped.area
-                elif clipped.geom_type == "MultiPolygon":
-                    for g in clipped.geoms:
-                        if g.is_empty or g.area <= 0:
-                            continue
-                        cells_rot.append(g)
-                        quality_info = is_good_cell(g, target_area)
-                        quality_rot.append(quality_info)
-                        if quality_info["is_good"]:
-                            good_cells += 1
-                            good_area += g.area
-
-            return cells_rot, quality_rot, mesh_points_rot, good_cells, good_area
-
         if arterial_line is None:
             cells_rot, quality_rot, mesh_points_rot, best_good, best_good_area = (
-                build_mesh_and_cells(minx)
+                _build_mesh_and_cells(
+                    minx,
+                    start_y,
+                    maxx,
+                    maxy,
+                    grid_width,
+                    grid_depth,
+                    prepared_poly,
+                    polygon_rot,
+                )
             )
         else:
             best_cells_rot = []
@@ -340,7 +387,16 @@ def grids_from_polygon(
             while shift <= grid_width + 1e-6:
                 start_x = minx + shift
                 cells_cand, quality_cand, mesh_points_cand, good_cells, good_area = (
-                    build_mesh_and_cells(start_x)
+                    _build_mesh_and_cells(
+                        start_x,
+                        start_y,
+                        maxx,
+                        maxy,
+                        grid_width,
+                        grid_depth,
+                        prepared_poly,
+                        polygon_rot,
+                    )
                 )
 
                 if good_cells > best_good or (
@@ -422,10 +478,26 @@ def grids_from_site(
     grid_layer_name: str | None = None,
     point_layer_name: str | None = None,
 ):
-    """
-    For each polygon in `site_name`, find its arterial boundary line,
-    generate mesh-based grid, and save both grid cells and mesh points
-    into layers in the same GeoPackage (`output_path`).
+    """Generate mesh-based grids for site polygons and save to GeoPackage.
+
+    For each polygon in the site layer, finds its arterial boundary line,
+    generates a mesh-based Voronoi grid, and saves both grid cells and
+    mesh points into separate layers in the GeoPackage.
+
+    Args:
+        output_path: Path to the GeoPackage file.
+        site_name: Name of the layer containing site polygons.
+        site_boundary_line_name: Name of the layer containing boundary lines.
+        grid_width: Width of each grid cell in coordinate units. Default 100.0.
+        grid_depth: Depth of each grid cell in coordinate units. Default 100.0.
+        grid_layer_name: Optional name for the output grid cells layer.
+            If None, defaults to "{site_name}_grid_cells".
+        point_layer_name: Optional name for the output mesh points layer.
+            If None, defaults to "{site_name}_grid_points".
+
+    Raises:
+        RuntimeError: If the GeoPackage cannot be opened or required layers
+            are not found.
     """
     ds = ogr.Open(str(output_path), 1)
     if ds is None:
