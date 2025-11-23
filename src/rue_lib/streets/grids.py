@@ -10,6 +10,94 @@ from shapely.prepared import prep
 from rue_lib.core.helpers import feature_geom_to_shapely
 
 
+def is_good_cell(poly: Polygon, target_area) -> dict:
+    """
+    Check if a polygon is a "good cell" and return detailed quality information.
+
+    Always checks all properties regardless of failures to provide complete information.
+
+    Returns
+    -------
+    dict
+        Dictionary with keys:
+        - is_good (bool): True if cell meets all criteria
+        - reason (str): Primary reason if not good, otherwise "good"
+        - right_angles (int): Count of orthogonal corners (0-4)
+        - num_vertices (int): Number of vertices
+        - area_ratio (float): Actual area / target area
+    """
+    result = {
+        "is_good": True,
+        "reason": "good",
+        "right_angles": 0,
+        "num_vertices": 0,
+        "area_ratio": 0.0,
+    }
+
+    if poly.geom_type != "Polygon":
+        result["is_good"] = False
+        result["reason"] = "not_polygon"
+        return result
+
+    area = poly.area
+    result["area_ratio"] = area / target_area if target_area > 0 else 0.0
+
+    max_area = target_area * 1.10
+    min_area = target_area * 0.95
+
+    if not (min_area <= area < max_area):
+        result["is_good"] = False
+        if area < min_area:
+            result["reason"] = "area_too_small"
+        else:
+            result["reason"] = "area_too_large"
+
+    coords = list(poly.exterior.coords)[:-1]
+    result["num_vertices"] = len(coords)
+
+    if len(coords) != 4:
+        result["is_good"] = False
+        if result["reason"] == "good":
+            result["reason"] = f"not_quadrilateral_{len(coords)}_vertices"
+        if len(coords) < 3:
+            return result
+
+    orthogonal_corners = 0
+    has_degenerate_edge = False
+
+    for i in range(len(coords)):
+        x0, y0, z0 = coords[i - 1]
+        x1, y1, z1 = coords[i]
+        x2, y2, z2 = coords[(i + 1) % len(coords)]
+        v1 = (x1 - x0, y1 - y0)
+        v2 = (x2 - x1, y2 - y1)
+        len1 = (v1[0] ** 2 + v1[1] ** 2) ** 0.5
+        len2 = (v2[0] ** 2 + v2[1] ** 2) ** 0.5
+
+        if len1 < 1e-6 or len2 < 1e-6:
+            has_degenerate_edge = True
+            continue
+
+        dot = v1[0] * v2[0] + v1[1] * v2[1]
+        cos_angle = dot / (len1 * len2)
+        if abs(cos_angle) <= 0.1:
+            orthogonal_corners += 1
+
+    result["right_angles"] = orthogonal_corners
+
+    if has_degenerate_edge:
+        result["is_good"] = False
+        if result["reason"] == "good":
+            result["reason"] = "degenerate_edge"
+
+    if len(coords) == 4 and orthogonal_corners < 4:
+        result["is_good"] = False
+        if result["reason"] == "good":
+            result["reason"] = f"insufficient_right_angles_{orthogonal_corners}"
+
+    return result
+
+
 def _voronoi_finite_polygons_2d(vor, radius=None):
     """
     Reconstruct infinite Voronoi regions in a 2D diagram to finite regions.
@@ -91,9 +179,10 @@ def grids_from_polygon(
 
     Returns
     -------
-    (grid_cells, mesh_points)
+    (grid_cells, mesh_points, cell_quality)
         grid_cells: list[Polygon] in original coordinates
         mesh_points: list[Point] in original coordinates
+        cell_quality: list[dict] quality info dictionaries for each cell
     """
     polygon_shply = feature_geom_to_shapely(polygon)
 
@@ -131,6 +220,7 @@ def grids_from_polygon(
         candidate_angles_deg = {0.0}
 
     best_overall_cells = []
+    best_overall_quality = []
     best_overall_points = []
     best_overall_good = -1
     best_overall_good_area = -1.0
@@ -177,21 +267,22 @@ def grids_from_polygon(
                 y += grid_depth
 
             if len(mesh_points_rot) < 4:
-                return [], [], 0, 0.0
+                return [], [], [], 0, 0.0
 
             pts = np.array([[p.x, p.y] for p in mesh_points_rot])
 
             x_coords = pts[:, 0]
             y_coords = pts[:, 1]
             if np.allclose(x_coords, x_coords[0]) or np.allclose(y_coords, y_coords[0]):
-                return [], [], 0, 0.0
+                return [], [], [], 0, 0.0
             if np.ptp(x_coords) < 1e-6 or np.ptp(y_coords) < 1e-6:
-                return [], [], 0, 0.0
+                return [], [], [], 0, 0.0
 
             vor = Voronoi(pts)
             regions, vertices = _voronoi_finite_polygons_2d(vor)
 
             cells_rot = []
+            quality_rot = []
             good_cells = 0
             good_area = 0.0
             target_area = grid_width * grid_depth
@@ -214,27 +305,32 @@ def grids_from_polygon(
                     continue
 
                 if clipped.geom_type == "Polygon":
-                    area = clipped.area
                     cells_rot.append(clipped)
-                    if target_area <= area < target_area * 1.10:
+                    quality_info = is_good_cell(clipped, target_area)
+                    quality_rot.append(quality_info)
+                    if quality_info["is_good"]:
                         good_cells += 1
-                        good_area += area
+                        good_area += clipped.area
                 elif clipped.geom_type == "MultiPolygon":
                     for g in clipped.geoms:
                         if g.is_empty or g.area <= 0:
                             continue
-                        area = g.area
                         cells_rot.append(g)
-                        if target_area <= area < target_area * 1.10:
+                        quality_info = is_good_cell(g, target_area)
+                        quality_rot.append(quality_info)
+                        if quality_info["is_good"]:
                             good_cells += 1
-                            good_area += area
+                            good_area += g.area
 
-            return cells_rot, mesh_points_rot, good_cells, good_area
+            return cells_rot, quality_rot, mesh_points_rot, good_cells, good_area
 
         if arterial_line is None:
-            cells_rot, mesh_points_rot, best_good, best_good_area = build_mesh_and_cells(minx)
+            cells_rot, quality_rot, mesh_points_rot, best_good, best_good_area = (
+                build_mesh_and_cells(minx)
+            )
         else:
             best_cells_rot = []
+            best_quality_rot = []
             best_mesh_points_rot = []
             best_good = -1
             best_good_area = -1.0
@@ -243,7 +339,9 @@ def grids_from_polygon(
             shift = -grid_width
             while shift <= grid_width + 1e-6:
                 start_x = minx + shift
-                cells_cand, mesh_points_cand, good_cells, good_area = build_mesh_and_cells(start_x)
+                cells_cand, quality_cand, mesh_points_cand, good_cells, good_area = (
+                    build_mesh_and_cells(start_x)
+                )
 
                 if good_cells > best_good or (
                     good_cells == best_good and good_area > best_good_area
@@ -251,11 +349,13 @@ def grids_from_polygon(
                     best_good = good_cells
                     best_good_area = good_area
                     best_cells_rot = cells_cand
+                    best_quality_rot = quality_cand
                     best_mesh_points_rot = mesh_points_cand
 
                 shift += shift_step
 
             cells_rot = best_cells_rot
+            quality_rot = best_quality_rot
             mesh_points_rot = best_mesh_points_rot
 
         if best_good > best_overall_good or (
@@ -264,11 +364,12 @@ def grids_from_polygon(
             best_overall_good = best_good
             best_overall_good_area = best_good_area
             best_overall_cells = cells_rot
+            best_overall_quality = quality_rot
             best_overall_points = mesh_points_rot
             best_angle_deg = angle_deg
 
     if not best_overall_points:
-        return [], []
+        return [], [], []
 
     if best_angle_deg != 0.0:
         grid_cells = [
@@ -293,18 +394,23 @@ def grids_from_polygon(
         grid_cells = best_overall_cells
         mesh_points = best_overall_points
 
+    cell_quality = best_overall_quality
+
     final_cells = []
-    for c in grid_cells:
+    final_quality = []
+    for i, c in enumerate(grid_cells):
         clipped = c.intersection(polygon_shply)
         if not clipped.is_empty and clipped.area > 0:
             if clipped.geom_type == "Polygon":
                 final_cells.append(clipped)
+                final_quality.append(cell_quality[i])
             elif clipped.geom_type == "MultiPolygon":
                 for g in clipped.geoms:
                     if not g.is_empty and g.area > 0:
                         final_cells.append(g)
+                        final_quality.append(cell_quality[i])
 
-    return final_cells, mesh_points
+    return final_cells, mesh_points, final_quality
 
 
 def grids_from_site(
@@ -346,6 +452,19 @@ def grids_from_site(
     grid_layer = ds.CreateLayer(grid_layer_name, srs, geom_type=ogr.wkbPolygon)
     grid_layer.CreateField(ogr.FieldDefn("grid_id", ogr.OFTInteger))
 
+    area_field = ogr.FieldDefn("area", ogr.OFTReal)
+    area_field.SetPrecision(2)
+    grid_layer.CreateField(area_field)
+
+    grid_layer.CreateField(ogr.FieldDefn("is_good", ogr.OFTInteger))
+    grid_layer.CreateField(ogr.FieldDefn("quality", ogr.OFTString))
+    grid_layer.CreateField(ogr.FieldDefn("right_angles", ogr.OFTInteger))
+    grid_layer.CreateField(ogr.FieldDefn("num_vertices", ogr.OFTInteger))
+
+    area_ratio_field = ogr.FieldDefn("area_ratio", ogr.OFTReal)
+    area_ratio_field.SetPrecision(4)
+    grid_layer.CreateField(area_ratio_field)
+
     point_layer = ds.CreateLayer(point_layer_name, srs, geom_type=ogr.wkbPoint)
     point_layer.CreateField(ogr.FieldDefn("pt_id", ogr.OFTInteger))
 
@@ -363,11 +482,23 @@ def grids_from_site(
                     arterial_line = site_boundary_line
                     break
 
-        grid_cells, mesh_points = grids_from_polygon(polygon, arterial_line, grid_width, grid_depth)
+        grid_cells, mesh_points, cell_quality = grids_from_polygon(
+            polygon, arterial_line, grid_width, grid_depth
+        )
 
-        for cell in grid_cells:
+        for i, cell in enumerate(grid_cells):
             feat = ogr.Feature(grid_layer.GetLayerDefn())
             feat.SetField("grid_id", grid_id)
+            feat.SetField("area", cell.area)
+
+            # Add quality information from dictionary
+            quality_info = cell_quality[i]
+            feat.SetField("is_good", 1 if quality_info["is_good"] else 0)
+            feat.SetField("quality", quality_info["reason"])
+            feat.SetField("right_angles", quality_info["right_angles"])
+            feat.SetField("num_vertices", quality_info["num_vertices"])
+            feat.SetField("area_ratio", quality_info["area_ratio"])
+
             grid_id += 1
 
             geom = ogr.CreateGeometryFromWkt(cell.wkt)
