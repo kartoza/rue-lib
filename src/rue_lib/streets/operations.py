@@ -2142,3 +2142,233 @@ def cleanup_intermediate_layers(gpkg_path, layers_to_keep):
                     break
 
     ds = None
+
+
+def merge_grid_layers_with_type(
+    input_path,
+    output_path,
+    output_layer_name,
+    layer_configs,
+):
+    """Merge multiple grid layers into one, adding a grid_type field to each.
+
+    Args:
+        input_path (str): Path to input GeoPackage containing source layers.
+        output_path (str): Path to output GeoPackage.
+        output_layer_name (str): Name for the merged output layer.
+        layer_configs (list): List of tuples (layer_name, grid_type_value)
+            Example: [
+                ("intersected_setback", "on_grid_intersected"),
+                ("arterial_setback_grid_cleaned", "on_grid_art"),
+                ("secondary_setback_grid_cleaned", "on_grid_sec"),
+                ("site_minus_all_setbacks_grid_cells", "off_grid"),
+            ]
+
+    Returns:
+        str: Name of the created output layer.
+
+    Raises:
+        RuntimeError: If input GeoPackage cannot be opened or layers not found.
+    """
+    if input_path == output_path:
+        ds = ogr.Open(input_path, 1)
+        if ds is None:
+            raise RuntimeError(f"Cannot open GeoPackage: {input_path}")
+
+        first_layer_name = layer_configs[0][0]
+        first_layer = ds.GetLayerByName(first_layer_name)
+        if first_layer is None:
+            ds = None
+            raise RuntimeError(f"Cannot find layer: {first_layer_name}")
+
+        srs = first_layer.GetSpatialRef()
+        first_layer_defn = first_layer.GetLayerDefn()
+
+        all_features_data = []
+
+        for layer_name, grid_type_value in layer_configs:
+            source_layer = ds.GetLayerByName(layer_name)
+            if source_layer is None:
+                print(f"Warning: Layer '{layer_name}' not found, skipping...")
+                continue
+
+            source_layer.ResetReading()
+            layer_features = []
+            for source_feature in source_layer:
+                geom = source_feature.GetGeometryRef()
+                geom_wkt = geom.ExportToWkt() if geom else None
+
+                field_values = {}
+                for i in range(source_feature.GetFieldCount()):
+                    field_name = source_feature.GetFieldDefnRef(i).GetName()
+                    if source_feature.IsFieldSet(i):
+                        field_values[field_name] = source_feature.GetField(i)
+
+                layer_features.append((geom_wkt, field_values, grid_type_value))
+
+            all_features_data.extend(layer_features)
+            print(f"  Collected {len(layer_features)} features from '{layer_name}'")
+
+        if ds.GetLayerByName(output_layer_name):
+            ds.DeleteLayer(output_layer_name)
+
+        output_layer = ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
+
+        for i in range(first_layer_defn.GetFieldCount()):
+            field_defn = first_layer_defn.GetFieldDefn(i)
+            output_layer.CreateField(field_defn)
+
+        grid_type_field = ogr.FieldDefn("grid_type", ogr.OFTString)
+        grid_type_field.SetWidth(50)
+        output_layer.CreateField(grid_type_field)
+
+        feature_count = 0
+        for geom_wkt, field_values, grid_type_value in all_features_data:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+
+            if geom_wkt:
+                geom = ogr.CreateGeometryFromWkt(geom_wkt)
+                out_feature.SetGeometry(geom)
+
+            for field_name, field_value in field_values.items():
+                try:
+                    out_feature.SetField(field_name, field_value)
+                except RuntimeError:
+                    pass
+
+            out_feature.SetField("grid_type", grid_type_value)
+
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_count += 1
+
+        ds = None
+
+    else:
+        input_ds = ogr.Open(input_path, 0)
+        if input_ds is None:
+            raise RuntimeError(f"Cannot open input GeoPackage: {input_path}")
+
+        output_ds = ogr.Open(output_path, 1)
+        if output_ds is None:
+            input_ds = None
+            raise RuntimeError(f"Cannot open output GeoPackage: {output_path}")
+
+        first_layer_name = layer_configs[0][0]
+        first_layer = input_ds.GetLayerByName(first_layer_name)
+        if first_layer is None:
+            input_ds = None
+            output_ds = None
+            raise RuntimeError(f"Cannot find layer: {first_layer_name}")
+
+        srs = first_layer.GetSpatialRef()
+
+        if output_ds.GetLayerByName(output_layer_name):
+            output_ds.DeleteLayer(output_layer_name)
+
+        output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
+
+        first_layer.ResetReading()
+        first_layer_defn = first_layer.GetLayerDefn()
+
+        for i in range(first_layer_defn.GetFieldCount()):
+            field_defn = first_layer_defn.GetFieldDefn(i)
+            output_layer.CreateField(field_defn)
+
+        grid_type_field = ogr.FieldDefn("grid_type", ogr.OFTString)
+        grid_type_field.SetWidth(50)
+        output_layer.CreateField(grid_type_field)
+
+        feature_count = 0
+        for layer_name, grid_type_value in layer_configs:
+            source_layer = input_ds.GetLayerByName(layer_name)
+            if source_layer is None:
+                print(f"Warning: Layer '{layer_name}' not found, skipping...")
+                continue
+
+            source_layer.ResetReading()
+            for source_feature in source_layer:
+                out_feature = ogr.Feature(output_layer.GetLayerDefn())
+
+                geom = source_feature.GetGeometryRef()
+                if geom:
+                    out_feature.SetGeometry(geom.Clone())
+
+                for i in range(first_layer_defn.GetFieldCount()):
+                    field_name = first_layer_defn.GetFieldDefn(i).GetName()
+                    if source_feature.IsFieldSet(i):
+                        out_feature.SetField(field_name, source_feature.GetField(i))
+
+                out_feature.SetField("grid_type", grid_type_value)
+
+                output_layer.CreateFeature(out_feature)
+                out_feature = None
+                feature_count += 1
+
+            print(f"  Merged {source_layer.GetFeatureCount()} features from '{layer_name}'")
+
+        input_ds = None
+        output_ds = None
+
+    print(f"Merged {feature_count} total features into '{output_layer_name}'")
+
+    return output_layer_name
+
+
+def export_layer_to_geojson(
+    input_path,
+    layer_name,
+    output_geojson_path,
+):
+    """Export a GeoPackage layer to GeoJSON format.
+
+    Args:
+        input_path (str): Path to input GeoPackage.
+        layer_name (str): Name of layer to export.
+        output_geojson_path (str): Path for output GeoJSON file.
+
+    Returns:
+        str: Path to the created GeoJSON file.
+
+    Raises:
+        RuntimeError: If input GeoPackage cannot be opened or layer not found.
+    """
+    input_ds = ogr.Open(input_path, 0)
+    if input_ds is None:
+        raise RuntimeError(f"Cannot open input GeoPackage: {input_path}")
+
+    layer = input_ds.GetLayerByName(layer_name)
+    if layer is None:
+        input_ds = None
+        raise RuntimeError(f"Cannot find layer: {layer_name}")
+
+    driver = ogr.GetDriverByName("GeoJSON")
+    if driver is None:
+        input_ds = None
+        raise RuntimeError("GeoJSON driver not available")
+
+    import os
+
+    if os.path.exists(output_geojson_path):
+        os.remove(output_geojson_path)
+
+    output_ds = driver.CreateDataSource(output_geojson_path)
+    if output_ds is None:
+        input_ds = None
+        raise RuntimeError(f"Cannot create GeoJSON file: {output_geojson_path}")
+
+    output_layer = output_ds.CopyLayer(layer, layer_name, ["RFC7946=YES"])
+
+    if output_layer is None:
+        input_ds = None
+        output_ds = None
+        raise RuntimeError("Failed to copy layer to GeoJSON")
+
+    feature_count = output_layer.GetFeatureCount()
+
+    input_ds = None
+    output_ds = None
+
+    print(f"Exported {feature_count} features to '{output_geojson_path}'")
+
+    return output_geojson_path

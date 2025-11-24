@@ -17,8 +17,10 @@ from .operations import (
     create_grid_from_on_grid,
     create_local_streets_zone,
     erase_layer,
+    export_layer_to_geojson,
     extract_by_expression,
     extract_site_boundary_lines,
+    merge_grid_layers_with_type,
 )
 
 gdal.UseExceptions()
@@ -354,8 +356,32 @@ def generate_streets(cfg: StreetConfig) -> Path:
         cfg.off_grid_partitions_preferred_depth,
     )
 
+    print("Step 10: Merging all grid layers with grid_type information...")
+    merge_grid_layers_with_type(
+        str(output_gpkg),
+        str(output_gpkg),
+        "all_grids_merged",
+        [
+            ("intersected_setbacks", "on_grid_intersected"),
+            ("arterial_setback_grid_cleaned", "on_grid_art"),
+            ("secondary_setback_grid_cleaned", "on_grid_sec"),
+            ("site_minus_all_setbacks_grid_cells", "off_grid"),
+        ],
+    )
+
+    print("Step 11: Exporting merged grids to GeoJSON...")
+    output_geojson = output_dir / "all_grids_merged.geojson"
+    export_layer_to_geojson(
+        str(output_gpkg),
+        "all_grids_merged",
+        str(output_geojson),
+    )
+
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {clipped_site_layer}: Site polygon with roads subtracted")
+    print("  - all_grids_merged: Merged grid cells with grid_type classification")
+    print("\nGeoJSON export:")
+    print(f"  - {output_geojson}: Merged grids with grid_type classification")
 
     return output_gpkg
