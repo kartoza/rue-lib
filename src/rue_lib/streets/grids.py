@@ -66,9 +66,9 @@ def is_good_cell(poly: Polygon, target_area) -> dict:
     has_degenerate_edge = False
 
     for i in range(len(coords)):
-        x0, y0, z0 = coords[i - 1]
-        x1, y1, z1 = coords[i]
-        x2, y2, z2 = coords[(i + 1) % len(coords)]
+        x0, y0 = coords[i - 1][0], coords[i - 1][1]
+        x1, y1 = coords[i][0], coords[i][1]
+        x2, y2 = coords[(i + 1) % len(coords)][0], coords[(i + 1) % len(coords)][1]
         v1 = (x1 - x0, y1 - y0)
         v2 = (x2 - x1, y2 - y1)
         len1 = (v1[0] ** 2 + v1[1] ** 2) ** 0.5
