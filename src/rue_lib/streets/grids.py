@@ -202,7 +202,7 @@ def _build_mesh_and_cells(
         x = start_x
         while x <= maxx + grid_width:
             p = Point(x, y)
-            if prepared_poly.contains(p):
+            if prepared_poly.context.oriented_envelope.contains(p):
                 mesh_points_rot.append(p)
             x += grid_width
         y += grid_depth
