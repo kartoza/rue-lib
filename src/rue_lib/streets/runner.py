@@ -259,86 +259,24 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "site_minus_all_setbacks",
     )
 
-    # print("Step 10: Creating grid for each site polygon...")
-    # if cfg.optimize_grid_rotation:
-    #     search_method = (
-    #         "ternary search"
-    #         if cfg.use_ternary_search
-    #         else f"linear search ({cfg.grid_rotation_angle_step}° step)"
-    #     )
-    #     print(f"  Optimizing grid rotation using {search_method}...")
-    # grid_layer = create_grid_for_polygons(
-    #     output_path,
-    #     "site_minus_all_setbacks",
-    #     "site_grid",
-    #     cfg.off_grid_partitions_preferred_width,
-    #     cfg.off_grid_partitions_preferred_depth,
-    #     optimize_rotation=cfg.optimize_grid_rotation,
-    #     rotation_angle_step=cfg.grid_rotation_angle_step,
-    #     use_ternary_search=cfg.use_ternary_search,
-    #     clip_to_boundary=cfg.clip_to_boundary,
-    # )
-
-    # print("Step 11: Filter grid for each site polygon...")
-    # if cfg.optimize_grid_rotation:
-    #     search_method = (
-    #         "ternary search"
-    #         if cfg.use_ternary_search
-    #         else f"linear search ({cfg.grid_rotation_angle_step}° step)"
-    #     )
-    #     print(f"  Optimizing grid rotation using {search_method}...")
-    # grid_layer_filtered = create_grid_for_polygons(
-    #     output_path,
-    #     "site_minus_all_setbacks",
-    #     "site_grid_filtered",
-    #     cfg.off_grid_partitions_preferred_width,
-    #     cfg.off_grid_partitions_preferred_depth,
-    #     optimize_rotation=cfg.optimize_grid_rotation,
-    #     rotation_angle_step=cfg.grid_rotation_angle_step,
-    #     use_ternary_search=cfg.use_ternary_search,
-    #     clip_to_boundary=False,
-    #     tolerance_area_ratio=cfg.tolerance_area_ratio,
-    #     tolerance_boundary_distance=cfg.tolerance_boundary_distance,
-    # )
-
-    # print("Step 12: Creating residual polygons (site minus grid)...")
-    # erase_layer(
-    #     output_path,
-    #     "site_minus_all_setbacks",
-    #     output_path,
-    #     grid_layer_filtered,
-    #     output_path,
-    #     "site_residual",
-    # )
-
-    # print("Step 13: Finding additional grid cells in residual areas...")
-    # print("  Searching for optimal rotations in leftover spaces...")
-    # create_grid_for_polygons(
-    #     output_path,
-    #     "site_residual",
-    #     "site_residual_grid",
-    #     cfg.off_grid_partitions_preferred_width,
-    #     cfg.off_grid_partitions_preferred_depth,
-    #     optimize_rotation=True,  # Always optimize for residual areas
-    #     rotation_angle_step=cfg.grid_rotation_angle_step,
-    #     use_ternary_search=cfg.use_ternary_search,
-    #     clip_to_boundary=False,  # Only perfect interior cells for residual
-    # )
-
+    print("Step 10: Generating on-grid blocks...")
     generate_on_grid_blocks(output_gpkg, cfg)
 
+    print("Step 11: Generating local streets zones for arterial setback...")
     generate_local_streets(
         output_gpkg,
         cfg,
         "arterial_setback_grid_cleaned",
     )
 
+    print("Step 12: Generating local streets zones for secondary setback...")
     generate_local_streets(
         output_gpkg,
         cfg,
         "secondary_setback_grid_cleaned",
     )
 
+    print("Step 13: Extracting site boundary lines")
     extract_site_boundary_lines(
         output_gpkg,
         "site_minus_all_setbacks",
@@ -348,6 +286,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "site_boundary_lines",
     )
 
+    print("Step 14: Generating off-grid blocks...")
     grids_from_site(
         output_gpkg,
         "site_minus_all_setbacks",
@@ -356,7 +295,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
         cfg.off_grid_partitions_preferred_depth,
     )
 
-    print("Step 10: Merging all grid layers with grid_type information...")
+    print("Step 15: Generating local streets zones for off-grid blocks...")
+    generate_local_streets(
+        output_gpkg,
+        cfg,
+        "site_minus_all_setbacks_grid_cells",
+    )
+
+    print("Step 16: Merging all grid layers with grid_type information...")
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
@@ -369,7 +315,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         ],
     )
 
-    print("Step 11: Exporting merged grids to GeoJSON...")
+    print("Step 17: Exporting merged grids to GeoJSON...")
     output_geojson = output_dir / "all_grids_merged.geojson"
     export_layer_to_geojson(
         str(output_gpkg),

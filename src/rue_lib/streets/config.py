@@ -18,6 +18,7 @@ class StreetConfig:
     secondary_setback_depth: float = 60.0  # Depth of secondary road setback zone
     perpendicular_line_length: float = 1000.0  # Length of perpendicular lines
     output_dir: str = "outputs/streets"
+    geopackage_path: str = f"{output_dir}/streets.gpkg"
     road_local_width_m: float = 12.0
     optimize_grid_rotation: bool = True
     grid_rotation_angle_step: float = 5.0
