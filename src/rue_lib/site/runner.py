@@ -4,20 +4,19 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from shapely.validation import make_valid
+import geopandas as gpd
 
+from rue_lib.core.helpers import remove_layer_from_gpkg
 from rue_lib.geo import to_metric_crs
 from rue_lib.site.config import SiteConfig
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
+from rue_lib.streets.operations import erase_layer
 
 
 def generate_parcels(cfg: SiteConfig) -> Path:
     """
-    Generate parcels using a grid-based approach.
-
-    This creates ownership parcels by overlaying a rectangular grid
-    on the site and optionally subtracting road corridors.
+    Generate parcels.
 
     Args:
         cfg: SiteConfig with all settings
@@ -39,22 +38,53 @@ def generate_parcels(cfg: SiteConfig) -> Path:
 
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
-    site_m = to_metric_crs(site)
-    roads_m = to_metric_crs(roads)
+
+    if site.crs and site.crs.is_projected:
+        site_m = site
+    else:
+        site_m = to_metric_crs(site)
+
+    if roads.crs and roads.crs.is_projected:
+        roads_m = roads
+    else:
+        roads_m = to_metric_crs(roads)
+
+    gpkg_path = cfg.geopackage_path
+
+    site_m.to_file(gpkg_path, layer="site", driver="GPKG")
+    roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
 
     roads_buf_m = buffer_roads(roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m)
 
     if not roads_buf_m.empty:
-        roads_geom = make_valid(roads_buf_m.union_all()).buffer(0)
-        site_m["geometry"] = site_m.geometry.apply(
-            lambda g: make_valid(g).buffer(0).difference(roads_geom)
+        roads_buf_m.to_file(gpkg_path, layer="roads_buffered", driver="GPKG")
+        erase_layer(
+            input_path=str(gpkg_path),
+            input_layer_name="site",
+            erase_path=str(gpkg_path),
+            erase_layer_name="roads_buffered",
+            output_path=str(gpkg_path),
+            output_layer_name="parcels",
         )
-        site_m["geometry"] = site_m.buffer(0)
-        site_m["area_m2"] = site_m.geometry.area
+    else:
+        site_m.to_file(gpkg_path, layer="parcels", driver="GPKG")
 
-    parcels = site_m.to_crs(4326) if not site_m.empty else site_m
+    parcels_m = gpd.read_file(gpkg_path, layer="parcels")
 
-    out_path = out_dir / "parcels.geojson"
-    save_geojson(parcels, out_path)
+    parcels_exploded = parcels_m.explode(index_parts=False, ignore_index=True)
 
-    return out_path
+    parcels_exploded["area_m2"] = parcels_exploded.geometry.area
+    parcels_exploded["id"] = range(1, len(parcels_exploded) + 1)
+
+    parcels_exploded.to_file(gpkg_path, layer="sites", driver="GPKG")
+
+    remove_layer_from_gpkg(gpkg_path, "parcels")
+
+    parcels_final = (
+        parcels_exploded.to_crs(4326) if not parcels_exploded.empty else parcels_exploded
+    )
+
+    out_geojson = out_dir / "parcels.geojson"
+    save_geojson(parcels_final, out_geojson)
+
+    return out_geojson

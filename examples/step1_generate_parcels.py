@@ -30,8 +30,9 @@ def main():
         site_path="data/site.geojson",
         roads_path="data/roads.geojson",
         output_dir="outputs/step1_parcels",
-        road_arterial_width_m=20.0,
-        road_secondary_width_m=15.0,
+        geopackage_path="outputs/output.gpkg",
+        road_arterial_width_m=40.0,
+        road_secondary_width_m=30.0,
     )
 
     # Generate parcels
