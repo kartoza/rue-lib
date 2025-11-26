@@ -224,22 +224,17 @@ def create_off_grid_area(
         >>> roads = gpd.GeoDataFrame(...)
         >>> off_grid = create_off_grid_area(block, roads)
     """
-    # Get edges of the block
     edges = get_block_edges(block)
 
     if not edges:
         print("Warning: Could not extract block edges")
         return None
 
-    # Start with the original block
     current_polygon = block
 
-    # Process each edge
     for i, edge in enumerate(edges):
-        # Find closest road type
         road_type = find_closest_road_type(edge, roads, max_distance=20.0)
 
-        # Determine buffer distance
         if road_type == "road_art":
             buffer_dist = part_art_d
             road_label = "arterial"
@@ -250,24 +245,18 @@ def create_off_grid_area(
             buffer_dist = part_loc_d
             road_label = "local"
         else:
-            # No road nearby, use default (local)
             buffer_dist = part_loc_d
             road_label = "default(local)"
 
-        # Create a buffer strip from this edge
         try:
-            # Buffer the edge line
-            edge_buffer = edge.buffer(buffer_dist, cap_style=2)  # flat caps
+            edge_buffer = edge.buffer(buffer_dist, cap_style=2)
 
-            # Subtract from current polygon
             new_polygon = current_polygon.difference(edge_buffer)
 
-            # Validate result
             if new_polygon.is_empty:
                 print(f"  Edge {i} ({road_label}): Buffer consumed entire polygon")
                 return None
 
-            # Handle MultiPolygon - take largest
             if new_polygon.geom_type == "MultiPolygon":
                 polygons = list(new_polygon.geoms)
                 polygons = clean_small_polygons(polygons, min_area=1.0)

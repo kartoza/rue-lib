@@ -34,29 +34,24 @@ def compute_internal_angle(coords: list[tuple[float, float]], idx: int) -> float
     Returns:
         Angle in degrees (0-360)
     """
-    n = len(coords) - 1  # Exclude duplicate last point
+    n = len(coords) - 1
 
-    # Get three consecutive points
     p_prev = np.array(coords[(idx - 1) % n])
     p_curr = np.array(coords[idx % n])
     p_next = np.array(coords[(idx + 1) % n])
 
-    # Vectors from current point
     v1 = p_prev - p_curr
     v2 = p_next - p_curr
 
-    # Normalize
     v1_norm = normalize_vector(v1)
     v2_norm = normalize_vector(v2)
 
-    # Compute angle using dot product
     dot = np.clip(np.dot(v1_norm, v2_norm), -1.0, 1.0)
     angle_rad = np.arccos(dot)
     angle_deg = np.degrees(angle_rad)
 
-    # Check if it's an internal or external angle using cross product
     cross = np.cross(v1, v2)
-    if cross < 0:  # Clockwise turn = internal angle > 180
+    if cross < 0:
         angle_deg = 360 - angle_deg
 
     return angle_deg
@@ -99,23 +94,19 @@ def create_corner_fan(
         Corner fan polygon
     """
     # Compute perpendicular vectors (rotate 90° counterclockwise)
-    # Negate to point outward from the polygon (for off-grid polygons)
     v0_perp = -np.array([dir0[1], -dir0[0], 0.0])
     v1_perp = -np.array([dir1[1], -dir1[0], 0.0])
 
     v0_perp = set_vector_length(v0_perp, distance)
     v1_perp = set_vector_length(v1_perp, distance)
 
-    # Middle perpendicular (bisector)
     v_mid_perp = v0_perp + v1_perp
     v_mid_perp = set_vector_length(v_mid_perp, distance)
 
-    # Three far-away points
     xyz0 = origin[:2] + v0_perp[:2]
     xyz1 = origin[:2] + v1_perp[:2]
     xyz_mid = origin[:2] + v_mid_perp[:2]
 
-    # Create fan polygon: origin -> xyz0 -> xyz_mid -> xyz1 -> origin
     fan_coords = [tuple(origin[:2]), tuple(xyz0), tuple(xyz_mid), tuple(xyz1), tuple(origin[:2])]
 
     return Polygon(fan_coords)
@@ -205,13 +196,6 @@ def create_block_parts_from_off_grid(
     - Side parts: Strip polygons along the edges between corners
     - Off-grid part: The original off-grid polygon (center part)
 
-    The algorithm:
-    1. Loop over vertices of the off-grid polygon
-    2. At "sharp" corners (internal angle < threshold), build a corner fan polygon
-    3. Define rays perpendicular to edges at each corner
-    4. Build side polygons between consecutive corner fans
-    5. Intersect all polygons with the original block to get valid parts
-
     Args:
         block: Original block polygon (outer boundary)
         off_grid: Off-grid polygon (inner part of block)
@@ -229,33 +213,26 @@ def create_block_parts_from_off_grid(
         >>> off_grid = Polygon([(20, 20), (80, 20), (80, 80), (20, 80)])
         >>> corners, sides, center = create_block_parts_from_off_grid(block, off_grid)
     """
-    # Get coordinates of off-grid polygon
     coords = list(off_grid.exterior.coords)
-    n_vertices = len(coords) - 1  # Exclude duplicate last point
+    n_vertices = len(coords) - 1
 
     corner_candidates = []
-    side_anchor_data = []  # [(origin, outer_point, edge_idx)]
+    side_anchor_data = []
 
-    # Step 1: Identify sharp corners and create corner fans
     for i in range(n_vertices):
-        # Compute internal angle at this vertex
         angle = compute_internal_angle(coords, i)
 
-        # Only treat sharp corners
         if angle >= angle_threshold:
             continue
 
-        # Get edge directions at this vertex
-        dir0 = get_edge_direction(coords, i - 1)  # Edge coming into vertex
-        dir1 = get_edge_direction(coords, i)  # Edge going out of vertex
+        dir0 = get_edge_direction(coords, i - 1)
+        dir1 = get_edge_direction(coords, i)
 
         origin = np.array([coords[i][0], coords[i][1], 0.0])
 
-        # Create corner fan polygon
         corner_fan = create_corner_fan(origin, dir0, dir1, corner_distance)
         corner_candidates.append(corner_fan)
 
-        # Compute perpendicular points for side anchors
         v0_perp = np.array([dir0[1], -dir0[0], 0.0])
         v1_perp = np.array([dir1[1], -dir1[0], 0.0])
         v0_perp = set_vector_length(v0_perp, corner_distance)
@@ -265,49 +242,39 @@ def create_block_parts_from_off_grid(
         xyz0 = origin[:2] + v0_perp[:2]
         xyz1 = origin[:2] + v1_perp[:2]
 
-        # Save anchor data for sides
-        # First ray (toward previous edge)
         side_anchor_data.append(
             (
                 tuple(origin[:2]),
                 tuple(xyz0),
-                i - 1,  # Previous edge index
+                i - 1,
             )
         )
 
-        # Second ray (toward next edge)
         side_anchor_data.append(
             (
                 tuple(origin[:2]),
                 tuple(xyz1),
-                i,  # Current edge index
+                i,
             )
         )
 
-    # Step 2: Create side polygons between corner fans
     side_candidate_polys = []
     n_anchors = len(side_anchor_data)
 
     if n_anchors > 0:
-        # Have corners, create sides between them
         for i in range(1, n_anchors, 2):
-            # Get two consecutive anchors (wrapping around)
             a = side_anchor_data[i % n_anchors]
             b = side_anchor_data[(i + 1) % n_anchors]
 
             a_origin, a_outer, a_edge_idx = a
             b_origin, b_outer, b_edge_idx = b
 
-            # Get perimeter positions between the two corners
-            # We want positions from edge after a to edge at b
             start_idx = (a_edge_idx + 1) % n_vertices
             end_idx = b_edge_idx % n_vertices
 
             perimeter_positions = get_positions_between_edges(
                 coords, start_idx, end_idx, include_end=True
             )
-
-            # Create side polygon
             side_poly = create_side_polygon(
                 a_origin, a_outer, b_outer, b_origin, perimeter_positions
             )
@@ -323,7 +290,6 @@ def create_block_parts_from_off_grid(
         except Exception as e:
             print(f"Warning: Failed to create frame: {e}")
 
-    # Step 3: Clip corners and sides to block, then subtract off-grid
     corner_parts = []
     for corner in corner_candidates:
         try:
@@ -344,12 +310,9 @@ def create_block_parts_from_off_grid(
     side_parts = []
     for side in side_candidate_polys:
         try:
-            # First intersect with block boundary
             intersected = block.intersection(side)
             if intersected.is_empty or intersected.area == 0:
                 continue
-
-            # Then subtract off-grid to get the frame part
             frame_part = intersected.difference(off_grid)
             if not frame_part.is_empty and frame_part.area > 0:
                 if frame_part.geom_type == "Polygon":
