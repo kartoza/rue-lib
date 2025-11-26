@@ -1,7 +1,7 @@
 # src/rue_lib/cluster/off_grid.py
 """Create off-grid area by offsetting roads inward from block perimeter."""
 
-from typing import Optional, tuple
+from typing import Optional
 
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
