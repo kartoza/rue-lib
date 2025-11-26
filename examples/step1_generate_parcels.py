@@ -30,11 +30,8 @@ def main():
         site_path="data/site.geojson",
         roads_path="data/roads.geojson",
         output_dir="outputs/step1_parcels",
-        rows=3,  # Number of grid rows
-        cols=3,  # Number of grid columns
-        pad_m=50.0,  # Grid padding in meters
-        min_parcel_area_m2=5.0,  # Minimum parcel area
-        subtract_roads=True,  # Whether to carve out road corridors
+        road_arterial_width_m=20.0,
+        road_secondary_width_m=15.0,
     )
 
     # Generate parcels
@@ -43,7 +40,6 @@ def main():
     print("=" * 60)
     print(f"Site: {config.site_path}")
     print(f"Roads: {config.roads_path}")
-    print(f"Grid: {config.rows} x {config.cols}")
     print(f"Output: {config.output_dir}")
     print()
 

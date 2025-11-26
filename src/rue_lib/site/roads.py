@@ -5,15 +5,16 @@ import pandas as pd
 from shapely.validation import make_valid
 
 
-def buffer_roads(roads_m: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+def buffer_roads(
+    roads_m: gpd.GeoDataFrame, road_arterial_width_m: float = 16, road_secondary_width_m: float = 10
+) -> gpd.GeoDataFrame:
     """
     Create road corridors as polygons.
 
-    Arterial roads: 8m half-buffer (16m total)
-    Secondary roads: 5m half-buffer (10m total)
-
     Args:
         roads_m: Roads in metric CRS
+        road_arterial_width_m: Width of arterial roads (meters)
+        road_secondary_width_m: Width of secondary roads (meters)
 
     Returns:
         Buffered road polygons
@@ -27,11 +28,11 @@ def buffer_roads(roads_m: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     parts = []
 
     if not art.empty:
-        art["geometry"] = art.geometry.buffer(8.0, cap_style=2, join_style=2)
+        art["geometry"] = art.geometry.buffer(road_arterial_width_m / 2, cap_style=2, join_style=2)
         parts.append(art)
 
     if not sec.empty:
-        sec["geometry"] = sec.geometry.buffer(5.0, cap_style=2, join_style=2)
+        sec["geometry"] = sec.geometry.buffer(road_secondary_width_m / 2, cap_style=2, join_style=2)
         parts.append(sec)
 
     if parts:

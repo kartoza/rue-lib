@@ -45,7 +45,7 @@ class ClusterConfig:
     # Output configuration
     output_dir: str = "outputs/clusters"
 
-    # Road widths (used for buffering/setbacks)
+    # Road widths
     road_arterial_width_m: float = 20.0
     road_secondary_width_m: float = 15.0
     road_local_width_m: float = 12.0
