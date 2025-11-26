@@ -5,6 +5,8 @@ Install with: pip install rue-lib[geo]
 Or use the Nix development environment: nix develop
 """
 
+import math
+
 try:
     import geopandas as gpd
     from osgeo import gdal, ogr
@@ -78,3 +80,21 @@ def get_driver_count() -> int:
     """
     _check_geo_available()
     return ogr.GetDriverCount()
+
+
+def to_metric_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """Project to local UTM CRS for metric operations."""
+    if gdf.crs is None:
+        gdf = gdf.set_crs(4326)
+
+    try:
+        centroid = gdf.union_all().centroid
+    except Exception:
+        centroid = gdf.geometry.iloc[0].centroid
+
+    lon = centroid.x
+    utm_zone = int(math.floor((lon + 180) / 6) + 1)
+    is_northern = centroid.y >= 0
+    epsg = 32600 + utm_zone if is_northern else 32700 + utm_zone
+
+    return gdf.to_crs(epsg)

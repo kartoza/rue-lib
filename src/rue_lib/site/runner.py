@@ -2,56 +2,21 @@
 
 from __future__ import annotations
 
-import math
-from dataclasses import dataclass
 from pathlib import Path
 
 import geopandas as gpd
-from shapely.validation import make_valid
 
-from rue_lib.site.generator import create_parcel_grid
+from rue_lib.core.helpers import remove_layer_from_gpkg
+from rue_lib.geo import to_metric_crs
+from rue_lib.site.config import SiteConfig
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
-
-
-def to_metric_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
-    """Project to local UTM CRS for metric operations."""
-    if gdf.crs is None:
-        gdf = gdf.set_crs(4326)
-
-    try:
-        centroid = gdf.union_all().centroid
-    except Exception:
-        centroid = gdf.geometry.iloc[0].centroid
-
-    lon = centroid.x
-    utm_zone = int(math.floor((lon + 180) / 6) + 1)
-    is_northern = centroid.y >= 0
-    epsg = 32600 + utm_zone if is_northern else 32700 + utm_zone
-
-    return gdf.to_crs(epsg)
-
-
-@dataclass
-class SiteConfig:
-    """Configuration for grid-based parcel generation."""
-
-    site_path: str
-    roads_path: str
-    output_dir: str = "outputs/parcels"
-    rows: int = 4
-    cols: int = 4
-    pad_m: float = 50.0
-    min_parcel_area_m2: float = 5.0
-    subtract_roads: bool = False
+from rue_lib.streets.operations import erase_layer
 
 
 def generate_parcels(cfg: SiteConfig) -> Path:
     """
-    Generate parcels using a grid-based approach.
-
-    This creates ownership parcels by overlaying a rectangular grid
-    on the site and optionally subtracting road corridors.
+    Generate parcels.
 
     Args:
         cfg: SiteConfig with all settings
@@ -63,43 +28,63 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         >>> config = SiteConfig(
         ...     site_path="site.geojson",
         ...     roads_path="roads.geojson",
-        ...     rows=5,
-        ...     cols=5
+        ...     road_arterial_width_m=20,
+        ...     road_secondary_width_m=15
         ... )
         >>> output = generate_parcels(config)
     """
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    # Read and project to metric CRS
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
-    site_m = to_metric_crs(site)
-    roads_m = to_metric_crs(roads)
 
-    # Buffer roads for optional subtraction
-    roads_buf_m = buffer_roads(roads_m)
+    if site.crs and site.crs.is_projected:
+        site_m = site
+    else:
+        site_m = to_metric_crs(site)
 
-    # Create parcels as grid intersection with site
-    parcels_m = create_parcel_grid(site_m, rows=cfg.rows, cols=cfg.cols, pad=cfg.pad_m)
+    if roads.crs and roads.crs.is_projected:
+        roads_m = roads
+    else:
+        roads_m = to_metric_crs(roads)
 
-    # Optionally subtract roads after grid creation
-    if cfg.subtract_roads and not parcels_m.empty and not roads_buf_m.empty:
-        roads_geom = make_valid(roads_buf_m.union_all()).buffer(0)
-        parcels_m["geometry"] = parcels_m.geometry.apply(
-            lambda g: make_valid(g).buffer(0).difference(roads_geom)
+    gpkg_path = cfg.geopackage_path
+
+    site_m.to_file(gpkg_path, layer="site", driver="GPKG")
+    roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
+
+    roads_buf_m = buffer_roads(roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m)
+
+    if not roads_buf_m.empty:
+        roads_buf_m.to_file(gpkg_path, layer="roads_buffered", driver="GPKG")
+        erase_layer(
+            input_path=str(gpkg_path),
+            input_layer_name="site",
+            erase_path=str(gpkg_path),
+            erase_layer_name="roads_buffered",
+            output_path=str(gpkg_path),
+            output_layer_name="parcels",
         )
-        parcels_m["geometry"] = parcels_m.buffer(0)
-        parcels_m["area_m2"] = parcels_m.geometry.area
+    else:
+        site_m.to_file(gpkg_path, layer="parcels", driver="GPKG")
 
-    # Filter micro-slivers
-    if not parcels_m.empty and cfg.min_parcel_area_m2 is not None:
-        parcels_m = parcels_m[parcels_m["area_m2"] >= float(cfg.min_parcel_area_m2)].copy()
+    parcels_m = gpd.read_file(gpkg_path, layer="parcels")
 
-    # Back to WGS84
-    parcels = parcels_m.to_crs(4326) if not parcels_m.empty else parcels_m
+    parcels_exploded = parcels_m.explode(index_parts=False, ignore_index=True)
 
-    out_path = out_dir / "parcels.geojson"
-    save_geojson(parcels, out_path)
+    parcels_exploded["area_m2"] = parcels_exploded.geometry.area
+    parcels_exploded["id"] = range(1, len(parcels_exploded) + 1)
 
-    return out_path
+    parcels_exploded.to_file(gpkg_path, layer="sites", driver="GPKG")
+
+    remove_layer_from_gpkg(gpkg_path, "parcels")
+
+    parcels_final = (
+        parcels_exploded.to_crs(4326) if not parcels_exploded.empty else parcels_exploded
+    )
+
+    out_geojson = out_dir / "parcels.geojson"
+    save_geojson(parcels_final, out_geojson)
+
+    return out_geojson
