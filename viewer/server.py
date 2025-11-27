@@ -119,13 +119,6 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
     # Extract parameters with defaults
     params = params or {}
 
-    # Step 1 parameters
-    rows = params.get("rows", 4)
-    cols = params.get("cols", 4)
-    pad_m = params.get("pad_m", 50.0)
-    min_parcel_area_m2 = params.get("min_parcel_area_m2", 5.0)
-    subtract_roads = params.get("subtract_roads", False)
-
     # Step 2 parameters
     arterial_width = params.get("road_arterial_width_m", 20.0)
     secondary_width = params.get("road_secondary_width_m", 15.0)
@@ -142,11 +135,9 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
         site_path=str(boundary_path),
         roads_path=str(roads_path),
         output_dir=str(step1_dir),
-        rows=rows,
-        cols=cols,
-        pad_m=pad_m,
-        min_parcel_area_m2=min_parcel_area_m2,
-        subtract_roads=subtract_roads,
+        geopackage_path=str(step1_dir / "output.gpkg"),
+        road_arterial_width_m=arterial_width,
+        road_secondary_width_m=secondary_width,
     )
     step1_output = generate_parcels(site_cfg)
 
@@ -157,7 +148,8 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
         output_dir=str(step2_dir),
         road_arterial_width_m=arterial_width,
         road_secondary_width_m=secondary_width,
-        road_local_width_m=local_width,
+        geopackage_path=str(step2_dir / "output.gpkg"),
+        road_locals_width_m=local_width,
         arterial_setback_depth=arterial_setback,
         secondary_setback_depth=secondary_setback,
         off_grid_partitions_preferred_depth=pref_depth,
