@@ -1,13 +1,19 @@
+import math
 from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 from osgeo import ogr
 from scipy.spatial import Voronoi
 from shapely.affinity import rotate
-from shapely.geometry import Point, Polygon
+from shapely.errors import TopologicalError
+from shapely.geometry import LineString, Point, Polygon
+from shapely.ops import nearest_points
 from shapely.prepared import prep
 
 from rue_lib.core.helpers import feature_geom_to_shapely
+from rue_lib.streets.config import StreetConfig
+from rue_lib.streets.operations import create_local_streets_zone
 
 
 def is_good_cell(poly: Polygon, target_area) -> dict:
@@ -588,3 +594,240 @@ def grids_from_site(
             feat = None
 
     ds = None
+
+
+def extract_grid_lines_in_buffer(
+    output_path: Path,
+    grid_cells_layer: str,
+    buffer_layer: str,
+    coord_precision: int = 6,
+) -> str | None:
+    """Extract internal grid lines (shared edges between cells) that intersect the buffer boundary,
+    and create points at the intersection between the grid line and the buffer boundary.
+
+    The point moves along the grid line, so the final geometry is guaranteed to lie on BOTH:
+      - the internal grid line
+      - the buffer boundary line
+
+    Attributes include:
+      - line_id
+      - line_length
+      - dx, dy (unit direction vector of the grid line)
+
+    Args:
+        output_path: Path to GeoPackage
+        grid_cells_layer: Name of layer containing grid cells
+        buffer_layer: Name of layer containing the buffer zone (polygon)
+        coord_precision: Decimal places for rounding coordinates when matching shared edges.
+
+    Returns:
+        Name of the extracted points layer, or None if no lines are found.
+    """
+
+    print("\nExtracting internal grid lines on buffer boundary...")
+    print(f"  Grid layer: {grid_cells_layer}")
+    print(f"  Buffer layer: {buffer_layer}")
+
+    # Read the grid cells and buffer zone
+    gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
+    gdf_buffer = gpd.read_file(output_path, layer=buffer_layer)
+
+    print(f"  Loaded {len(gdf_cells)} grid cells")
+    print(f"  Loaded {len(gdf_buffer)} buffer feature(s)")
+
+    if gdf_cells.empty:
+        print("  Warning: grid_cells_layer is empty")
+        return None
+
+    if gdf_buffer.empty:
+        print("  Warning: buffer_layer is empty")
+        return None
+
+    # Dissolve buffer to a single geometry and take its boundary
+    buffer_geom = gdf_buffer.geometry.unary_union
+    buffer_boundary = buffer_geom.boundary
+
+    def norm_point(pt):
+        return (
+            round(pt[0], coord_precision),
+            round(pt[1], coord_precision),
+        )
+
+    def norm_edge(p1, p2):
+        a = norm_point(p1)
+        b = norm_point(p2)
+        return (a, b) if a <= b else (b, a)
+
+    edge_dict: dict[tuple, dict] = {}
+    total_edges = 0
+
+    for _idx, row in gdf_cells.iterrows():
+        geom = row.geometry
+
+        if geom is None or geom.is_empty:
+            continue
+
+        if not geom.is_valid:
+            try:
+                geom = geom.buffer(0)
+            except TopologicalError:
+                continue
+
+        boundary = geom.boundary
+
+        if boundary.geom_type == "LineString":
+            lines = [boundary]
+        elif boundary.geom_type == "MultiLineString":
+            lines = list(boundary.geoms)
+        else:
+            continue
+
+        for line in lines:
+            coords = list(line.coords)
+            for i in range(len(coords) - 1):
+                p1, p2 = coords[i], coords[i + 1]
+                if p1 == p2:
+                    continue
+
+                edge_key = norm_edge(p1, p2)
+                total_edges += 1
+
+                if edge_key not in edge_dict:
+                    edge_dict[edge_key] = {
+                        "count": 0,
+                        "geom": LineString([p1, p2]),
+                    }
+                edge_dict[edge_key]["count"] += 1
+
+    print(f"  Processed ~{total_edges} raw edges")
+    print(f"  Unique normalized edges: {len(edge_dict)}")
+
+    internal_lines: list[LineString] = []
+    shared_edges = 0
+
+    for _edge_key, info in edge_dict.items():
+        if info["count"] > 1:
+            edge = info["geom"]
+            if buffer_boundary.intersects(edge):
+                shared_edges += 1
+                internal_lines.append(edge)
+
+    print(f"  Shared edges (count > 1) intersecting buffer boundary: {shared_edges}")
+
+    if len(internal_lines) == 0:
+        print("  Warning: No internal lines intersect the buffer boundary!")
+        return None
+
+    # Helper to pick a single Point from intersection geometry
+    def pick_intersection_point(edge: LineString, midpoint: Point):
+        inter = edge.intersection(buffer_boundary)
+        if inter.is_empty:
+            _, snapped = nearest_points(midpoint, buffer_boundary)
+            return snapped
+
+        if inter.geom_type == "Point":
+            return inter
+
+        if inter.geom_type == "MultiPoint":
+            points = list(inter.geoms)
+            return min(points, key=lambda p: p.distance(midpoint))
+
+        if inter.geom_type in ("LineString", "MultiLineString"):
+            _, snapped = nearest_points(midpoint, inter)
+            return snapped
+
+        if inter.geom_type == "GeometryCollection":
+            pts = [g for g in inter.geoms if g.geom_type == "Point"]
+            if pts:
+                return min(pts, key=lambda p: p.distance(midpoint))
+            _, snapped = nearest_points(midpoint, inter)
+            return snapped
+
+        _, snapped = nearest_points(midpoint, buffer_boundary)
+        return snapped
+
+    points = []
+    attrs = []
+
+    for line_idx, edge in enumerate(internal_lines):
+        midpoint = edge.interpolate(0.5, normalized=True)
+        inter_point = pick_intersection_point(edge, midpoint)
+
+        if not isinstance(inter_point, Point) or inter_point.is_empty:
+            continue
+
+        x1, y1, z1 = edge.coords[0]
+        x2, y2, z2 = edge.coords[-1]
+        vx, vy = x2 - x1, y2 - y1
+        length = math.hypot(vx, vy)
+        if length == 0:
+            continue
+
+        dx = vx / length
+        dy = vy / length
+
+        points.append(inter_point)
+        attrs.append(
+            {
+                "line_id": line_idx,
+                "line_length": float(edge.length),
+                "dx": dx,
+                "dy": dy,
+            }
+        )
+
+    print(f"  Created {len(points)} points at grid/buffer intersections")
+
+    if not points:
+        print("  Warning: No intersection points could be created!")
+        return None
+
+    # Create GeoDataFrame with points as geometry
+    gdf_points = gpd.GeoDataFrame(
+        attrs,
+        geometry=points,
+        crs=gdf_cells.crs,
+    )
+
+    output_layer_name = f"{grid_cells_layer}_internal_points_in_buffer"
+    gdf_points.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved intersection points to layer: {output_layer_name}")
+    return output_layer_name
+
+
+def generate_local_streets(
+    output_path: Path, cfg: StreetConfig, input_layer_name: str
+) -> tuple[str, str]:
+    """Generate local streets zone from grid blocks.
+
+    Creates a zone for local streets with sidewalks by:
+    1. Creating an inner buffer: -(sidewalk_width + road_width/2)
+    2. Creating an outer rounded buffer: +sidewalk_width
+
+    Both inner and outer zones are saved as separate layers.
+
+    Args:
+        output_path (Path): Path to the GeoPackage containing grid blocks.
+        cfg (StreetConfig): Configuration with sidewalk and road width parameters.
+        input_layer_name (str): Name of the input grid blocks layer.
+
+    Returns:
+        tuple[str, str]: Names of (outer_layer, inner_layer) created.
+    """
+    output_layer_name = f"{input_layer_name}_local_streets"
+
+    print(f"Creating local streets zone from {input_layer_name}...")
+
+    outer_layer, inner_layer = create_local_streets_zone(
+        str(output_path),
+        input_layer_name,
+        str(output_path),
+        output_layer_name,
+        cfg.sidewalk_width_m,
+        cfg.road_locals_width_m,
+    )
+
+    print(f"  Created layers: {outer_layer} (outer), {inner_layer} (inner)")
+
+    return (outer_layer, inner_layer)
