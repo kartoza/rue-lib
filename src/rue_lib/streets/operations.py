@@ -3,8 +3,8 @@ import math
 import os
 
 from osgeo import ogr
-from shapely import geometry, wkt
-from shapely.ops import unary_union
+from shapely import geometry, wkb, wkt
+from shapely.ops import split, unary_union
 
 from .geometry_utils import (
     extract_edges_from_geom,
@@ -358,6 +358,337 @@ def erase_layer(
         feature_id += 1
 
     output_ds = None
+
+
+def merge_layers_without_overlaps(input_path, layer_names, output_path, output_layer_name):
+    """Merge polygon layers and dissolve overlaps into a single layer.
+
+    Args:
+        input_path (str): Path to the dataset containing the layers to merge.
+        layer_names (list[str]): Names of the layers to merge. Layers must exist in `input_path`.
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        str: Name of the created output layer.
+    """
+    input_path = str(input_path)
+    output_path = str(output_path)
+
+    ds = ogr.Open(input_path)
+    if ds is None:
+        raise RuntimeError(f"Cannot open dataset: {input_path}")
+
+    srs = None
+    shapely_geoms = []
+
+    for layer_name in layer_names:
+        layer = ds.GetLayerByName(layer_name)
+        if layer is None:
+            ds = None
+            raise RuntimeError(f"Cannot find layer: {layer_name}")
+
+        if srs is None:
+            srs = layer.GetSpatialRef()
+
+        for feature in layer:
+            geom = feature.GetGeometryRef()
+            if geom is None:
+                continue
+
+            geom = geom.Clone()
+            if not geom.IsValid():
+                geom = geom.Buffer(0)
+
+            shapely_geom = wkt.loads(geom.ExportToWkt())
+            if not shapely_geom.is_valid:
+                shapely_geom = shapely_geom.buffer(0)
+
+            if not shapely_geom.is_empty:
+                shapely_geoms.append(shapely_geom)
+
+    ds = None
+
+    if not shapely_geoms:
+        raise RuntimeError(f"No geometries found to merge in layers: {layer_names}")
+
+    merged_geom = unary_union(shapely_geoms)
+    if merged_geom.is_empty:
+        raise RuntimeError("Merged geometry is empty after union operation.")
+
+    if not merged_geom.is_valid:
+        merged_geom = merged_geom.buffer(0)
+
+    def _flatten_to_polygons(geom):
+        if geom.is_empty:
+            return []
+        if geom.geom_type == "Polygon":
+            return [geom]
+        if geom.geom_type == "MultiPolygon":
+            return list(geom.geoms)
+        if geom.geom_type == "GeometryCollection":
+            polygons = []
+            for sub_geom in geom.geoms:
+                polygons.extend(_flatten_to_polygons(sub_geom))
+            return polygons
+        return []
+
+    merged_polygons = _flatten_to_polygons(merged_geom)
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    if output_ds.GetLayerByName(output_layer_name):
+        output_ds.DeleteLayer(output_layer_name)
+
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
+
+    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+    output_layer.CreateField(id_field)
+
+    feature_id = 1
+    for poly in merged_polygons:
+        ogr_geom = ogr.CreateGeometryFromWkb(poly.wkb)
+        if not ogr_geom.IsValid():
+            ogr_geom = ogr_geom.Buffer(0)
+
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(ogr_geom)
+        out_feature.SetField("id", feature_id)
+        output_layer.CreateFeature(out_feature)
+        out_feature = None
+        feature_id += 1
+
+    output_ds = None
+
+    return output_layer_name
+
+
+def create_on_grid_cells_from_perpendiculars(
+    input_path,
+    setback_layer_name,
+    perp_lines_layer_name,
+    output_path,
+    output_layer_name,
+):
+    """Create on-grid cells by splitting merged setback polygons with perpendicular lines.
+
+    Lines are only used when their midpoint lies inside the merged setback polygons.
+    Each setback polygon is split by its relevant lines, and resulting cells are written
+    with basic attribution about the lines that touched them.
+    """
+    input_path = str(input_path)
+    output_path = str(output_path)
+
+    ds = ogr.Open(input_path)
+    if ds is None:
+        raise RuntimeError(f"Cannot open dataset: {input_path}")
+
+    setback_layer = ds.GetLayerByName(setback_layer_name)
+    perp_layer = ds.GetLayerByName(perp_lines_layer_name)
+
+    if setback_layer is None:
+        ds = None
+        raise RuntimeError(f"Cannot find setback layer: {setback_layer_name}")
+    if perp_layer is None:
+        ds = None
+        raise RuntimeError(f"Cannot find perpendicular lines layer: {perp_lines_layer_name}")
+
+    srs = setback_layer.GetSpatialRef()
+
+    def _ogr_to_shapely(ogr_geom):
+        if ogr_geom is None:
+            return None
+        try:
+            wkb_data = ogr_geom.ExportToWkb()
+            if isinstance(wkb_data, memoryview):
+                wkb_data = bytes(wkb_data)
+            if isinstance(wkb_data, (bytes, bytearray)):
+                return wkb.loads(wkb_data)
+        except TypeError:
+            pass
+        except Exception as e:
+            print(e)
+            pass
+
+        try:
+            return wkt.loads(ogr_geom.ExportToWkt())
+        except Exception as e:
+            print(e)
+            return None
+
+    setback_polygons = []
+    for feature in setback_layer:
+        geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
+        geom = geom.Clone()
+        if not geom.IsValid():
+            geom = geom.Buffer(0)
+
+        shapely_geom = _ogr_to_shapely(geom)
+        if shapely_geom is None:
+            continue
+        if not shapely_geom.is_valid:
+            shapely_geom = shapely_geom.buffer(0)
+        if shapely_geom.is_empty:
+            continue
+
+        setback_id = feature.GetField("id") if feature.GetFieldIndex("id") >= 0 else None
+        setback_polygons.append((setback_id, shapely_geom))
+
+    if not setback_polygons:
+        ds = None
+        raise RuntimeError("No setback polygons found to create on-grid cells.")
+
+    setback_union = unary_union([geom for _sid, geom in setback_polygons])
+
+    # Collect perpendicular lines whose midpoint falls inside the merged setback area
+    candidate_lines = []
+    line_counter = 1
+    for feature in perp_layer:
+        geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
+        geom = geom.Clone()
+        if not geom.IsValid():
+            geom = geom.Buffer(0)
+
+        shapely_line = _ogr_to_shapely(geom)
+        if shapely_line is None:
+            continue
+        if shapely_line.is_empty:
+            continue
+        if not shapely_line.is_valid:
+            shapely_line = shapely_line.buffer(0)
+        if shapely_line.is_empty:
+            continue
+
+        midpoint = shapely_line.interpolate(0.5, normalized=True)
+        if not setback_union.contains(midpoint):
+            continue
+
+        line_id = feature.GetField("id") if feature.GetFieldIndex("id") >= 0 else None
+        if line_id is None:
+            line_id = line_counter
+            line_counter += 1
+
+        candidate_lines.append({"id": line_id, "geom": shapely_line, "midpoint": midpoint})
+
+    ds = None
+
+    if not candidate_lines:
+        raise RuntimeError(
+            "No perpendicular lines found with midpoint inside the merged setback layer."
+        )
+
+    cells = []
+
+    for setback_id, poly in setback_polygons:
+        relevant_lines = []
+        for line in candidate_lines:
+            if poly.contains(line["midpoint"]) and poly.intersects(line["geom"]):
+                relevant_lines.append(line)
+
+        if not relevant_lines:
+            cells.append(
+                {
+                    "geom": poly,
+                    "setback_id": setback_id,
+                    "line_ids": [],
+                    "area_m2": poly.area,
+                }
+            )
+            continue
+
+        split_lines = geometry.MultiLineString([line["geom"] for line in relevant_lines])
+
+        try:
+            split_result = split(poly, split_lines)
+            split_parts = (
+                list(split_result.geoms) if hasattr(split_result, "geoms") else [split_result]
+            )
+        except Exception as exc:
+            print(f"Warning: split failed for polygon {setback_id}: {exc}")
+            split_parts = [poly]
+
+        for part in split_parts:
+            if part.is_empty:
+                continue
+            if not part.is_valid:
+                part = part.buffer(0)
+            if part.is_empty:
+                continue
+
+            touching_ids = [line["id"] for line in relevant_lines if part.intersects(line["geom"])]
+
+            cells.append(
+                {
+                    "geom": part,
+                    "setback_id": setback_id,
+                    "line_ids": touching_ids,
+                    "area_m2": part.area,
+                }
+            )
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    if output_ds is None:
+        raise RuntimeError(f"Cannot open output dataset: {output_path}")
+
+    if output_ds.GetLayerByName(output_layer_name):
+        output_ds.DeleteLayer(output_layer_name)
+
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
+
+    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
+    output_layer.CreateField(id_field)
+
+    setback_id_field = ogr.FieldDefn("setback_id", ogr.OFTInteger)
+    output_layer.CreateField(setback_id_field)
+
+    line_count_field = ogr.FieldDefn("line_count", ogr.OFTInteger)
+    output_layer.CreateField(line_count_field)
+
+    line_ids_field = ogr.FieldDefn("line_ids", ogr.OFTString)
+    line_ids_field.SetWidth(255)
+    output_layer.CreateField(line_ids_field)
+
+    area_field = ogr.FieldDefn("area_m2", ogr.OFTReal)
+    output_layer.CreateField(area_field)
+
+    feature_id = 1
+    for cell in cells:
+        geom = cell["geom"]
+        ogr_geom = ogr.CreateGeometryFromWkb(geom.wkb)
+        if not ogr_geom.IsValid():
+            ogr_geom = ogr_geom.Buffer(0)
+
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(ogr_geom)
+        out_feature.SetField("id", feature_id)
+
+        if cell["setback_id"] is not None:
+            out_feature.SetField("setback_id", int(cell["setback_id"]))
+
+        out_feature.SetField("line_count", len(cell["line_ids"]))
+        out_feature.SetField("line_ids", ",".join(str(lid) for lid in cell["line_ids"]))
+        out_feature.SetField("area_m2", float(cell["area_m2"]))
+
+        output_layer.CreateFeature(out_feature)
+        out_feature = None
+        feature_id += 1
+
+    output_ds = None
+
+    return output_layer_name
 
 
 def calculate_required_rings(gpkg_path, layer_name, ring_spacing):

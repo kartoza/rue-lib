@@ -5,25 +5,26 @@ from typing import Optional
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
-from rue_lib.streets.grids import grids_from_site, is_good_cell
+from rue_lib.streets.grids import grids_from_site
 
 from .blocks_orthogonal import (
     clip_site_by_roads,
 )
-from .cell import Cell, fix_grid_cells_with_perpendicular_lines
+from .cell import fix_grid_cells_with_perpendicular_lines
 from .config import StreetConfig
-from .fix_bad_angles import inspect_and_fix_bad_angles
 from .operations import (
     break_multipart_features,
     cleanup_grid_blocks,
     clip_layer,
     create_grid_from_on_grid,
     create_local_streets_zone,
+    create_on_grid_cells_from_perpendiculars,
     erase_layer,
     export_layer_to_geojson,
     extract_by_expression,
     extract_site_boundary_lines,
     merge_grid_layers_with_type,
+    merge_layers_without_overlaps,
 )
 
 gdal.UseExceptions()
@@ -140,77 +141,80 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
     return output_path
 
 
-def fix_grid_cells(
+def merge_setback_layers(
     output_path: Path,
-    layer_name: str,
-    target_area: float,
-    cluster_width: float = 20.0,
+    arterial_layer: str = "10a_arterial_setback_clipped",
+    secondary_layer: str = "10b_secondary_setback_clipped",
+    output_layer_name: str = "10c_setback_all",
 ) -> str:
-    """Fix bad grid cells by adjusting angles and splitting oversized cells.
+    """Merge arterial and secondary setback layers into a single, non-overlapping layer.
+
+    The result is a planar union of both layers – no overlapping polygons.
 
     Args:
-        output_path: Path to GeoPackage
-        layer_name: Name of layer containing grid cells
-        target_area: Target area for cells in square meters
-        cluster_width: Width for splitting operations in meters
+        output_path: Path to the GeoPackage.
+        arterial_layer: Name of the arterial setback layer to merge.
+        secondary_layer: Name of the secondary setback layer to merge.
+        output_layer_name: Name of the merged output layer.
 
     Returns:
-        Name of the fixed layer
+        The name of the merged output layer.
     """
     import geopandas as gpd
+    from shapely.ops import unary_union
 
-    print(f"\nFixing bad cells in layer: {layer_name}")
+    print("\nMerging setback layers (planar union, no overlaps)...")
+    print(f"  Arterial setback layer:  {arterial_layer}")
+    print(f"  Secondary setback layer: {secondary_layer}")
+    print(f"  Output merged layer:     {output_layer_name}")
 
-    # Read grid cells
-    gdf = gpd.read_file(output_path, layer=layer_name)
-    print(f"  Loaded {len(gdf)} cells")
+    # Read input layers
+    gdf_art = gpd.read_file(output_path, layer=arterial_layer)
+    gdf_sec = gpd.read_file(output_path, layer=secondary_layer)
 
-    # Convert to Cell objects
-    cells = []
-    for idx, row in gdf.iterrows():
-        quality = is_good_cell(row.geometry, target_area)
-        cell = Cell(id=idx, geom=row.geometry, quality=quality)
-        cells.append(cell)
+    print(f"  Loaded {len(gdf_art)} arterial setback feature(s)")
+    print(f"  Loaded {len(gdf_sec)} secondary setback feature(s)")
 
-    # Count initial bad cells
-    initial_bad = sum(1 for c in cells if not c.quality.get("is_good", False))
-    print(f"  Initial bad cells: {initial_bad}")
+    if gdf_art.empty and gdf_sec.empty:
+        print("  Warning: both input setback layers are empty; nothing to merge")
+        gdf_empty = gpd.GeoDataFrame(geometry=[], crs=None)
+        gdf_empty.to_file(output_path, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
 
-    # Fix bad angles
-    cells = inspect_and_fix_bad_angles(cells, target_area, cluster_width=cluster_width)
+    frames = []
+    if not gdf_art.empty:
+        frames.append(gdf_art)
+    if not gdf_sec.empty:
+        frames.append(gdf_sec)
 
-    # Count final bad cells
-    final_bad = sum(1 for c in cells if not c.quality.get("is_good", False))
-    improvement = initial_bad - final_bad
+    gdf_all = gpd.GeoDataFrame(
+        gpd.pd.concat(frames, ignore_index=True),
+        crs=gdf_art.crs or gdf_sec.crs,
+    )
 
-    print(f"\n  Final bad cells: {final_bad}")
-    if improvement > 0:
-        print(f"  ✓ Improved {improvement} cells")
+    combined_geom = unary_union(gdf_all.geometry)
 
-    # Convert back to GeoDataFrame
-    data = []
-    for cell in cells:
-        data.append(
-            {
-                "id": cell.id,
-                "geometry": cell.geom,
-                "area": cell.geom.area,
-                "is_good": cell.quality.get("is_good", False),
-                "quality": cell.quality.get("reason", ""),
-                "right_angles": cell.quality.get("right_angles", 0),
-                "num_vertices": cell.quality.get("num_vertices", 0),
-                "area_ratio": cell.quality.get("area_ratio", 0.0),
-            }
-        )
+    if combined_geom.is_empty:
+        print("  Warning: union geometry is empty after merge")
+        gdf_empty = gpd.GeoDataFrame(geometry=[], crs=gdf_all.crs)
+        gdf_empty.to_file(output_path, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
 
-    gdf_fixed = gpd.GeoDataFrame(data, crs=gdf.crs)
+    if combined_geom.geom_type == "Polygon":
+        geoms = [combined_geom]
+    elif combined_geom.geom_type == "MultiPolygon":
+        geoms = list(combined_geom.geoms)
+    else:
+        geoms = [combined_geom]
 
-    # Save to new layer
-    fixed_layer_name = f"fixed_{layer_name}"
-    gdf_fixed.to_file(output_path, layer=fixed_layer_name, driver="GPKG")
-    print(f"  Saved fixed cells to layer: {fixed_layer_name}")
+    gdf_merged = gpd.GeoDataFrame(geometry=geoms, crs=gdf_all.crs)
 
-    return fixed_layer_name
+    print(f"  Merged setback polygons (non-overlapping): {len(gdf_merged)}")
+
+    gdf_merged.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    print(f"  Saved merged setbacks layer as: {output_layer_name}")
+
+    return output_layer_name
 
 
 def apply_inner_buffer_to_cells(
@@ -601,20 +605,15 @@ def create_perpendicular_lines_inside_buffer_from_points(
         elif inside2 and not inside1:
             nx, ny = n2x, n2y
         elif inside1 and inside2:
-            # Both directions considered inside (e.g. very thick buffer); pick one
             nx, ny = n1x, n1y
         else:
-            # Neither direction goes inside (point may not be exactly on boundary)
             continue
 
-        # Build candidate line from boundary point inward **in 2D**
         end_x = x0 + nx * line_length
         end_y = y0 + ny * line_length
 
-        # <<< FIXED PART: use coordinate tuples, not Point geometries >>>
         candidate_line = LineString([(x0, y0), (end_x, end_y)])
 
-        # Clip line to buffer polygon so we stay inside
         clipped = candidate_line.intersection(buffer_geom)
         if clipped.is_empty:
             continue
@@ -646,6 +645,422 @@ def create_perpendicular_lines_inside_buffer_from_points(
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
     print(f"  Saved perpendicular lines inside buffer to layer: {output_layer_name}")
+    return output_layer_name
+
+
+def create_guide_points_from_site_boundary(
+    output_path: Path,
+    site_boundary_lines_layer: str,
+    perp_lines_layer: str,
+    output_layer_name: str = "13_site_boundary_points",
+) -> str:
+    """Create guide points from site boundary lines and perpendicular lines.
+
+    This function creates two types of points:
+    1. Corner points where 2 site boundary lines meet
+    2. Points where perpendicular lines intersect/touch site boundary lines
+
+    Args:
+        output_path: Path to the GeoPackage
+        site_boundary_lines_layer: Name of layer containing site boundary lines
+        perp_lines_layer: Name of layer containing perpendicular lines
+        output_layer_name: Name for the output points layer
+
+    Returns:
+        Name of the created points layer
+    """
+    import geopandas as gpd
+    from shapely.geometry import Point
+    from shapely.ops import unary_union
+
+    print("\nCreating guide points from site boundary...")
+    print(f"  Site boundary lines: {site_boundary_lines_layer}")
+    print(f"  Perpendicular lines: {perp_lines_layer}")
+
+    # Load layers
+    gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
+    gdf_perp = gpd.read_file(output_path, layer=perp_lines_layer)
+
+    print(f"  Loaded {len(gdf_boundary)} boundary line(s)")
+    print(f"  Loaded {len(gdf_perp)} perpendicular line(s)")
+
+    points = []
+    point_types = []
+    print("  Extracting corner points...")
+
+    boundary_lines = []
+    for _, row in gdf_boundary.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+
+        if geom.geom_type == "LineString":
+            boundary_lines.append(geom)
+        elif geom.geom_type == "MultiLineString":
+            boundary_lines.extend(list(geom.geoms))
+
+    # Count how many boundary segments share each endpoint
+    endpoint_counts: dict[tuple[float, float], int] = {}
+
+    for line in boundary_lines:
+        coords = list(line.coords)
+        if len(coords) >= 2:
+            # Start and end endpoints
+            for coord in (coords[0], coords[-1]):
+                key = (round(coord[0], 6), round(coord[1], 6))
+                endpoint_counts[key] = endpoint_counts.get(key, 0) + 1
+
+    # Keep only non–dead-end corners: endpoints used by at least two segments
+    corner_points_set = {pt for pt, cnt in endpoint_counts.items() if cnt > 1}
+
+    for pt_coords in corner_points_set:
+        points.append(Point(pt_coords[0], pt_coords[1]))
+        point_types.append("corner")
+
+    print(f"  Found {len(corner_points_set)} non-dead-end corner points")
+
+    print("  Finding perpendicular line intersections...")
+
+    boundary_union = unary_union(boundary_lines)
+
+    extension_factor = 1000.0
+
+    intersection_count = 0
+    for _, row in gdf_perp.iterrows():
+        perp_geom = row.geometry
+        if perp_geom is None or perp_geom.is_empty:
+            continue
+
+        try:
+            from shapely.geometry import LineString
+
+            coords = list(perp_geom.coords)
+            if len(coords) < 2:
+                continue
+
+            start = coords[0]
+            end = coords[-1]
+
+            dx = end[0] - start[0]
+            dy = end[1] - start[1]
+            length = (dx**2 + dy**2) ** 0.5
+
+            if length == 0:
+                continue
+
+            dx /= length
+            dy /= length
+
+            extended_start = (start[0] - dx * extension_factor, start[1] - dy * extension_factor)
+            extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
+
+            extended_line = LineString([extended_start, extended_end])
+
+            intersection = extended_line.intersection(boundary_union)
+
+            if intersection.is_empty:
+                continue
+
+            original_mid_x = (start[0] + end[0]) / 2
+            original_mid_y = (start[1] + end[1]) / 2
+            original_mid = Point(original_mid_x, original_mid_y)
+
+            intersection_points = []
+            if intersection.geom_type == "Point":
+                intersection_points.append(intersection)
+            elif intersection.geom_type == "MultiPoint":
+                intersection_points.extend(list(intersection.geoms))
+            elif intersection.geom_type == "LineString":
+                coords = list(intersection.coords)
+                if coords:
+                    intersection_points.append(Point(coords[0]))
+                    if len(coords) > 1:
+                        intersection_points.append(Point(coords[-1]))
+            elif intersection.geom_type == "MultiLineString":
+                # Take endpoints of all line segments
+                for line in intersection.geoms:
+                    coords = list(line.coords)
+                    if coords:
+                        intersection_points.append(Point(coords[0]))
+                        if len(coords) > 1:
+                            intersection_points.append(Point(coords[-1]))
+
+            # Find the closest intersection point to the original perpendicular line midpoint
+            if intersection_points:
+                closest_pt = min(intersection_points, key=lambda pt: pt.distance(original_mid))
+                pt_coords = (round(closest_pt.x, 6), round(closest_pt.y, 6))
+
+                if pt_coords not in corner_points_set:  # Don't duplicate corner points
+                    points.append(Point(pt_coords[0], pt_coords[1]))
+                    point_types.append("perp_intersection")
+                    intersection_count += 1
+
+        except Exception as e:
+            print(f"  Warning: Failed to compute intersection: {e}")
+            continue
+
+    print(f"  Found {intersection_count} perpendicular line intersection points")
+
+    if not points:
+        print("  Warning: No guide points created!")
+        return output_layer_name
+
+    # Create GeoDataFrame
+    gdf_points = gpd.GeoDataFrame(
+        {"point_type": point_types},
+        geometry=points,
+        crs=gdf_boundary.crs,
+    )
+
+    # Save to GeoPackage
+    gdf_points.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Created {len(points)} total guide points")
+    print(f"    - {len(corner_points_set)} corner points")
+    print(f"    - {intersection_count} perpendicular intersection points")
+    print(f"  Saved to layer: {output_layer_name}")
+
+    return output_layer_name
+
+
+# -------------------------------------------------------------------------
+# New function: Create perpendicular lines from guide points, oriented away from site polygon
+def create_perpendicular_lines_from_guide_points(
+    output_path: Path,
+    site_boundary_lines_layer: str,
+    site_polygon_layer: str,
+    guide_points_layer: str,
+    line_length: float,
+    output_layer_name: str = "13_site_boundary_perp_from_points",
+) -> str | None:
+    """Create perpendicular lines from guide points, oriented away from the site polygon.
+
+    For each guide point:
+      - Find boundary line segments that touch or are very close to the point.
+      - If the point_type == "corner", create one perpendicular line for each touching segment.
+      - Otherwise, create a perpendicular line from the closest boundary segment.
+      - The perpendicular direction is chosen to go OUTSIDE the site polygon.
+      - Any portion of the perpendicular line lying inside the polygon is removed,
+        so the final line is only outside the boundary.
+
+    Args:
+        output_path: Path to the GeoPackage.
+        site_boundary_lines_layer: Name of layer containing site boundary lines.
+        site_polygon_layer: Name of layer containing the site polygon.
+        guide_points_layer: Name of the layer containing guide points (with point_type field).
+        line_length: Length of perpendicular lines (map units, e.g. meters).
+        output_layer_name: Name of the output layer for perpendicular lines.
+
+    Returns:
+        Name of the created perpendicular line layer, or None if no lines are created.
+    """
+    import math
+
+    import geopandas as gpd
+    from shapely.geometry import LineString, Point
+    from shapely.ops import unary_union
+
+    print("\nCreating perpendicular lines from guide points...")
+    print(f"  Boundary lines: {site_boundary_lines_layer}")
+    print(f"  Site polygon:   {site_polygon_layer}")
+    print(f"  Guide points:   {guide_points_layer}")
+
+    # Load layers
+    gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
+    gdf_site = gpd.read_file(output_path, layer=site_polygon_layer)
+    gdf_points = gpd.read_file(output_path, layer=guide_points_layer)
+
+    print(f"  Loaded {len(gdf_boundary)} boundary line(s)")
+    print(f"  Loaded {len(gdf_site)} site polygon feature(s)")
+    print(f"  Loaded {len(gdf_points)} guide point(s)")
+
+    if gdf_boundary.empty or gdf_site.empty or gdf_points.empty:
+        print("  Warning: one or more input layers are empty; no perpendiculars created")
+        return None
+
+    # Collect boundary line segments
+    boundary_lines = []
+    for _, row in gdf_boundary.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
+            continue
+        if geom.geom_type == "LineString":
+            boundary_lines.append(geom)
+        elif geom.geom_type == "MultiLineString":
+            boundary_lines.extend(list(geom.geoms))
+
+    if not boundary_lines:
+        print("  Warning: no boundary line segments found")
+        return None
+
+    # Site polygon geometry (to decide inside vs outside)
+    site_geom = unary_union(gdf_site.geometry)
+    if site_geom is None or site_geom.is_empty:
+        print("  Warning: site polygon geometry is empty")
+        return None
+
+    lines = []
+    records = []
+
+    # Tolerances
+    touch_tol = 1e-6  # distance to treat a point as touching a line
+    tangent_step_fraction = 0.01  # fraction of line length for tangent calc
+    inside_test_step = line_length * 0.01  # small step along normal to test inside/outside
+
+    def boundary_segments_touching_point(pt: Point):
+        """Return list of boundary line segments that touch/are close to the given point."""
+        touching = []
+        for line in boundary_lines:
+            if line.distance(pt) <= touch_tol:
+                touching.append(line)
+        # Fallback: if nothing is within tol, take the closest line
+        if not touching:
+            min_d = float("inf")
+            closest = None
+            for line in boundary_lines:
+                d = line.distance(pt)
+                if d < min_d:
+                    min_d = d
+                    closest = line
+            if closest is not None:
+                touching.append(closest)
+        return touching
+
+    def perpendicular_line_from_segment_at_point(seg: LineString, pt: Point) -> LineString | None:
+        """Build a perpendicular line from segment seg at pt, oriented away from site polygon."""
+        if seg is None or seg.is_empty:
+            return None
+
+        # Parameter along segment
+        seg_len = seg.length
+        if seg_len == 0:
+            return None
+
+        s = seg.project(pt)
+        step = max(seg_len * tangent_step_fraction, line_length * 0.01)
+
+        s0 = max(0.0, s - step)
+        s1 = min(seg_len, s + step)
+
+        p0 = seg.interpolate(s0)
+        p1 = seg.interpolate(s1)
+
+        tx = p1.x - p0.x
+        ty = p1.y - p0.y
+        t_norm = math.hypot(tx, ty)
+        if t_norm == 0:
+            return None
+        tx /= t_norm
+        ty /= t_norm
+
+        # Two candidate normals
+        n1x, n1y = -ty, tx
+        n2x, n2y = ty, -tx
+
+        x0, y0 = pt.x, pt.y
+
+        test1 = Point(x0 + n1x * inside_test_step, y0 + n1y * inside_test_step)
+        test2 = Point(x0 + n2x * inside_test_step, y0 + n2y * inside_test_step)
+
+        inside1 = site_geom.contains(test1)
+        inside2 = site_geom.contains(test2)
+
+        # We want the direction AWAY from the polygon, so pick the one that is NOT inside
+        if inside1 and not inside2:
+            nx, ny = n2x, n2y
+        elif inside2 and not inside1:
+            nx, ny = n1x, n1y
+        elif not inside1 and not inside2:
+            # Both directions considered outside (boundary may be ambiguous); just pick one
+            nx, ny = n1x, n1y
+        else:
+            # Both directions go inside; skip
+            return None
+
+        end_x = x0 + nx * line_length
+        end_y = y0 + ny * line_length
+
+        raw_line = LineString([(x0, y0), (end_x, end_y)])
+
+        # Remove any part of the line that lies inside the polygon, keep only outside piece(s)
+        diff = raw_line.difference(site_geom)
+        if diff.is_empty:
+            return None
+
+        if diff.geom_type == "LineString":
+            return diff
+        if diff.geom_type == "MultiLineString":
+            # Return the piece that starts closest to the original point
+            pieces = list(diff.geoms)
+            return min(pieces, key=lambda seg2: seg2.distance(pt))
+
+        return None
+
+    for idx, row in gdf_points.iterrows():
+        pt = row.geometry
+        if pt is None or pt.is_empty or not isinstance(pt, Point):
+            continue
+
+        pt_type = row.get("point_type", "")
+
+        touching_segments = boundary_segments_touching_point(pt)
+
+        if not touching_segments:
+            continue
+
+        # Corner: create one perpendicular for each touching segment
+        if pt_type == "corner":
+            used = 0
+            for seg in touching_segments:
+                line = perpendicular_line_from_segment_at_point(seg, pt)
+                if line is None or line.length == 0:
+                    continue
+                lines.append(line)
+                rec = row.drop(labels="geometry").to_dict()
+                rec["source_point_index"] = idx
+                rec["source_point_type"] = pt_type
+                records.append(rec)
+                used += 1
+            if used == 0:
+                # Fallback: at least try with the closest segment
+                seg = touching_segments[0]
+                line = perpendicular_line_from_segment_at_point(seg, pt)
+                if line is not None and line.length > 0:
+                    lines.append(line)
+                    rec = row.drop(labels="geometry").to_dict()
+                    rec["source_point_index"] = idx
+                    rec["source_point_type"] = pt_type
+                    records.append(rec)
+        else:
+            # Non-corner: use only the closest touching segment
+            closest_seg = None
+            min_d = float("inf")
+            for seg in touching_segments:
+                d = seg.distance(pt)
+                if d < min_d:
+                    min_d = d
+                    closest_seg = seg
+            if closest_seg is None:
+                continue
+            line = perpendicular_line_from_segment_at_point(closest_seg, pt)
+            if line is None or line.length == 0:
+                continue
+            lines.append(line)
+            rec = row.drop(labels="geometry").to_dict()
+            rec["source_point_index"] = idx
+            rec["source_point_type"] = pt_type
+            records.append(rec)
+
+    if not lines:
+        print("  Warning: no perpendicular lines created from guide points")
+        return None
+
+    gdf_out = gpd.GeoDataFrame(records, geometry=lines, crs=gdf_boundary.crs)
+    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Created {len(lines)} perpendicular lines from guide points")
+    print(f"  Saved to layer: {output_layer_name}")
+
     return output_layer_name
 
 
@@ -817,7 +1232,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         )
 
         if perp_inside_layer is not None:
-            print("Step 14c: Fixing grid cells with perpendicular lines...")
+            print("Step 14d: Fixing grid cells with perpendicular lines...")
             _fixed_cells_layer = fix_grid_cells_with_perpendicular_lines(
                 output_gpkg,
                 "14_off_grid_cells",
@@ -826,6 +1241,43 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 target_area=cfg.off_grid_partitions_preferred_width
                 * cfg.off_grid_partitions_preferred_depth,
             )
+
+    print("Step 15: Generating on-grid cells")
+
+    print("Step 15a: Creating guide points from site boundary...")
+    _guide_points_layer = create_guide_points_from_site_boundary(
+        output_gpkg,
+        "13_site_boundary_lines",
+        perp_inside_layer,
+        output_layer_name="13_site_boundary_points",
+    )
+
+    print("Step 15b: Creating perpendicular lines from guide points...")
+    _guide_perp_layer = create_perpendicular_lines_from_guide_points(
+        output_gpkg,
+        "13_site_boundary_lines",
+        "09_site_minus_all_setbacks",
+        "13_site_boundary_points",
+        line_length=max(cfg.secondary_setback_depth, cfg.arterial_setback_depth) * 1.05,
+        output_layer_name="13_site_boundary_perp_from_points",
+    )
+
+    print("Merge arterial and secondary setbacks with overlaps resolved...")
+    merge_layers_without_overlaps(
+        output_path,
+        ["10a_arterial_setback_clipped", "10b_secondary_setback_clipped"],
+        output_path,
+        "10_setback_clipped_merged",
+    )
+
+    print("Step 16: Creating on-grid cells from merged setbacks and perpendiculars...")
+    _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
+        output_gpkg,
+        "10_setback_clipped_merged",
+        "13_site_boundary_perp_from_points",
+        output_gpkg,
+        "16_on_grid_cells",
+    )
 
     print("Step 17: Merging all grid layers with grid_type information...")
     merge_grid_layers_with_type(
