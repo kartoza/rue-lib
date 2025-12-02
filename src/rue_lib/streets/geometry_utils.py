@@ -122,7 +122,7 @@ def edges_from_ring(ring):
 def extract_edges_from_geom(geom):
     """Extract all edges from a polygon or multipolygon geometry.
 
-    Handles POLYGON, MULTIPOLYGON and falls back to boundary for other geometry types.
+    Handles POLYGON, MULTIPOLYGON, GEOMETRYCOLLECTION and falls back to boundary
 
     Args:
         geom: OGR geometry
@@ -151,16 +151,29 @@ def extract_edges_from_geom(geom):
                 ring = poly.GetGeometryRef(i)
                 edges.extend(edges_from_ring(ring))
 
+    elif gname == "GEOMETRYCOLLECTION":
+        # Recursively extract edges from each geometry in the collection
+        for i in range(geom.GetGeometryCount()):
+            sub_geom = geom.GetGeometryRef(i)
+            if sub_geom is not None:
+                edges.extend(extract_edges_from_geom(sub_geom))
+
     else:
-        boundary = geom.GetBoundary()
-        if boundary is not None:
-            bname = boundary.GetGeometryName().upper()
-            if bname == "LINESTRING":
-                edges.extend(edges_from_ring(boundary))
-            elif bname == "MULTILINESTRING":
-                for i in range(boundary.GetGeometryCount()):
-                    ring = boundary.GetGeometryRef(i)
-                    edges.extend(edges_from_ring(ring))
+        # Try to get boundary for other geometry types
+        try:
+            boundary = geom.GetBoundary()
+            if boundary is not None:
+                bname = boundary.GetGeometryName().upper()
+                if bname == "LINESTRING":
+                    edges.extend(edges_from_ring(boundary))
+                elif bname == "MULTILINESTRING":
+                    for i in range(boundary.GetGeometryCount()):
+                        ring = boundary.GetGeometryRef(i)
+                        edges.extend(edges_from_ring(ring))
+        except Exception as e:
+            # GetBoundary() may fail for some geometry types, just skip
+            print(e)
+            pass
 
     return edges
 

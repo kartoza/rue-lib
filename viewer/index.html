@@ -24,7 +24,7 @@
         }
 
         #sidebar {
-            width: 350px;
+            width: 500px;
             background: #2c3e50;
             color: #ecf0f1;
             padding: 20px;
@@ -347,6 +347,34 @@
             padding-bottom: 4px;
             border-bottom: 1px solid #2c3e50;
         }
+
+        /* Drawing measurement overlay */
+        .measurement-tooltip {
+            position: absolute;
+            background: rgba(0, 0, 0, 0.85);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 4px;
+            font-size: 14px;
+            font-weight: 600;
+            pointer-events: none;
+            z-index: 10;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+            white-space: nowrap;
+        }
+
+        .measurement-tooltip::after {
+            content: '';
+            position: absolute;
+            bottom: -6px;
+            left: 50%;
+            transform: translateX(-50%);
+            width: 0;
+            height: 0;
+            border-left: 6px solid transparent;
+            border-right: 6px solid transparent;
+            border-top: 6px solid rgba(0, 0, 0, 0.85);
+        }
     </style>
 </head>
 <body>
@@ -553,12 +581,347 @@
         map.addControl(new maplibregl.NavigationControl(), 'top-right');
         map.addControl(new maplibregl.ScaleControl(), 'bottom-right');
 
-        const draw = new MapboxDraw({ displayControlsDefault: false });
+        const draw = new MapboxDraw({
+            displayControlsDefault: false,
+            styles: [
+                // Override default draw styles to show lines while drawing
+                {
+                    'id': 'gl-draw-line',
+                    'type': 'line',
+                    'filter': ['all', ['==', '$type', 'LineString'], ['!=', 'mode', 'static']],
+                    'paint': {
+                        'line-color': '#3498db',
+                        'line-width': 4,
+                        'line-opacity': 0.8
+                    }
+                },
+                {
+                    'id': 'gl-draw-line-active',
+                    'type': 'line',
+                    'filter': ['all', ['==', '$type', 'LineString'], ['==', 'active', 'true']],
+                    'paint': {
+                        'line-color': '#f39c12',
+                        'line-width': 4,
+                        'line-opacity': 0.9
+                    }
+                },
+                {
+                    'id': 'gl-draw-polygon-fill',
+                    'type': 'fill',
+                    'filter': ['all', ['==', '$type', 'Polygon'], ['!=', 'mode', 'static']],
+                    'paint': {
+                        'fill-color': '#3498db',
+                        'fill-outline-color': '#3498db',
+                        'fill-opacity': 0.2
+                    }
+                },
+                {
+                    'id': 'gl-draw-polygon-stroke-active',
+                    'type': 'line',
+                    'filter': ['all', ['==', '$type', 'Polygon'], ['==', 'active', 'true']],
+                    'paint': {
+                        'line-color': '#f39c12',
+                        'line-width': 3,
+                        'line-opacity': 0.9
+                    }
+                },
+                {
+                    'id': 'gl-draw-point',
+                    'type': 'circle',
+                    'filter': ['all', ['==', '$type', 'Point'], ['!=', 'meta', 'midpoint']],
+                    'paint': {
+                        'circle-radius': 5,
+                        'circle-color': '#3498db',
+                        'circle-stroke-color': '#fff',
+                        'circle-stroke-width': 2
+                    }
+                }
+            ]
+        });
         map.addControl(draw, 'top-left');
+
+        // Measurement tooltip element
+        let measurementTooltip = null;
+
+        function createMeasurementTooltip() {
+            if (!measurementTooltip) {
+                measurementTooltip = document.createElement('div');
+                measurementTooltip.className = 'measurement-tooltip';
+                measurementTooltip.style.display = 'none';
+                document.body.appendChild(measurementTooltip);
+            }
+            return measurementTooltip;
+        }
+
+        function updateMeasurementTooltip(lngLat, measurement, type = 'length', bearing = null) {
+            const tooltip = createMeasurementTooltip();
+            const point = map.project(lngLat);
+
+            // Account for sidebar width (350px) and add offset for better visibility
+            const sidebar = document.getElementById('sidebar');
+            const sidebarWidth = sidebar ? sidebar.offsetWidth : 350;
+
+            tooltip.style.left = (point.x + sidebarWidth + 15) + 'px';
+            tooltip.style.top = (point.y - 45) + 'px';
+            tooltip.style.display = 'block';
+
+            if (type === 'area') {
+                // Format area measurement
+                if (measurement < 10000) {
+                    tooltip.textContent = `${measurement.toFixed(1)} m²`;
+                } else {
+                    tooltip.textContent = `${(measurement / 10000).toFixed(2)} ha`;
+                }
+            } else {
+                // Format length measurement with optional bearing
+                let lengthText = '';
+                if (measurement < 1000) {
+                    lengthText = `${measurement.toFixed(1)} m`;
+                } else {
+                    lengthText = `${(measurement / 1000).toFixed(2)} km`;
+                }
+
+                if (bearing !== null) {
+                    tooltip.textContent = `${lengthText} @ ${bearing.toFixed(1)}°`;
+                } else {
+                    tooltip.textContent = lengthText;
+                }
+            }
+        }
+
+        function hideMeasurementTooltip() {
+            if (measurementTooltip) {
+                measurementTooltip.style.display = 'none';
+            }
+        }
+
+        // Calculate length in meters
+        function calculateLength(coordinates) {
+            if (coordinates.length < 2) return 0;
+
+            let totalLength = 0;
+            for (let i = 0; i < coordinates.length - 1; i++) {
+                const from = coordinates[i];
+                const to = coordinates[i + 1];
+
+                // Haversine formula for distance
+                const R = 6371000; // Earth radius in meters
+                const lat1 = from[1] * Math.PI / 180;
+                const lat2 = to[1] * Math.PI / 180;
+                const deltaLat = (to[1] - from[1]) * Math.PI / 180;
+                const deltaLng = (to[0] - from[0]) * Math.PI / 180;
+
+                const a = Math.sin(deltaLat / 2) * Math.sin(deltaLat / 2) +
+                         Math.cos(lat1) * Math.cos(lat2) *
+                         Math.sin(deltaLng / 2) * Math.sin(deltaLng / 2);
+                const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+                const distance = R * c;
+
+                totalLength += distance;
+            }
+
+            return totalLength;
+        }
+
+        // Calculate area in square meters using spherical excess formula
+        function calculateArea(coordinates) {
+            if (!coordinates || coordinates.length === 0) return 0;
+
+            // For polygon, coordinates is array of rings, use first ring (exterior)
+            const ring = Array.isArray(coordinates[0][0]) ? coordinates[0] : coordinates;
+
+            if (ring.length < 3) return 0;
+
+            const R = 6371000; // Earth radius in meters
+            let area = 0;
+
+            for (let i = 0; i < ring.length - 1; i++) {
+                const p1 = ring[i];
+                const p2 = ring[i + 1];
+
+                const lat1 = p1[1] * Math.PI / 180;
+                const lat2 = p2[1] * Math.PI / 180;
+                const lng1 = p1[0] * Math.PI / 180;
+                const lng2 = p2[0] * Math.PI / 180;
+
+                area += (lng2 - lng1) * (2 + Math.sin(lat1) + Math.sin(lat2));
+            }
+
+            area = Math.abs(area * R * R / 2.0);
+
+            return area;
+        }
+
+        // Calculate bearing/azimuth between two points (0-360 degrees, 0 = North)
+        function calculateBearing(from, to) {
+            const lat1 = from[1] * Math.PI / 180;
+            const lat2 = to[1] * Math.PI / 180;
+            const deltaLng = (to[0] - from[0]) * Math.PI / 180;
+
+            const y = Math.sin(deltaLng) * Math.cos(lat2);
+            const x = Math.cos(lat1) * Math.sin(lat2) -
+                     Math.sin(lat1) * Math.cos(lat2) * Math.cos(deltaLng);
+            const bearing = Math.atan2(y, x);
+
+            // Convert to degrees and normalize to 0-360
+            return (bearing * 180 / Math.PI + 360) % 360;
+        }
+
+        // Calculate angle between two line segments
+        function calculateAngleBetweenSegments(p1, p2, p3) {
+            // p1-p2 is the first segment, p2-p3 is the second segment
+            // Returns the interior angle at p2 in degrees (0-180)
+            const bearing1 = calculateBearing(p1, p2);
+            const bearing2 = calculateBearing(p2, p3);
+
+            // Calculate the difference
+            let angle = Math.abs(bearing2 - bearing1);
+
+            // Normalize to 0-180 (we want the smaller angle)
+            if (angle > 180) {
+                angle = 360 - angle;
+            }
+
+            return angle;
+        }
+
+        // Track mouse movement during drawing to show measurements
+        let lastDrawnCoords = [];
+
+        // Track if we've logged debug info
+        let hasLoggedDebug = false;
+
+        map.on('mousemove', (e) => {
+            const mode = draw.getMode();
+
+            if (mode === 'draw_line_string') {
+                // Get all features being drawn
+                const allFeatures = draw.getAll().features;
+
+                // Debug logging (only once)
+                if (!hasLoggedDebug) {
+                    console.log('Draw mode:', mode);
+                    console.log('All features:', allFeatures.length);
+                    hasLoggedDebug = true;
+                }
+
+                // Find the feature currently being drawn (usually the last one)
+                let drawingFeature = null;
+                for (const feature of allFeatures) {
+                    if (feature.geometry && feature.geometry.type === 'LineString') {
+                        drawingFeature = feature;
+                    }
+                }
+
+                if (drawingFeature && drawingFeature.geometry.coordinates.length > 0) {
+                    // Calculate length including current mouse position
+                    const coords = [...drawingFeature.geometry.coordinates, [e.lngLat.lng, e.lngLat.lat]];
+                    const length = calculateLength(coords);
+
+                    // Calculate angle between segments if we have at least 2 points
+                    let angle = null;
+                    const existingCoords = drawingFeature.geometry.coordinates;
+                    if (existingCoords.length >= 2) {
+                        // Calculate angle between the last segment and the current segment
+                        const p1 = existingCoords[existingCoords.length - 2];
+                        const p2 = existingCoords[existingCoords.length - 1];
+                        const p3 = [e.lngLat.lng, e.lngLat.lat];
+                        angle = calculateAngleBetweenSegments(p1, p2, p3);
+                    }
+
+                    lastDrawnCoords = coords;
+                    updateMeasurementTooltip(e.lngLat, length, 'length', angle);
+                } else {
+                    hideMeasurementTooltip();
+                }
+            } else if (mode === 'draw_polygon') {
+                // Get all features being drawn
+                const allFeatures = draw.getAll().features;
+
+                // Debug logging (only once)
+                if (!hasLoggedDebug) {
+                    console.log('Draw mode:', mode);
+                    console.log('All features:', allFeatures.length);
+                    hasLoggedDebug = true;
+                }
+
+                // Find the polygon currently being drawn
+                let drawingFeature = null;
+                for (const feature of allFeatures) {
+                    if (feature.geometry && feature.geometry.type === 'Polygon') {
+                        drawingFeature = feature;
+                    }
+                }
+
+                if (drawingFeature && drawingFeature.geometry.coordinates[0] && drawingFeature.geometry.coordinates[0].length > 2) {
+                    // Calculate area including current mouse position to close the polygon
+                    const ring = [...drawingFeature.geometry.coordinates[0], [e.lngLat.lng, e.lngLat.lat]];
+                    // Close the ring for area calculation
+                    if (ring.length > 0 && (ring[0][0] !== ring[ring.length-1][0] || ring[0][1] !== ring[ring.length-1][1])) {
+                        ring.push(ring[0]);
+                    }
+                    const area = calculateArea([ring]);
+                    updateMeasurementTooltip(e.lngLat, area, 'area');
+                } else {
+                    hideMeasurementTooltip();
+                }
+            } else {
+                hideMeasurementTooltip();
+                hasLoggedDebug = false;
+            }
+        });
+
+        // Also update on click to show measurement after each point
+        map.on('click', (e) => {
+            const mode = draw.getMode();
+            if (mode === 'draw_line_string' && lastDrawnCoords.length > 0) {
+                // Update measurement after clicking
+                setTimeout(() => {
+                    const allFeatures = draw.getAll().features;
+                    let drawingFeature = null;
+                    for (const feature of allFeatures) {
+                        if (feature.geometry && feature.geometry.type === 'LineString') {
+                            drawingFeature = feature;
+                        }
+                    }
+
+                    if (drawingFeature && drawingFeature.geometry.coordinates.length > 0) {
+                        const coords = drawingFeature.geometry.coordinates;
+                        const length = calculateLength(coords);
+                        console.log('Line length after click:', length.toFixed(1), 'm');
+                    }
+                }, 50);
+            } else if (mode === 'draw_polygon') {
+                // Log area measurement after clicking
+                setTimeout(() => {
+                    const allFeatures = draw.getAll().features;
+                    let drawingFeature = null;
+                    for (const feature of allFeatures) {
+                        if (feature.geometry && feature.geometry.type === 'Polygon') {
+                            drawingFeature = feature;
+                        }
+                    }
+
+                    if (drawingFeature && drawingFeature.geometry.coordinates[0] && drawingFeature.geometry.coordinates[0].length > 2) {
+                        const area = calculateArea(drawingFeature.geometry.coordinates);
+                        console.log('Polygon area after click:', area.toFixed(1), 'm²');
+                    }
+                }, 50);
+            }
+        });
 
         map.on('draw.create', handleDrawSync);
         map.on('draw.update', handleDrawSync);
         map.on('draw.delete', handleDrawSync);
+
+        // Hide tooltip when drawing completes
+        map.on('draw.create', () => {
+            hideMeasurementTooltip();
+        });
+
+        map.on('draw.modechange', () => {
+            hideMeasurementTooltip();
+        });
 
         // Store loaded layers
         const loadedLayers = new Map();
@@ -810,6 +1173,12 @@
             const mode = type === 'boundary' ? 'draw_polygon' : 'draw_line_string';
             draw.changeMode(mode);
             updateInputStatus(type, 'Drawing mode active — double-click to finish.');
+            console.log('Started drawing mode:', mode, 'for type:', type);
+
+            // Show measurement tooltip immediately
+            if (mode === 'draw_line_string') {
+                createMeasurementTooltip();
+            }
         }
 
         function handleFileUpload(type, file) {

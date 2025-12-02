@@ -1,9 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from pathlib import Path
 
+import geopandas as gpd
+from shapely import Point, unary_union
+from shapely.affinity import scale
 from shapely.geometry import LineString, Polygon
 from shapely.ops import split
+
+from rue_lib.streets.grids import is_good_cell
 
 
 class Cell:
@@ -411,3 +417,303 @@ def inspect_and_fix_cells(
     else:
         # No fixing requested, return inputs unchanged
         return list(cells)
+
+
+def fix_grid_cells_with_perpendicular_lines(
+    output_path: Path,
+    grid_cells_layer: str,
+    perp_lines_layer: str,
+    buffer_layer: str,
+    target_area: float | None = None,
+) -> str:
+    """Fix grid cells by splitting them with perpendicular lines derived from internal points.
+
+    Workflow per cell:
+      - Find points from `<grid_cells_layer>_internal_points_in_buffer` that touch the cell boundary
+      - If the cell touches at least one point:
+          * For each point, find its perpendicular line from `perp_lines_layer`.
+          * Intersect the extended lines with the cell and union the resulting segments.
+          * If splitting the cell with these segments produces >1 parts:
+              - Keep the largest part, drop the smaller part(s).
+              - Recompute quality using is_good_cell().
+          * If the perpendicular lines is outside the cell, then create a merge polygon using:
+              - Start point of perp line (on buffer boundary)
+              - End point of perp line (away from cell)
+              - Grid cell endpoints that are inside the buffer
+    Args:
+        output_path: Path to GeoPackage.
+        grid_cells_layer: Name of layer containing grid cells.
+        perp_lines_layer: Name of layer containing perpendicular lines.
+        buffer_layer: Name of layer containing the buffer polygon.
+        target_area: Target area for cells; if None, uses mean cell area.
+
+    Returns:
+        Name of the fixed grid cells layer.
+    """
+    print("\nFixing grid cells with perpendicular lines...")
+
+    gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
+    gdf_perp_lines = gpd.read_file(output_path, layer=perp_lines_layer)
+    gdf_buffer = gpd.read_file(output_path, layer=buffer_layer)
+
+    points_layer_name = f"{grid_cells_layer}_internal_points_in_buffer"
+    try:
+        gdf_points = gpd.read_file(output_path, layer=points_layer_name)
+        print(f"  Loaded {len(gdf_points)} internal points from {points_layer_name}")
+    except Exception as e:
+        print(f"  Warning: Could not load points layer {points_layer_name}: {e}")
+        gdf_points = None
+
+    print(f"  Loaded {len(gdf_cells)} grid cells")
+    print(f"  Loaded {len(gdf_perp_lines)} perpendicular lines")
+    print(f"  Loaded {len(gdf_buffer)} buffer polygons")
+
+    if gdf_perp_lines.empty:
+        print("  No perpendicular lines to process, returning original cells")
+        return grid_cells_layer
+
+    # Get buffer geometry (assume single polygon)
+    buffer_geom = gdf_buffer.geometry.iloc[0] if not gdf_buffer.empty else None
+    if buffer_geom is None:
+        print("  Warning: No buffer geometry found")
+
+    if target_area is None:
+        target_area = gdf_cells.geometry.area.mean()
+        print(f"  Using mean cell area as target: {target_area:.1f} m²")
+    else:
+        print(f"  Using provided target area: {target_area:.1f} m²")
+
+    fixed_cells = []
+    fixed_attrs = []
+    cells_modified = 0
+    cells_split = 0
+    cells_merged = 0
+
+    for cell_idx, cell_row in gdf_cells.iterrows():
+        cell_geom = cell_row.geometry
+        cell_boundary = cell_geom.boundary
+
+        touching_points = []
+        if gdf_points is not None:
+            for pt_idx, pt_row in gdf_points.iterrows():
+                pt_geom = pt_row.geometry
+                if cell_boundary.distance(pt_geom) < 1.0:
+                    touching_points.append((pt_idx, pt_geom, pt_row))
+
+        if not touching_points:
+            fixed_cells.append(cell_geom)
+            attrs = dict(cell_row)
+            attrs.pop("geometry", None)
+            fixed_attrs.append(attrs)
+            continue
+
+        perp_lines_with_points = []
+        for _pt_idx, pt_geom, pt_row in touching_points:
+            line_id = pt_row.get("line_id", None)
+            if line_id is not None:
+                matching_lines = gdf_perp_lines[gdf_perp_lines["line_id"] == line_id]
+                for _, line_row in matching_lines.iterrows():
+                    perp_lines_with_points.append((line_row.geometry, pt_geom, pt_row))
+
+        if not perp_lines_with_points:
+            fixed_cells.append(cell_geom)
+            attrs = dict(cell_row)
+            attrs.pop("geometry", None)
+            fixed_attrs.append(attrs)
+            continue
+
+        cutting_lines = []
+        merging_data = []
+
+        for perp_line, pt_geom, pt_row in perp_lines_with_points:
+            perp_coords = list(perp_line.coords)
+            if len(perp_coords) < 2:
+                continue
+
+            intersection = perp_line.intersection(cell_geom)
+
+            has_interior_intersection = False
+            if intersection.geom_type == "LineString" and intersection.length > 0.1:
+                has_interior_intersection = True
+            elif intersection.geom_type == "MultiLineString":
+                for line_seg in intersection.geoms:
+                    if line_seg.length > 0.1:
+                        has_interior_intersection = True
+                        break
+
+            if has_interior_intersection:
+                extended_line = scale(perp_line, xfact=3.0, yfact=3.0, origin="center")
+                cutting_lines.append(extended_line)
+            else:
+                merging_data.append((perp_line, pt_geom, pt_row))
+
+        result_geom = cell_geom
+        cell_was_split = False
+
+        if cutting_lines or merging_data:
+            print(
+                f"  Cell {cell_idx}: {len(cutting_lines)} cutting lines, "
+                f"{len(merging_data)} merging lines"
+            )
+
+        if merging_data and buffer_geom is not None:
+            try:
+                for perp_line, _touching_point, _pt_row in merging_data:
+                    perp_coords = list(perp_line.coords)
+                    if len(perp_coords) < 2:
+                        continue
+
+                    perp_start = perp_coords[0]
+                    perp_end = perp_coords[-1]
+
+                    # Find cell vertices inside the buffer
+                    cell_coords = list(result_geom.exterior.coords)
+                    vertices_in_buffer = []
+                    for coord in cell_coords[:-1]:
+                        pt = Point(coord)
+                        if buffer_geom.contains(pt) or buffer_geom.boundary.distance(pt) < 0.1:
+                            vertices_in_buffer.append(coord)
+
+                    if len(vertices_in_buffer) < 1:
+                        continue
+
+                    # Find consecutive vertex pair in buffer closest to perp_start
+                    min_dist = float("inf")
+                    best_v1, best_v2 = None, None
+
+                    for i in range(len(cell_coords) - 1):
+                        v1, v2 = cell_coords[i], cell_coords[i + 1]
+                        v1_in = any(
+                            abs(v1[0] - vb[0]) < 0.01 and abs(v1[1] - vb[1]) < 0.01
+                            for vb in vertices_in_buffer
+                        )
+                        v2_in = any(
+                            abs(v2[0] - vb[0]) < 0.01 and abs(v2[1] - vb[1]) < 0.01
+                            for vb in vertices_in_buffer
+                        )
+
+                        if v1_in and v2_in:
+                            midpoint = ((v1[0] + v2[0]) / 2, (v1[1] + v2[1]) / 2)
+                            dist = Point(midpoint).distance(Point(perp_start))
+                            if dist < min_dist:
+                                min_dist = dist
+                                best_v1, best_v2 = v1, v2
+
+                    if best_v1 is None or best_v2 is None:
+                        continue
+
+                    # Create quadrilateral with correct vertex order
+                    dist_v1_ps = Point(best_v1).distance(Point(perp_start))
+                    dist_v1_pe = Point(best_v1).distance(Point(perp_end))
+                    dist_v2_ps = Point(best_v2).distance(Point(perp_start))
+                    dist_v2_pe = Point(best_v2).distance(Point(perp_end))
+
+                    if dist_v1_ps + dist_v2_pe < dist_v1_pe + dist_v2_ps:
+                        coords = [best_v1, best_v2, perp_end, perp_start, best_v1]
+                    else:
+                        coords = [best_v1, best_v2, perp_start, perp_end, best_v1]
+
+                    try:
+                        merge_polygon = Polygon(coords)
+                        if not merge_polygon.is_valid:
+                            merge_polygon = merge_polygon.buffer(0)
+
+                        if merge_polygon.is_valid and merge_polygon.area > 0.1:
+                            if not result_geom.intersects(merge_polygon):
+                                continue
+
+                            original_area = result_geom.area
+                            merged = result_geom.union(merge_polygon)
+
+                            if merged.geom_type == "Polygon":
+                                new_geom = merged.buffer(0)
+                                area_change = new_geom.area - original_area
+
+                                if area_change > 0.1:
+                                    print(
+                                        f"    Cell {cell_idx} merged: area {original_area:.1f} ->"
+                                        f" {new_geom.area:.1f} (change: +{area_change:.1f})"
+                                    )
+                                    result_geom = new_geom
+                                    cells_merged += 1
+                                    if not cell_was_split:
+                                        cells_modified += 1
+
+                            elif merged.geom_type == "MultiPolygon":
+                                new_geom = unary_union(merged)
+                                if new_geom.geom_type == "MultiPolygon":
+                                    new_geom = max(new_geom.geoms, key=lambda p: p.area)
+
+                                new_geom = new_geom.buffer(0)
+                                area_change = new_geom.area - original_area
+
+                                if area_change > 0.1:
+                                    print(
+                                        f"    Cell {cell_idx} merged: area {original_area:.1f} -> "
+                                        f"{new_geom.area:.1f} (change: +{area_change:.1f})"
+                                    )
+                                    result_geom = new_geom
+                                    cells_merged += 1
+                                    if not cell_was_split:
+                                        cells_modified += 1
+                    except Exception as e:
+                        print(e)
+                        continue
+
+            except Exception as e:
+                print(e)
+                pass
+
+        if cutting_lines:
+            try:
+                if len(cutting_lines) == 1:
+                    split_line = cutting_lines[0]
+                else:
+                    split_line = unary_union(cutting_lines)
+
+                original_area = result_geom.area
+                split_result = split(result_geom, split_line)
+
+                if hasattr(split_result, "geoms") and len(split_result.geoms) > 1:
+                    parts = [g for g in split_result.geoms if g.geom_type == "Polygon"]
+                    if parts:
+                        new_geom = max(parts, key=lambda p: p.area)
+                        new_area = new_geom.area
+                        area_change = new_area - original_area
+                        print(
+                            f"    Cell {cell_idx} split: area {original_area:.1f} -> {new_area:.1f}"
+                            f"(change: {area_change:.1f})"
+                        )
+                        result_geom = new_geom
+                        cells_split += 1
+                        cells_modified += 1
+                        cell_was_split = True
+
+            except Exception as e:
+                print(f"  Warning: Failed to split cell {cell_idx}: {e}")
+
+        quality = is_good_cell(result_geom, target_area)
+        fixed_cells.append(result_geom)
+
+        attrs = dict(cell_row)
+        attrs.pop("geometry", None)
+        attrs["is_good"] = quality.get("is_good", False)
+        attrs["reason"] = quality.get("reason", "")
+        attrs["right_angles"] = quality.get("right_angles", 0)
+        attrs["area_ratio"] = quality.get("area_ratio", 0.0)
+        attrs["num_vertices"] = quality.get("num_vertices", 0)
+        fixed_attrs.append(attrs)
+
+    print(f"  Processed {len(gdf_cells)} cells:")
+    print(f"    - Modified: {cells_modified}")
+    print(f"    - Split: {cells_split}")
+    print(f"    - Merged: {cells_merged}")
+    print(f"    - Unchanged: {len(gdf_cells) - cells_modified}")
+
+    gdf_fixed = gpd.GeoDataFrame(fixed_attrs, geometry=fixed_cells, crs=gdf_cells.crs)
+
+    output_layer_name = f"{grid_cells_layer}_fixed_by_perp_lines"
+    gdf_fixed.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved fixed cells to layer: {output_layer_name}")
+    return output_layer_name
