@@ -549,7 +549,8 @@ def create_local_streets_zone(
     input_ds = None
 
     if not inner_geoms:
-        raise RuntimeError(f"No valid geometries after inner buffer from {input_layer_name}")
+        print(f"No valid geometries after inner buffer from {input_layer_name}")
+        return (None, None)
 
     # Dissolve all inner buffers
     dissolved_inner = unary_union(inner_geoms)
