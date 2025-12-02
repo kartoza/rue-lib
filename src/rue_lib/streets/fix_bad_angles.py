@@ -134,7 +134,7 @@ def fix_area_too_small_bad_angles(
     target_area: float,
     all_cells: list[Cell] | None = None,
     cluster_width: float = 20.0,
-) -> list[Cell]:
+) -> tuple[list[Cell], int | None]:
     """Fix cells with area_too_small and only 2 right angles.
 
     Args:
@@ -144,16 +144,16 @@ def fix_area_too_small_bad_angles(
         cluster_width: Width of the cluster/split line in meters
 
     Returns:
-        List containing either the fixed cell or the original cell if unfixable
+        Tuple of (list containing fixed cell or original cell, neighbor index that was updated)
     """
     quality = cell.quality
 
     # Only handle area_too_small with exactly 2 right angles
     if quality.get("reason") != "area_too_small":
-        return [cell]
+        return [cell], None
 
     if quality.get("right_angles", 0) != 2:
-        return [cell]
+        return [cell], None
 
     print(f"[fix-angles] Attempting to fix cell with 2 right angles (area: {cell.geom.area:.1f}m²)")
 
@@ -163,19 +163,19 @@ def fix_area_too_small_bad_angles(
 
     if len(non_ortho_indices) < 2:
         print(f"[fix-angles]   Expected 2 non-orthogonal corners, found {len(non_ortho_indices)}")
-        return [cell]
+        return [cell], None
 
     # Check if it's a quadrilateral
     if len(coords) != 4:
         print(f"[fix-angles]   Cell is not a quadrilateral ({len(coords)} vertices)")
-        return [cell]
+        return [cell], None
 
     # Check if good corners are adjacent
     right_angle_indices = [i for i in range(4) if i not in non_ortho_indices]
 
     if len(right_angle_indices) != 2:
         print(f"[fix-angles]   Expected 2 right-angle corners, found {len(right_angle_indices)}")
-        return [cell]
+        return [cell], None
 
     good_idx_0 = right_angle_indices[0]
     good_idx_1 = right_angle_indices[1]
@@ -184,7 +184,7 @@ def fix_area_too_small_bad_angles(
 
     if not are_good_adjacent:
         print("[fix-angles]   Good corners are not adjacent (cannot fix with this method)")
-        return [cell]
+        return [cell], None
 
     print(f"[fix-angles]   Non-orthogonal corners at indices: {non_ortho_indices}")
     print(f"[fix-angles]   Good corners at indices {right_angle_indices} are adjacent")
@@ -205,19 +205,9 @@ def fix_area_too_small_bad_angles(
 
     print(f"[fix-angles]   Longest edge is edge {edge_idx} with length {edge_len:.1f}m")
 
-    # Calculate interior angles
+    # Calculate circular angles at both corners of the longest edge
     prev_corner = coords[(edge_idx - 1) % 4]
     next_corner = coords[(edge_idx + 2) % 4]
-
-    vec_in_to_p1 = (p1[0] - prev_corner[0], p1[1] - prev_corner[1])
-    vec_out_from_p1 = (p2[0] - p1[0], p2[1] - p1[1])
-    angle_at_p1 = calculate_angle_degrees(vec_in_to_p1, vec_out_from_p1)
-
-    vec_in_to_p2 = (p2[0] - p1[0], p2[1] - p1[1])
-    vec_out_from_p2 = (next_corner[0] - p2[0], next_corner[1] - p2[1])
-    angle_at_p2 = calculate_angle_degrees(vec_in_to_p2, vec_out_from_p2)
-
-    # Calculate circular angles (angle swept around the corner)
     angle_to_prev_p1 = math.atan2(prev_corner[1] - p1[1], prev_corner[0] - p1[0])
     angle_to_p2_from_p1 = math.atan2(p2[1] - p1[1], p2[0] - p1[0])
     circular_angle_p1 = angle_to_p2_from_p1 - angle_to_prev_p1
@@ -232,74 +222,79 @@ def fix_area_too_small_bad_angles(
         circular_angle_p2 += 2 * math.pi
     circular_angle_p2_deg = math.degrees(circular_angle_p2)
 
-    # Swap p1 and p2 so that p2 has the smaller circular angle
+    # Use the corner with the smaller circular angle
     if circular_angle_p1_deg < circular_angle_p2_deg:
-        p1, p2 = p2, p1
-        angle_at_p1, angle_at_p2 = angle_at_p2, angle_at_p1
-        circular_angle_p1_deg, circular_angle_p2_deg = circular_angle_p2_deg, circular_angle_p1_deg
-        vec_in_to_p1, vec_in_to_p2 = vec_in_to_p2, vec_in_to_p1
-        vec_out_from_p1, vec_out_from_p2 = vec_out_from_p2, vec_out_from_p1
-        prev_corner, next_corner = next_corner, prev_corner
+        corner = p1
+        circular_angle_deg = circular_angle_p1_deg
+        other_corner = p2
+    else:
+        corner = p2
+        circular_angle_deg = circular_angle_p2_deg
+        other_corner = p1
 
-    print(f"[fix-angles]   Using circular angle at p2: {circular_angle_p2_deg:.1f}°")
+    print(f"[fix-angles]   Using circular angle: {circular_angle_deg:.1f}°")
 
-    # Set up direction vectors from p2 along each edge
-    corner = p2
-    edge_dir_x = (p1[0] - p2[0]) / edge_len
-    edge_dir_y = (p1[1] - p2[1]) / edge_len
+    # Calculate direction along the longest edge
+    edge_dir_x = (other_corner[0] - corner[0]) / edge_len
+    edge_dir_y = (other_corner[1] - corner[1]) / edge_len
 
-    other_edge_len = math.sqrt((next_corner[0] - p2[0]) ** 2 + (next_corner[1] - p2[1]) ** 2)
-    other_edge_dir_x = (next_corner[0] - p2[0]) / other_edge_len
-    other_edge_dir_y = (next_corner[1] - p2[1]) / other_edge_len
+    # Create perpendicular direction to the longest edge
+    # Perpendicular to (dx, dy) is (-dy, dx) or (dy, -dx)
+    perp_dir_x = -edge_dir_y
+    perp_dir_y = edge_dir_x
 
-    # Calculate angle between direction vectors
-    dot_dirs = edge_dir_x * other_edge_dir_x + edge_dir_y * other_edge_dir_y
-    angle_between_dirs_rad = math.acos(max(-1.0, min(1.0, dot_dirs)))
+    # We need to find a point on the longest edge such that when we draw a perpendicular
+    # line from it, the segment inside the cell has length = cluster_width
+    # Using the circular angle and trigonometry:
+    # distance_along_edge = cluster_width / tan(circular_angle_rad)
+    circular_angle_rad = math.radians(circular_angle_deg)
+    distance_along_edge = cluster_width / math.tan(circular_angle_rad)
 
-    # Use Law of Cosines to find equal distances along both edges
-    # such that the line between them has length = cluster_width
-    distance_both = cluster_width / (2 * math.sin(angle_between_dirs_rad / 2))
+    print(f"[fix-angles]   Distance along edge: {distance_along_edge:.1f}m")
 
-    # Calculate split points
-    first_point = (
-        float(corner[0] + edge_dir_x * distance_both),
-        float(corner[1] + edge_dir_y * distance_both),
-    )
-    second_point = (
-        float(corner[0] + other_edge_dir_x * distance_both),
-        float(corner[1] + other_edge_dir_y * distance_both),
+    # Find point on longest edge at this distance from corner
+    point_on_edge = (
+        float(corner[0] + edge_dir_x * distance_along_edge),
+        float(corner[1] + edge_dir_y * distance_along_edge),
     )
 
-    # Verify distance
-    distance_between = math.sqrt(
-        (second_point[0] - first_point[0]) ** 2 + (second_point[1] - first_point[1]) ** 2
-    )
-
-    if abs(distance_between - cluster_width) > 1.0:
-        print(
-            f"[fix-angles]   ERROR: Distance mismatch! Expected {cluster_width:.1f}m, "
-            f"got {distance_between:.1f}m"
-        )
-        return [cell]
-
-    # Extend the split line to ensure it crosses the entire polygon
-    split_dir_x = second_point[0] - first_point[0]
-    split_dir_y = second_point[1] - first_point[1]
-    split_len = math.sqrt(split_dir_x**2 + split_dir_y**2)
-    split_unit_x = split_dir_x / split_len
-    split_unit_y = split_dir_y / split_len
-
-    extension = 200.0
+    # Extend the perpendicular line in both directions to ensure it crosses the polygon
+    extension = cluster_width * 2
     extended_start = (
-        first_point[0] - split_unit_x * extension,
-        first_point[1] - split_unit_y * extension,
+        point_on_edge[0] - perp_dir_x * extension,
+        point_on_edge[1] - perp_dir_y * extension,
     )
     extended_end = (
-        second_point[0] + split_unit_x * extension,
-        second_point[1] + split_unit_y * extension,
+        point_on_edge[0] + perp_dir_x * extension,
+        point_on_edge[1] + perp_dir_y * extension,
     )
 
     split_line = LineString([extended_start, extended_end])
+
+    # Check if split line intersects with a bad neighbor cell
+    if all_cells is not None:
+        bad_neighbor_idx = None
+        for i, other_cell in enumerate(all_cells):
+            if other_cell.id == cell.id:
+                continue
+
+            # Check if this neighbor is bad (not good)
+            if other_cell.quality.get("is_good", False):
+                continue
+
+            # Check if split line intersects with neighbor
+            if other_cell.geom.intersects(split_line):
+                # Check if they share an edge (not just touch at a point)
+                intersection = cell.geom.intersection(other_cell.geom)
+                if intersection.geom_type == "LineString" and intersection.length > 1.0:
+                    bad_neighbor_idx = i
+                    break
+
+        if bad_neighbor_idx is None:
+            print("[fix-angles]   No bad neighbor found along split line, skipping fix")
+            return [cell], None
+
+        print(f"[fix-angles]   Found bad neighbor cell {all_cells[bad_neighbor_idx].id}")
 
     try:
         result = shapely_split(cell.geom, split_line)
@@ -308,26 +303,55 @@ def fix_area_too_small_bad_angles(
         if len(parts) > 1:
             print(f"[fix-angles]   Split cell into {len(parts)} pieces")
 
-            # Return only the biggest piece
+            # Identify biggest and smallest parts
             biggest_part = max(parts, key=lambda g: g.area)
+            smallest_part = min(parts, key=lambda g: g.area)
 
             # Create new cell with biggest part
             new_quality = is_good_cell(biggest_part, target_area)
             new_cell = Cell(id=cell.id, geom=biggest_part, quality=new_quality)
 
             print(
-                f"[fix-angles]   Returning biggest piece: area={biggest_part.area:.1f}m², "
+                f"[fix-angles]   Biggest piece: area={biggest_part.area:.1f}m², "
                 f"right_angles={new_quality.get('right_angles', 0)}"
             )
 
-            return [new_cell]
+            # If we have all_cells, merge smallest part with bad neighbor
+            if all_cells is not None and bad_neighbor_idx is not None:
+                # Merge geometries and ensure valid polygon
+                neighbor_cell = all_cells[bad_neighbor_idx]
+                merged_geom = neighbor_cell.geom.union(smallest_part)
+
+                # If union creates a GeometryCollection or MultiPolygon, extract the main polygon
+                if merged_geom.geom_type == "GeometryCollection":
+                    # Get the largest polygon from the collection
+                    polygons = [g for g in merged_geom.geoms if g.geom_type == "Polygon"]
+                    if polygons:
+                        merged_geom = max(polygons, key=lambda p: p.area)
+                elif merged_geom.geom_type == "MultiPolygon":
+                    # Get the largest polygon from the multipolygon
+                    merged_geom = max(merged_geom.geoms, key=lambda p: p.area)
+
+                # Simplify to remove unnecessary vertices and ensure valid geometry
+                merged_geom = merged_geom.buffer(0)
+
+                merged_quality = is_good_cell(merged_geom, target_area)
+                all_cells[bad_neighbor_idx] = Cell(
+                    id=neighbor_cell.id, geom=merged_geom, quality=merged_quality
+                )
+                print(
+                    f"[fix-angles]   Merged small piece ({smallest_part.area:.1f}m²) "
+                    f"with neighbor {neighbor_cell.id}, new area={merged_geom.area:.1f}m²"
+                )
+
+            return [new_cell], bad_neighbor_idx
         else:
             print("[fix-angles]   Split did not create multiple pieces")
-            return [cell]
+            return [cell], None
 
     except Exception as e:
         print(f"[fix-angles]   Split failed: {e}")
-        return [cell]
+        return [cell], None
 
 
 def inspect_and_fix_bad_angles(
@@ -351,7 +375,7 @@ def inspect_and_fix_bad_angles(
     bad_angle_cells = []
     for i, cell in enumerate(cells):
         quality = cell.quality
-        if quality.get("reason") == "area_too_small" and quality.get("right_angles", 0) == 2:
+        if quality.get("reason") == "area_too_small" and quality.get("right_angles", 0) <= 2:
             bad_angle_cells.append((i, cell))
 
     if not bad_angle_cells:
@@ -378,19 +402,38 @@ def inspect_and_fix_bad_angles(
 
         cell = working_cells[current_idx]
 
-        result = fix_area_too_small_bad_angles(
+        result, updated_neighbor_idx = fix_area_too_small_bad_angles(
             cell,
             target_area,
             all_cells=working_cells,
-            cluster_width=20,
+            cluster_width=cluster_width,
         )
 
-        if len(result) == 1 and result[0].quality.get("right_angles", 0) > cell.quality.get(
-            "right_angles", 0
-        ):
-            fixed_count += 1
-            working_cells[current_idx] = result[0]
-            print("[fix-angles]   ✓ Cell improved")
+        # If a neighbor was updated, refresh our reference to it in bad_angle_cells
+        if updated_neighbor_idx is not None:
+            # Update any cells in bad_angle_cells that point to the updated neighbor
+            updated_neighbor = working_cells[updated_neighbor_idx]
+            for i, (orig_idx, bad_cell) in enumerate(bad_angle_cells):
+                if bad_cell.id == updated_neighbor.id:
+                    # Update the reference in the list
+                    bad_angle_cells[i] = (orig_idx, updated_neighbor)
+                    print(
+                        f"[fix-angles]   Updated neighbor cell {updated_neighbor.id} in "
+                        f"processing queue"
+                    )
+                    break
+
+        # Update the current cell in working_cells
+        if len(result) == 1:
+            if result[0].quality.get("right_angles", 0) > cell.quality.get("right_angles", 0):
+                fixed_count += 1
+                working_cells[current_idx] = result[0]
+                print("[fix-angles]   ✓ Cell improved")
+            elif result[0].id == cell.id and result[0].geom == cell.geom:
+                print("[fix-angles]   Cell unchanged (no bad neighbor or unfixable)")
+            else:
+                # Cell was updated but didn't improve right angles
+                working_cells[current_idx] = result[0]
         elif len(result) != 1:
             print(f"[fix-angles]   Cell was split into {len(result)} pieces")
             working_cells.pop(current_idx)

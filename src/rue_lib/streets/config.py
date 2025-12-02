@@ -32,3 +32,9 @@ class StreetConfig:
     )
     sidewalk_width_m: float = 3.0
     road_locals_width_m: float = 10.0
+
+    # Cluster / partition geometry
+    # Depth of on-grid clusters along different road types (meters)
+    part_art_d: float = 40.0  # Depth of on-grid clusters along arteries
+    part_sec_d: float = 30.0  # Depth of on-grid clusters along secondaries
+    part_loc_d: float = 20.0  # Depth of on-grid clusters along local roads

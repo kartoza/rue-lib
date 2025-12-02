@@ -4,12 +4,14 @@ from pathlib import Path
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
-from rue_lib.streets.grids import grids_from_site
+from rue_lib.streets.grids import grids_from_site, is_good_cell
 
 from .blocks_orthogonal import (
     clip_site_by_roads,
 )
+from .cell import Cell
 from .config import StreetConfig
+from .fix_bad_angles import inspect_and_fix_bad_angles
 from .operations import (
     break_multipart_features,
     cleanup_grid_blocks,
@@ -135,6 +137,79 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
     )
 
     return output_path
+
+
+def fix_grid_cells(
+    output_path: Path,
+    layer_name: str,
+    target_area: float,
+    cluster_width: float = 20.0,
+) -> str:
+    """Fix bad grid cells by adjusting angles and splitting oversized cells.
+
+    Args:
+        output_path: Path to GeoPackage
+        layer_name: Name of layer containing grid cells
+        target_area: Target area for cells in square meters
+        cluster_width: Width for splitting operations in meters
+
+    Returns:
+        Name of the fixed layer
+    """
+    import geopandas as gpd
+
+    print(f"\nFixing bad cells in layer: {layer_name}")
+
+    # Read grid cells
+    gdf = gpd.read_file(output_path, layer=layer_name)
+    print(f"  Loaded {len(gdf)} cells")
+
+    # Convert to Cell objects
+    cells = []
+    for idx, row in gdf.iterrows():
+        quality = is_good_cell(row.geometry, target_area)
+        cell = Cell(id=idx, geom=row.geometry, quality=quality)
+        cells.append(cell)
+
+    # Count initial bad cells
+    initial_bad = sum(1 for c in cells if not c.quality.get("is_good", False))
+    print(f"  Initial bad cells: {initial_bad}")
+
+    # Fix bad angles
+    cells = inspect_and_fix_bad_angles(cells, target_area, cluster_width=cluster_width)
+
+    # Count final bad cells
+    final_bad = sum(1 for c in cells if not c.quality.get("is_good", False))
+    improvement = initial_bad - final_bad
+
+    print(f"\n  Final bad cells: {final_bad}")
+    if improvement > 0:
+        print(f"  ✓ Improved {improvement} cells")
+
+    # Convert back to GeoDataFrame
+    data = []
+    for cell in cells:
+        data.append(
+            {
+                "id": cell.id,
+                "geometry": cell.geom,
+                "area": cell.geom.area,
+                "is_good": cell.quality.get("is_good", False),
+                "quality": cell.quality.get("reason", ""),
+                "right_angles": cell.quality.get("right_angles", 0),
+                "num_vertices": cell.quality.get("num_vertices", 0),
+                "area_ratio": cell.quality.get("area_ratio", 0.0),
+            }
+        )
+
+    gdf_fixed = gpd.GeoDataFrame(data, crs=gdf.crs)
+
+    # Save to new layer
+    fixed_layer_name = f"fixed_{layer_name}"
+    gdf_fixed.to_file(output_path, layer=fixed_layer_name, driver="GPKG")
+    print(f"  Saved fixed cells to layer: {fixed_layer_name}")
+
+    return fixed_layer_name
 
 
 def generate_local_streets(
@@ -295,14 +370,16 @@ def generate_streets(cfg: StreetConfig) -> Path:
         cfg.off_grid_partitions_preferred_depth,
     )
 
-    print("Step 15: Generating local streets zones for off-grid blocks...")
-    generate_local_streets(
+    print("Step 15: Fixing bad cells in off-grid blocks...")
+    fixed_layer = fix_grid_cells(
         output_gpkg,
-        cfg,
         "site_minus_all_setbacks_grid_cells",
+        target_area=cfg.off_grid_partitions_preferred_width
+        * cfg.off_grid_partitions_preferred_depth,
+        cluster_width=cfg.part_loc_d,
     )
 
-    print("Step 16: Merging all grid layers with grid_type information...")
+    print("Step 17: Merging all grid layers with grid_type information...")
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
@@ -311,11 +388,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
             ("intersected_setbacks", "on_grid_intersected"),
             ("arterial_setback_grid_cleaned", "on_grid_art"),
             ("secondary_setback_grid_cleaned", "on_grid_sec"),
-            ("site_minus_all_setbacks_grid_cells", "off_grid"),
+            (fixed_layer, "off_grid"),
         ],
     )
 
-    print("Step 17: Exporting merged grids to GeoJSON...")
+    print("Step 18: Exporting merged grids to GeoJSON...")
     output_geojson = output_dir / "all_grids_merged.geojson"
     export_layer_to_geojson(
         str(output_gpkg),
