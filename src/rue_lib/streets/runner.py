@@ -18,7 +18,11 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_inside_buffer_from_points,
 )
 
-from .cell import fix_grid_cells_with_perpendicular_lines, remove_dead_end_cells
+from .cell import (
+    fix_grid_cells_with_perpendicular_lines,
+    merge_small_cells_with_neighbors,
+    remove_dead_end_cells,
+)
 from .config import StreetConfig
 from .operations import (
     create_on_grid_cells_from_perpendiculars,
@@ -131,6 +135,23 @@ def generate_streets(cfg: StreetConfig) -> Path:
         point_layer_name="14_off_grid_points",
     )
 
+    print("Step 14e: Removing dead end cells")
+    cleaned_cells_layer = remove_dead_end_cells(
+        output_gpkg,
+        "14_off_grid_cells",
+        "13_site_boundary_lines",
+        "09_site_minus_all_setbacks",
+    )
+
+    print("Step 14f: Merging small cells with neighbors")
+    cleaned_cells_layer = merge_small_cells_with_neighbors(
+        output_gpkg,
+        cleaned_cells_layer,
+        target_area=cfg.off_grid_partitions_preferred_width
+        * cfg.off_grid_partitions_preferred_depth,
+        area_threshold_ratio=0.5,
+    )
+
     print("Step 14a: Creating inner buffer zone from site boundary...")
     _buffered_layer = apply_inner_buffer_to_cells(
         output_gpkg,
@@ -141,7 +162,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 14b: Extracting grid lines inside buffer zone...")
     lines_layer = extract_grid_lines_in_buffer(
         output_gpkg,
-        "14_off_grid_cells",
+        cleaned_cells_layer,
         "14a_site_boundary_inner_buffer",
     )
     fixed_cells_layer = None
@@ -157,22 +178,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
             print("Step 14d: Fixing grid cells with perpendicular lines...")
             fixed_cells_layer = fix_grid_cells_with_perpendicular_lines(
                 output_gpkg,
-                "14_off_grid_cells",
+                cleaned_cells_layer,
                 perp_inside_layer,
                 "14a_site_boundary_inner_buffer",
                 target_area=cfg.off_grid_partitions_preferred_width
                 * cfg.off_grid_partitions_preferred_depth,
             )
-
-    cleaned_cells_layer = ""
-    if fixed_cells_layer is not None:
-        print("Step 14e: Removing dead end cells")
-        cleaned_cells_layer = remove_dead_end_cells(
-            output_gpkg,
-            fixed_cells_layer,
-            "13_site_boundary_lines",
-            "09_site_minus_all_setbacks",
-        )
+            # Use the fixed cells layer for subsequent steps
+            cleaned_cells_layer = fixed_cells_layer
 
     create_cold_boundaries(
         output_gpkg,
