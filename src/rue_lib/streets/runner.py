@@ -6,6 +6,7 @@ from osgeo import gdal, ogr
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.blocks import generate_on_grid_blocks
 from rue_lib.streets.grids import (
+    create_cold_boundaries,
     extract_grid_lines_in_buffer,
     generate_local_streets,
     grids_from_site,
@@ -17,7 +18,7 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_inside_buffer_from_points,
 )
 
-from .cell import fix_grid_cells_with_perpendicular_lines
+from .cell import fix_grid_cells_with_perpendicular_lines, remove_dead_end_cells
 from .config import StreetConfig
 from .operations import (
     create_on_grid_cells_from_perpendiculars,
@@ -143,6 +144,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "14_off_grid_cells",
         "14a_site_boundary_inner_buffer",
     )
+    fixed_cells_layer = None
     if lines_layer is not None:
         perp_inside_layer = create_perpendicular_lines_inside_buffer_from_points(
             output_gpkg,
@@ -153,7 +155,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
         if perp_inside_layer is not None:
             print("Step 14d: Fixing grid cells with perpendicular lines...")
-            _fixed_cells_layer = fix_grid_cells_with_perpendicular_lines(
+            fixed_cells_layer = fix_grid_cells_with_perpendicular_lines(
                 output_gpkg,
                 "14_off_grid_cells",
                 perp_inside_layer,
@@ -161,6 +163,25 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 target_area=cfg.off_grid_partitions_preferred_width
                 * cfg.off_grid_partitions_preferred_depth,
             )
+
+    cleaned_cells_layer = ""
+    if fixed_cells_layer is not None:
+        print("Step 14e: Removing dead end cells")
+        cleaned_cells_layer = remove_dead_end_cells(
+            output_gpkg,
+            fixed_cells_layer,
+            "13_site_boundary_lines",
+            "09_site_minus_all_setbacks",
+        )
+
+    create_cold_boundaries(
+        output_gpkg,
+        site_layer_name,
+        cleaned_cells_layer,
+        arterial_setback_layer="10a_arterial_setback_clipped",
+        secondary_setback_layer="10b_secondary_setback_clipped",
+        output_layer_name="14_cold_boundaries",
+    )
 
     print("Step 15: Generating on-grid cells")
 
@@ -202,8 +223,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "16_on_grid_cells",
     )
 
-    generate_local_streets(output_gpkg, cfg, "16_on_grid_cells")
-    generate_local_streets(output_gpkg, cfg, "14_off_grid_cells_fixed_by_perp_lines")
+    on_grid_outer_layer, on_grid_inner_layer = generate_local_streets(
+        output_gpkg, cfg, "16_on_grid_cells"
+    )
+    off_grid_outer_layer, off_grid_inner_layer = generate_local_streets(
+        output_gpkg, cfg, cleaned_cells_layer
+    )
 
     print("Step 17: Merging all grid layers with grid_type information...")
     merge_grid_layers_with_type(
@@ -211,10 +236,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
         str(output_gpkg),
         "17_all_grids_merged",
         [
-            ("14_off_grid_cells_fixed_by_perp_lines", "off_grid"),
-            ("14_off_grid_cells_fixed_by_perp_lines_local_streets_inner", "off_grid"),
+            (cleaned_cells_layer, "off_grid"),
+            (off_grid_inner_layer, "off_grid"),
             ("16_on_grid_cells", "on_grid"),
-            ("16_on_grid_cells_local_streets_inner", "on_grid"),
+            (on_grid_inner_layer, "on_grid"),
+            ("14_cold_boundaries", "cold_boundaries"),
         ],
     )
 
@@ -231,6 +257,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"  - {site_layer}: Site polygon with roads subtracted")
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
-    # print(f"  - {output_geojson}: Merged grids with grid_type classification")
+    print(f"  - {output_geojson}: Merged grids with grid_type classification")
 
     return output_gpkg

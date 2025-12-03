@@ -710,10 +710,123 @@ def fix_grid_cells_with_perpendicular_lines(
     print(f"    - Merged: {cells_merged}")
     print(f"    - Unchanged: {len(gdf_cells) - cells_modified}")
 
-    gdf_fixed = gpd.GeoDataFrame(fixed_attrs, geometry=fixed_cells, crs=gdf_cells.crs)
+    # Use original cells without gap closure - gaps will be handled in create_cold_boundaries
+    final_cells = fixed_cells
+    final_attrs = fixed_attrs
+
+    gdf_fixed = gpd.GeoDataFrame(final_attrs, geometry=final_cells, crs=gdf_cells.crs)
 
     output_layer_name = f"{grid_cells_layer}_fixed_by_perp_lines"
     gdf_fixed.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
     print(f"  Saved fixed cells to layer: {output_layer_name}")
+    return output_layer_name
+
+
+def remove_dead_end_cells(
+    output_path: Path,
+    grid_cells_layer: str,
+    site_boundary_lines_layer: str,
+    site_layer: str,
+) -> str:
+    """Remove dead-end cells along non-arterial site boundaries.
+
+    Identifies and removes cells that:
+    1. Touch site boundaries that are NOT arterial/secondary roads
+    2. Have quality reason "area_too_small"
+
+    This cleans up small dead-end cells that occur at the edges of the site
+    where the grid doesn't align well with the boundary.
+
+    Args:
+        output_path: Path to GeoPackage.
+        grid_cells_layer: Name of layer containing grid cells.
+        site_boundary_lines_layer: Name of layer containing arterial/secondary boundary lines.
+        site_layer: Name of layer containing site polygon(s).
+
+    Returns:
+        Name of the cleaned grid cells layer.
+    """
+    print("\nRemoving dead-end cells along non-arterial boundaries...")
+
+    gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
+    gdf_site_boundary_lines = gpd.read_file(output_path, layer=site_boundary_lines_layer)
+    gdf_site = gpd.read_file(output_path, layer=site_layer)
+
+    print(f"  Loaded {len(gdf_cells)} grid cells")
+    print(f"  Loaded {len(gdf_site_boundary_lines)} site boundary lines")
+    print(f"  Loaded {len(gdf_site)} site polygon(s)")
+
+    if gdf_cells.empty or gdf_site.empty:
+        print("  Warning: Empty input data, returning original layer")
+        return grid_cells_layer
+
+    site_boundaries = []
+    for _idx, row in gdf_site.iterrows():
+        geom = row.geometry
+        if geom is not None and not geom.is_empty:
+            if geom.geom_type == "Polygon":
+                site_boundaries.append(LineString(geom.exterior.coords))
+            elif geom.geom_type == "MultiPolygon":
+                for poly in geom.geoms:
+                    site_boundaries.append(LineString(poly.exterior.coords))
+
+    if not site_boundaries:
+        print("  Warning: No site boundaries found")
+        return grid_cells_layer
+
+    all_site_boundaries = unary_union(site_boundaries)
+
+    arterial_secondary_boundaries = []
+    if not gdf_site_boundary_lines.empty:
+        arterial_secondary_boundaries = list(gdf_site_boundary_lines.geometry)
+
+    if arterial_secondary_boundaries:
+        arterial_union = unary_union(arterial_secondary_boundaries)
+        arterial_buffered = arterial_union.buffer(1.0)
+        non_arterial_boundaries = all_site_boundaries.difference(arterial_buffered)
+    else:
+        non_arterial_boundaries = all_site_boundaries
+
+    print("  Identified non-arterial boundary segments")
+
+    cells_to_keep = []
+    cells_to_remove = []
+    cells_removed = 0
+
+    for idx, row in gdf_cells.iterrows():
+        cell_geom = row.geometry
+        cell_quality = row.get("quality", "")
+
+        if cell_geom is None or cell_geom.is_empty:
+            continue
+
+        touches_non_arterial = False
+        if not non_arterial_boundaries.is_empty:
+            if cell_geom.buffer(0.1).intersects(non_arterial_boundaries):
+                touches_non_arterial = True
+
+        if touches_non_arterial and cell_quality == "area_too_small":
+            cells_removed += 1
+            cells_to_remove.append(cell_geom)
+            print(
+                f"    Removing cell {idx}: touches non-arterial boundary and quality={cell_quality}"
+            )
+        else:
+            cells_to_keep.append(row)
+
+    print(f"  Removed {cells_removed} dead-end cells")
+    print(f"  Remaining cells: {len(cells_to_keep)}")
+
+    if not cells_to_keep:
+        print("  Warning: All cells were removed!")
+        return grid_cells_layer
+
+    # Save cleaned cells
+    gdf_cleaned = gpd.GeoDataFrame(cells_to_keep, crs=gdf_cells.crs)
+
+    output_layer_name = f"{grid_cells_layer}_no_dead_ends"
+    gdf_cleaned.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved cleaned cells to layer: {output_layer_name}")
     return output_layer_name
