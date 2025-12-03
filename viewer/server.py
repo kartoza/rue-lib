@@ -191,7 +191,7 @@ def get_layers(gpkg_path):
         layers.append({"name": layer.GetName(), "feature_count": layer.GetFeatureCount()})
 
     ds = None
-    return layers
+    return sorted(layers, key=lambda k: k["name"])
 
 
 def layer_to_geojson(gpkg_path, layer_name):
