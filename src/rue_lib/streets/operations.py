@@ -741,8 +741,11 @@ def create_local_streets_zone(
 
     srs = input_layer.GetSpatialRef()
 
-    # Step 1: Create inner buffer (sharp-edged negative buffer)
+    # Step 1: Create inner and outer buffers for each geometry individually
+    # Keep geometries separate to preserve individual areas
     inner_geoms = []
+    outer_geoms = []
+
     for feature in input_layer:
         geom = feature.GetGeometryRef()
         if geom is None:
@@ -758,24 +761,16 @@ def create_local_streets_zone(
         inner_buffered = shapely_geom.buffer(inner_buffer_distance, join_style=2, cap_style=2)
 
         if not inner_buffered.is_empty:
+            # Create outer buffer from this individual inner buffer
+            outer_buffered = inner_buffered.buffer(outer_buffer_distance, join_style=1, cap_style=1)
             inner_geoms.append(inner_buffered)
+            outer_geoms.append(outer_buffered)
 
     input_ds = None
 
     if not inner_geoms:
         print(f"No valid geometries after inner buffer from {input_layer_name}")
         return (None, None)
-
-    # Dissolve all inner buffers
-    dissolved_inner = unary_union(inner_geoms)
-
-    # Step 2: Create outer buffer (rounded buffer) from dissolved inner
-    # Use rounded buffer: join_style=1 (round), cap_style=1 (round)
-    outer_geom = dissolved_inner.buffer(outer_buffer_distance, join_style=1, cap_style=1)
-
-    # Convert geometries back to OGR
-    inner_ogr_geom = ogr.CreateGeometryFromWkb(dissolved_inner.wkb)
-    outer_ogr_geom = ogr.CreateGeometryFromWkb(outer_geom.wkb)
 
     # Write to output
     driver = ogr.GetDriverByName("GPKG")
@@ -795,11 +790,6 @@ def create_local_streets_zone(
                 output_ds.DeleteLayer(i)
                 break
 
-    # Calculate areas
-    inner_area = inner_ogr_geom.GetArea()
-    outer_area = outer_ogr_geom.GetArea()
-    sidewalk_area = outer_area - inner_area
-
     # Create inner layer (shrunk grid blocks) with attributes
     # Use wkbUnknown to allow both Polygon and MultiPolygon
     inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbUnknown)
@@ -809,17 +799,6 @@ def create_local_streets_zone(
     inner_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
-
-    inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
-    inner_feature.SetGeometry(inner_ogr_geom)
-    inner_feature.SetField("area_m2", inner_area)
-    inner_feature.SetField("sidewalk_area", sidewalk_area)
-    inner_feature.SetField("buffer_dist", abs(inner_buffer_distance))
-    inner_feature.SetField("sidewalk_w", sidewalk_width_m)
-    inner_feature.SetField("road_w", road_width_m)
-    inner_feature.SetField("zone_type", "buildable")
-    inner_layer.CreateFeature(inner_feature)
-    inner_feature = None
 
     # Create outer layer (with sidewalk buffer) with attributes
     # Use wkbUnknown to allow both Polygon and MultiPolygon
@@ -831,16 +810,36 @@ def create_local_streets_zone(
     outer_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
     outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
 
-    outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
-    outer_feature.SetGeometry(outer_ogr_geom)
-    outer_feature.SetField("area_m2", outer_area)
-    outer_feature.SetField("sidewalk_area", sidewalk_area)
-    outer_feature.SetField("buffer_dist", abs(road_width_m / 2.0))
-    outer_feature.SetField("sidewalk_w", sidewalk_width_m)
-    outer_feature.SetField("road_w", road_width_m)
-    outer_feature.SetField("zone_type", "street_sidewalk")
-    outer_layer.CreateFeature(outer_feature)
-    outer_feature = None
+    for _idx, (inner_geom, outer_geom) in enumerate(zip(inner_geoms, outer_geoms)):
+        inner_ogr_geom = ogr.CreateGeometryFromWkb(inner_geom.wkb)
+        outer_ogr_geom = ogr.CreateGeometryFromWkb(outer_geom.wkb)
+
+        inner_area = inner_ogr_geom.GetArea()
+        outer_area = outer_ogr_geom.GetArea()
+        sidewalk_area = outer_area - inner_area
+
+        inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
+        inner_feature.SetGeometry(inner_ogr_geom)
+        inner_feature.SetField("area_m2", inner_area)
+        inner_feature.SetField("sidewalk_area", sidewalk_area)
+        inner_feature.SetField("buffer_dist", abs(inner_buffer_distance))
+        inner_feature.SetField("sidewalk_w", sidewalk_width_m)
+        inner_feature.SetField("road_w", road_width_m)
+        inner_feature.SetField("zone_type", "buildable")
+        inner_layer.CreateFeature(inner_feature)
+        inner_feature = None
+
+        # Create outer feature
+        outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
+        outer_feature.SetGeometry(outer_ogr_geom)
+        outer_feature.SetField("area_m2", outer_area)
+        outer_feature.SetField("sidewalk_area", sidewalk_area)
+        outer_feature.SetField("buffer_dist", abs(road_width_m / 2.0))
+        outer_feature.SetField("sidewalk_w", sidewalk_width_m)
+        outer_feature.SetField("road_w", road_width_m)
+        outer_feature.SetField("zone_type", "street_sidewalk")
+        outer_layer.CreateFeature(outer_feature)
+        outer_feature = None
 
     output_ds = None
 
@@ -2397,7 +2396,22 @@ def merge_grid_layers_with_type(
             raise RuntimeError(f"Cannot find layer: {first_layer_name}")
 
         srs = first_layer.GetSpatialRef()
-        first_layer_defn = first_layer.GetLayerDefn()
+
+        # Collect all unique field definitions from all source layers
+        all_field_defs = {}  # field_name -> field_defn
+
+        for layer_name, _ in layer_configs:
+            source_layer = ds.GetLayerByName(layer_name)
+            if source_layer is None:
+                continue
+
+            layer_defn = source_layer.GetLayerDefn()
+            for i in range(layer_defn.GetFieldCount()):
+                field_defn = layer_defn.GetFieldDefn(i)
+                field_name = field_defn.GetName()
+                # Keep the first occurrence of each field name
+                if field_name not in all_field_defs:
+                    all_field_defs[field_name] = field_defn
 
         all_features_data = []
 
@@ -2429,11 +2443,11 @@ def merge_grid_layers_with_type(
 
         output_layer = ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
 
-        for i in range(first_layer_defn.GetFieldCount()):
-            field_defn = first_layer_defn.GetFieldDefn(i)
+        # Create all fields in output layer
+        for _field_name, field_defn in all_field_defs.items():
             output_layer.CreateField(field_defn)
 
-        grid_type_field = ogr.FieldDefn("grid_type", ogr.OFTString)
+        grid_type_field = ogr.FieldDefn("type", ogr.OFTString)
         grid_type_field.SetWidth(50)
         output_layer.CreateField(grid_type_field)
 
@@ -2451,7 +2465,7 @@ def merge_grid_layers_with_type(
                 except RuntimeError:
                     pass
 
-            out_feature.SetField("grid_type", grid_type_value)
+            out_feature.SetField("type", grid_type_value)
 
             output_layer.CreateFeature(out_feature)
             out_feature = None
@@ -2483,14 +2497,24 @@ def merge_grid_layers_with_type(
 
         output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
 
-        first_layer.ResetReading()
-        first_layer_defn = first_layer.GetLayerDefn()
+        all_field_defs = {}
 
-        for i in range(first_layer_defn.GetFieldCount()):
-            field_defn = first_layer_defn.GetFieldDefn(i)
+        for layer_name, _ in layer_configs:
+            source_layer = input_ds.GetLayerByName(layer_name)
+            if source_layer is None:
+                continue
+
+            layer_defn = source_layer.GetLayerDefn()
+            for i in range(layer_defn.GetFieldCount()):
+                field_defn = layer_defn.GetFieldDefn(i)
+                field_name = field_defn.GetName()
+                if field_name not in all_field_defs:
+                    all_field_defs[field_name] = field_defn
+
+        for _field_name, field_defn in all_field_defs.items():
             output_layer.CreateField(field_defn)
 
-        grid_type_field = ogr.FieldDefn("grid_type", ogr.OFTString)
+        grid_type_field = ogr.FieldDefn("type", ogr.OFTString)
         grid_type_field.SetWidth(50)
         output_layer.CreateField(grid_type_field)
 
@@ -2509,12 +2533,17 @@ def merge_grid_layers_with_type(
                 if geom:
                     out_feature.SetGeometry(geom.Clone())
 
-                for i in range(first_layer_defn.GetFieldCount()):
-                    field_name = first_layer_defn.GetFieldDefn(i).GetName()
+                # Copy all fields that exist in source feature
+                for i in range(source_feature.GetFieldCount()):
+                    field_name = source_feature.GetFieldDefnRef(i).GetName()
                     if source_feature.IsFieldSet(i):
-                        out_feature.SetField(field_name, source_feature.GetField(i))
+                        try:
+                            out_feature.SetField(field_name, source_feature.GetField(i))
+                        except RuntimeError:
+                            # Field doesn't exist in output schema, skip
+                            pass
 
-                out_feature.SetField("grid_type", grid_type_value)
+                out_feature.SetField("type", grid_type_value)
 
                 output_layer.CreateFeature(out_feature)
                 out_feature = None
