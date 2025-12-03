@@ -17,9 +17,6 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_inside_buffer_from_points,
 )
 
-from .blocks_orthogonal import (
-    clip_site_by_roads,
-)
 from .cell import fix_grid_cells_with_perpendicular_lines
 from .config import StreetConfig
 from .operations import (
@@ -59,17 +56,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg)
     roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg)
 
-    print("Step 3: Creating site polygon clipped by roads...")
-    clipped_site_layer = clip_site_by_roads(
-        output_path,
-        site_layer_name,
-        roads_layer_name,
-        "site_clipped_by_roads",
-        cfg.road_arterial_width_m,
-        cfg.road_secondary_width_m,
-        cfg.road_local_width_m,
-    )
-
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(
         output_path, roads_layer_name, "road_type = 'road_art'", output_path, "04_arterial_roads"
@@ -84,7 +70,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     buffer_layer(
         output_path,
         "04_arterial_roads",
-        cfg.arterial_setback_depth,
+        cfg.on_grid_partition_depth_arterial_roads,
         output_path,
         "06_arterial_setback",
         dissolve=True,
@@ -94,7 +80,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     buffer_layer(
         output_path,
         "05_secondary_roads",
-        cfg.secondary_setback_depth,
+        cfg.on_grid_partition_depth_secondary_roads,
         output_path,
         "07_secondary_setback",
         dissolve=True,
@@ -103,7 +89,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 8: Removing arterial setback from site...")
     erase_layer(
         output_path,
-        clipped_site_layer,
+        site_layer_name,
         output_path,
         "06_arterial_setback",
         output_path,
@@ -121,7 +107,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 10: Generating on-grid blocks...")
-    generate_on_grid_blocks(output_gpkg, cfg)
+    generate_on_grid_blocks(output_gpkg, site_layer_name, cfg)
 
     print("Step 13: Extracting site boundary lines")
     extract_site_boundary_lines(
@@ -192,7 +178,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
         "13_site_boundary_points",
-        line_length=max(cfg.secondary_setback_depth, cfg.arterial_setback_depth) * 1.05,
+        line_length=max(
+            cfg.on_grid_partition_depth_secondary_roads, cfg.on_grid_partition_depth_arterial_roads
+        )
+        * 1.05,
         output_layer_name="13_site_boundary_perp_from_points",
     )
 
@@ -223,7 +212,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "17_all_grids_merged",
         [
             ("14_off_grid_cells_fixed_by_perp_lines", "off_grid"),
+            ("14_off_grid_cells_fixed_by_perp_lines_local_streets_inner", "off_grid"),
             ("16_on_grid_cells", "on_grid"),
+            ("16_on_grid_cells_local_streets_inner", "on_grid"),
         ],
     )
 
@@ -237,7 +228,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
-    print(f"  - {clipped_site_layer}: Site polygon with roads subtracted")
+    print(f"  - {site_layer}: Site polygon with roads subtracted")
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     # print(f"  - {output_geojson}: Merged grids with grid_type classification")

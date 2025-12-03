@@ -475,14 +475,6 @@
                     <input type="number" id="param-local-width" class="param-input" value="12" min="0" step="0.1">
                 </div>
                 <div>
-                    <label class="param-label">Arterial Setback (m)</label>
-                    <input type="number" id="param-arterial-setback" class="param-input" value="60" min="0" step="0.1">
-                </div>
-                <div>
-                    <label class="param-label">Secondary Setback (m)</label>
-                    <input type="number" id="param-secondary-setback" class="param-input" value="60" min="0" step="0.1">
-                </div>
-                <div>
                     <label class="param-label">Preferred Depth (m)</label>
                     <input type="number" id="param-pref-depth" class="param-input" value="45" min="0" step="0.1">
                 </div>
@@ -1765,8 +1757,6 @@
                 road_arterial_width_m: parseFloat(document.getElementById('param-arterial-width').value) || 20.0,
                 road_secondary_width_m: parseFloat(document.getElementById('param-secondary-width').value) || 15.0,
                 road_local_width_m: parseFloat(document.getElementById('param-local-width').value) || 12.0,
-                arterial_setback_depth: parseFloat(document.getElementById('param-arterial-setback').value) || 60.0,
-                secondary_setback_depth: parseFloat(document.getElementById('param-secondary-setback').value) || 60.0,
                 off_grid_partitions_preferred_depth: parseFloat(document.getElementById('param-pref-depth').value) || 140.0,
                 off_grid_partitions_preferred_width: parseFloat(document.getElementById('param-pref-width').value) || 140.0,
                 on_grid_partition_depth_arterial_roads: parseFloat(document.getElementById('param-grid-depth-arterial').value) || 40.0,

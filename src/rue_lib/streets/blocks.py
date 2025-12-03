@@ -1,5 +1,4 @@
 # src/rue_lib/streets/blocks.py
-import math
 from pathlib import Path
 
 from osgeo import ogr
@@ -285,266 +284,6 @@ def polygonize_and_classify_blocks(
     print(f"  - Off-grid blocks: {off_grid_blocks}")
 
 
-def filter_offgrid_blocks(
-    gpkg_path,
-    classified_blocks_layer_name,
-    output_layer_name,
-    offgrid_preferred_width,
-    offgrid_preferred_depth,
-    arterial_setback_depth,
-    secondary_setback_depth,
-    arterial_preferred_width=None,  # Optional, defaults to offgrid_preferred_width
-    secondary_preferred_width=None,  # Optional, defaults to offgrid_preferred_width
-    area_threshold=0.5,  # 50% of preferred area
-    squareness_threshold=0.6,  # How square-like (0-1, where 1 is perfect square)
-):
-    """
-    Filter all blocks to remove those that don't meet shape and size requirements.
-
-    Uses different size thresholds for different block types:
-    - Arterial setback: arterial_preferred_width × arterial_setback_depth
-    - Secondary setback: secondary_preferred_width × secondary_setback_depth
-    - Off-grid: offgrid_preferred_width × offgrid_preferred_depth
-
-    Args:
-        gpkg_path (str): Path to the GeoPackage
-        classified_blocks_layer_name (str): Name of the classified blocks layer
-        output_layer_name (str): Name of the output filtered blocks layer
-        offgrid_preferred_width (float): Preferred block width for off-grid blocks in meters
-        offgrid_preferred_depth (float): Preferred block depth for off-grid blocks in meters
-        arterial_setback_depth (float): Setback depth for arterial roads in meters
-        secondary_setback_depth (float): Setback depth for secondary roads in meters
-        arterial_preferred_width (float): Preferred width for arterial blocks
-        (defaults to offgrid_preferred_width)
-        secondary_preferred_width (float): Preferred width for secondary blocks
-        (defaults to offgrid_preferred_width)
-        area_threshold (float): Minimum area as fraction of preferred area (default 0.5 = 50%)
-        squareness_threshold (float): Minimum squareness ratio (0-1, default 0.6)
-
-    Returns:
-        None
-    """
-    ds = ogr.Open(gpkg_path, 1)
-
-    classified_layer = ds.GetLayerByName(classified_blocks_layer_name)
-    srs = classified_layer.GetSpatialRef()
-
-    # Set default widths if not provided
-    if arterial_preferred_width is None:
-        arterial_preferred_width = offgrid_preferred_width
-    if secondary_preferred_width is None:
-        secondary_preferred_width = offgrid_preferred_width
-
-    # Calculate minimum required areas for each block type
-    arterial_preferred_area = arterial_preferred_width * arterial_setback_depth
-    arterial_min_area = arterial_preferred_area * area_threshold
-
-    secondary_preferred_area = secondary_preferred_width * secondary_setback_depth
-    secondary_min_area = secondary_preferred_area * area_threshold
-
-    offgrid_preferred_area = offgrid_preferred_width * offgrid_preferred_depth
-    offgrid_min_area = offgrid_preferred_area * area_threshold
-
-    # Remove existing output layer if it exists
-    for i in range(ds.GetLayerCount()):
-        if ds.GetLayerByIndex(i).GetName() == output_layer_name:
-            ds.DeleteLayer(i)
-            break
-
-    # Create output layer with same schema
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
-
-    # Copy field definitions from input layer
-    classified_layer_defn = classified_layer.GetLayerDefn()
-    for i in range(classified_layer_defn.GetFieldCount()):
-        field_defn = classified_layer_defn.GetFieldDefn(i)
-        output_layer.CreateField(field_defn)
-
-    # Add filtering metadata fields
-    squareness_field = ogr.FieldDefn("squareness", ogr.OFTReal)
-    output_layer.CreateField(squareness_field)
-
-    compactness_field = ogr.FieldDefn("compactness", ogr.OFTReal)
-    output_layer.CreateField(compactness_field)
-
-    vertices_field = ogr.FieldDefn("vertices", ogr.OFTInteger)
-    output_layer.CreateField(vertices_field)
-
-    filtered_field = ogr.FieldDefn("kept_reason", ogr.OFTString)
-    output_layer.CreateField(filtered_field)
-
-    def count_vertices(poly):
-        """Count vertices in the exterior ring of a polygon."""
-        exterior_ring = poly.GetGeometryRef(0)
-        # Subtract 1 because the ring is closed (first point = last point)
-        return exterior_ring.GetPointCount() - 1
-
-    def calculate_compactness(poly):
-        """
-        Calculate compactness using isoperimetric quotient.
-
-        Compactness = 4π × area / perimeter²
-
-        For a circle: 1.0 (most compact)
-        For a square: ~0.785
-        For a triangle: ~0.60
-        For elongated shapes: < 0.5
-        """
-        area = poly.GetArea()
-        perimeter = poly.Boundary().Length()
-
-        if perimeter == 0:
-            return 0.0
-
-        compactness = (4 * math.pi * area) / (perimeter**2)
-        return compactness
-
-    def calculate_squareness(poly):
-        """
-        Calculate how square-like a polygon is using multiple metrics.
-
-        Returns value between 0 and 1, where 1 is a perfect square.
-        """
-        # 1. Check vertex count (squares should have ~4 vertices)
-        vertices = count_vertices(poly)
-
-        # Penalize heavily if less than 4 vertices (triangles, etc.)
-        if vertices < 4:
-            vertex_score = 0.0
-        elif vertices == 4:
-            vertex_score = 1.0
-        else:
-            # For more than 4 vertices, decay slowly (irregular squares are fine)
-            vertex_score = max(0.3, 1.0 - (vertices - 4) * 0.05)
-
-        # 2. Calculate compactness
-        compactness = calculate_compactness(poly)
-        # Normalize: squares have compactness ~0.785
-        # Scale so that 0.785 -> 1.0, and values below that scale proportionally
-        compactness_score = min(1.0, compactness / 0.785)
-
-        # 3. Check aspect ratio of bounding box
-        envelope = poly.GetEnvelope()
-        bbox_width = envelope[1] - envelope[0]
-        bbox_height = envelope[3] - envelope[2]
-
-        if bbox_width == 0 or bbox_height == 0:
-            aspect_score = 0.0
-        else:
-            aspect_ratio = min(bbox_width, bbox_height) / max(bbox_width, bbox_height)
-            aspect_score = aspect_ratio
-
-        # 4. Check how much of bounding box is filled
-        bbox_area = bbox_width * bbox_height
-        poly_area = poly.GetArea()
-
-        if bbox_area == 0:
-            extent_score = 0.0
-        else:
-            extent_ratio = poly_area / bbox_area
-            extent_score = extent_ratio
-
-        # Combined squareness metric with weights:
-        # - Vertex count: 30% (important to filter triangles)
-        # - Compactness: 30% (important for overall shape)
-        # - Aspect ratio: 25% (should be roughly square)
-        # - Extent ratio: 15% (should fill bbox reasonably)
-        squareness = (
-            vertex_score * 0.30
-            + compactness_score * 0.30
-            + aspect_score * 0.25
-            + extent_score * 0.15
-        )
-
-        return squareness
-
-    # Statistics by type
-    stats = {
-        "arterial_setback": {"kept": 0, "removed_size": 0, "removed_shape": 0},
-        "secondary_setback": {"kept": 0, "removed_size": 0, "removed_shape": 0},
-        "off_grid": {"kept": 0, "removed_size": 0, "removed_shape": 0},
-    }
-
-    for feature in classified_layer:
-        poly = feature.GetGeometryRef()
-        block_type = feature.GetField("block_type")
-        area = poly.GetArea()
-
-        # Get the appropriate minimum area for this block type
-        if block_type == "arterial_setback":
-            min_area = 0
-        elif block_type == "secondary_setback":
-            min_area = 0
-        else:  # off_grid
-            min_area = offgrid_min_area
-
-        # Calculate shape metrics
-        squareness = calculate_squareness(poly)
-        compactness = calculate_compactness(poly)
-        vertices = count_vertices(poly)
-
-        keep_block = True
-        reason = ""
-
-        # Check area requirement
-        if area < min_area:
-            keep_block = False
-            reason = f"area_too_small ({area:.0f} < {min_area:.0f})"
-            stats[block_type]["removed_size"] += 1
-
-        # Check squareness requirement (only if area is sufficient)
-        elif squareness < squareness_threshold:
-            keep_block = False
-            reason = f"not_square (sq={squareness:.2f}, cmp={compactness:.2f}, v={vertices})"
-            stats[block_type]["removed_shape"] += 1
-        else:
-            reason = "meets_requirements"
-            stats[block_type]["kept"] += 1
-
-        if keep_block:
-            out_feature = ogr.Feature(output_layer.GetLayerDefn())
-            out_feature.SetGeometry(poly)
-
-            # Copy all fields
-            for i in range(classified_layer_defn.GetFieldCount()):
-                field_name = classified_layer_defn.GetFieldDefn(i).GetNameRef()
-                out_feature.SetField(field_name, feature.GetField(i))
-
-            out_feature.SetField("squareness", squareness)
-            out_feature.SetField("compactness", compactness)
-            out_feature.SetField("vertices", vertices)
-            out_feature.SetField("kept_reason", reason)
-            output_layer.CreateFeature(out_feature)
-            out_feature = None
-
-    ds = None
-
-    # Print statistics
-    print("\nBlock filtering complete:")
-    print(f"\nArterial Setback Blocks (min area: {arterial_min_area:.0f} m²):")
-    print(f"  - Kept: {stats['arterial_setback']['kept']}")
-    print(f"  - Removed (too small): {stats['arterial_setback']['removed_size']}")
-    print(f"  - Removed (not square): {stats['arterial_setback']['removed_shape']}")
-
-    print(f"\nSecondary Setback Blocks (min area: {secondary_min_area:.0f} m²):")
-    print(f"  - Kept: {stats['secondary_setback']['kept']}")
-    print(f"  - Removed (too small): {stats['secondary_setback']['removed_size']}")
-    print(f"  - Removed (not square): {stats['secondary_setback']['removed_shape']}")
-
-    print(f"\nOff-Grid Blocks (min area: {offgrid_min_area:.0f} m²):")
-    print(f"  - Kept: {stats['off_grid']['kept']}")
-    print(f"  - Removed (too small): {stats['off_grid']['removed_size']}")
-    print(f"  - Removed (not square): {stats['off_grid']['removed_shape']}")
-
-    total_kept = sum(s["kept"] for s in stats.values())
-    total_removed = sum(s["removed_size"] + s["removed_shape"] for s in stats.values())
-
-    print("\nTotal Summary:")
-    print(f"  - Total kept: {total_kept}")
-    print(f"  - Total removed: {total_removed}")
-    print(f"  - Squareness threshold: {squareness_threshold:.2f}")
-
-
 def filter_classified_blocks(
     gpkg_path: str,
     input_layer_name: str,
@@ -593,13 +332,13 @@ def filter_classified_blocks(
     print(f"Filtered {kept}/{total} classified blocks -> '{output_layer_name}'")
 
 
-def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
+def generate_on_grid_blocks(output_path: Path, site_layer_name: str, cfg: StreetConfig) -> Path:
     print("Clip arterial setback to site boundary...")
     clip_layer(
         output_path,
         "06_arterial_setback",
         output_path,
-        "site_clipped_by_roads",
+        site_layer_name,
         output_path,
         "10a_arterial_setback_clipped",
     )
@@ -609,7 +348,7 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
         output_path,
         "07_secondary_setback",
         output_path,
-        "site_clipped_by_roads",
+        site_layer_name,
         output_path,
         "10b_secondary_setback_clipped",
     )
@@ -677,7 +416,7 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
         "11a_arterial_setback_grid",
         output_path,
         "11_arterial_setback_grid_cleaned",
-        cfg.arterial_setback_depth * cfg.off_grid_partitions_preferred_width * 0.5,
+        cfg.on_grid_partition_depth_arterial_roads * cfg.off_grid_partitions_preferred_width * 0.5,
     )
 
     print("Create grid from on-grid secondary setback...")
@@ -698,7 +437,11 @@ def generate_on_grid_blocks(output_path: Path, cfg: StreetConfig) -> Path:
         "12a_secondary_setback_grid",
         output_path,
         "12_secondary_setback_grid_cleaned",
-        cfg.secondary_setback_depth * cfg.off_grid_partitions_preferred_width * 0.5,
+        (
+            cfg.on_grid_partition_depth_secondary_roads
+            * cfg.off_grid_partitions_preferred_width
+            * 0.5
+        ),
     )
 
     return output_path
