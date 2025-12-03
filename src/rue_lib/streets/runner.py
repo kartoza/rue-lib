@@ -236,9 +236,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
         str(output_gpkg),
         "17_all_grids_merged",
         [
-            (cleaned_cells_layer, "off_grid"),
+            (cleaned_cells_layer, "off_grid_local_streets"),
             (off_grid_inner_layer, "off_grid"),
-            ("16_on_grid_cells", "on_grid"),
+            ("16_on_grid_cells", "on_grid_local_streets"),
             (on_grid_inner_layer, "on_grid"),
             ("14_cold_boundaries", "cold_boundaries"),
         ],
