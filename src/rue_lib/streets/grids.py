@@ -757,8 +757,10 @@ def extract_grid_lines_in_buffer(
         if not isinstance(inter_point, Point) or inter_point.is_empty:
             continue
 
-        x1, y1, z1 = edge.coords[0]
-        x2, y2, z2 = edge.coords[-1]
+        coord_start = edge.coords[0]
+        coord_end = edge.coords[-1]
+        x1, y1 = coord_start[0], coord_start[1]
+        x2, y2 = coord_end[0], coord_end[1]
         vx, vy = x2 - x1, y2 - y1
         length = math.hypot(vx, vy)
         if length == 0:

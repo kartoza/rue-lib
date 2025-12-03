@@ -723,6 +723,151 @@ def fix_grid_cells_with_perpendicular_lines(
     return output_layer_name
 
 
+def merge_small_cells_with_neighbors(
+    output_path: Path,
+    grid_cells_layer: str,
+    target_area: float,
+    area_threshold_ratio: float = 0.5,
+) -> str:
+    """Merge cells smaller than threshold with their neighbors.
+
+    For cells with area < (target_area * area_threshold_ratio):
+    1. Get all edges sorted by length (longest first)
+    2. For each edge, check if a neighbor shares that edge
+    3. When neighbor found, merge the cells
+    4. Create new merged cell with updated attributes
+
+    Args:
+        output_path: Path to GeoPackage
+        grid_cells_layer: Name of layer containing grid cells
+        target_area: Target area for cells
+        area_threshold_ratio: Cells below this ratio get merged (default 0.5 = 50%)
+
+    Returns:
+        Name of the merged cells layer
+    """
+    print(f"\nMerging small cells (< {area_threshold_ratio * 100:.0f}% of target area)...")
+
+    gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
+    print(f"  Loaded {len(gdf_cells)} grid cells")
+    print(f"  Target area: {target_area:.1f} m²")
+    print(f"  Minimum area threshold: {target_area * area_threshold_ratio:.1f} m²")
+
+    if gdf_cells.empty:
+        print("  Warning: Empty input data, returning original layer")
+        return grid_cells_layer
+
+    min_area = target_area * area_threshold_ratio
+
+    small_cells_mask = gdf_cells.geometry.area < min_area
+    small_cells_count = small_cells_mask.sum()
+    print(f"  Found {small_cells_count} small cells to merge")
+
+    if small_cells_count == 0:
+        print("  No small cells found, returning original layer")
+        return grid_cells_layer
+
+    gdf_working = gdf_cells.copy()
+    merged_count = 0
+    iteration = 0
+    max_iterations = small_cells_count * 2
+
+    while iteration < max_iterations:
+        iteration += 1
+
+        small_cell_idx = None
+        for idx, row in gdf_working.iterrows():
+            if row.geometry.area < min_area:
+                small_cell_idx = idx
+                break
+
+        if small_cell_idx is None:
+            break
+
+        small_cell_row = gdf_working.loc[small_cell_idx]
+        small_cell_geom = small_cell_row.geometry
+        small_cell_area = small_cell_geom.area
+
+        coords = list(small_cell_geom.exterior.coords)[:-1]
+        edges = []
+        for i in range(len(coords)):
+            p1 = coords[i]
+            p2 = coords[(i + 1) % len(coords)]
+            edge = LineString([p1, p2])
+            edges.append((edge.length, edge))
+
+        edges.sort(reverse=True, key=lambda x: x[0])
+
+        neighbor_idx = None
+
+        for edge_length, edge in edges:
+            for idx, row in gdf_working.iterrows():
+                if idx == small_cell_idx:
+                    continue
+
+                other_geom = row.geometry
+
+                if edge.distance(other_geom) < 0.1:
+                    intersection = edge.intersection(other_geom.boundary)
+                    if intersection.length > edge_length * 0.8:
+                        neighbor_idx = idx
+                        break
+
+            if neighbor_idx is not None:
+                break
+
+        if neighbor_idx is None:
+            print(
+                f"    Cell {small_cell_idx}: No neighbor found for any edge "
+                f"(area={small_cell_area:.1f} m²), keeping as is"
+            )
+            # Mark this cell to prevent checking it again
+            gdf_working.at[small_cell_idx, "geometry"] = small_cell_geom.buffer(0)
+            gdf_working.at[small_cell_idx, "_processed"] = True
+            continue
+
+        neighbor_row = gdf_working.loc[neighbor_idx]
+        neighbor_geom = neighbor_row.geometry
+        neighbor_area = neighbor_geom.area
+
+        merged_geom = unary_union([small_cell_geom, neighbor_geom])
+
+        if merged_geom.geom_type == "MultiPolygon":
+            merged_geom = max(merged_geom.geoms, key=lambda p: p.area)
+
+        merged_geom = merged_geom.buffer(0)
+        merged_area = merged_geom.area
+
+        print(
+            f"    Cell {small_cell_idx} (area={small_cell_area:.1f}) merged with "
+            f"cell {neighbor_idx} (area={neighbor_area:.1f}) -> {merged_area:.1f} m²"
+        )
+
+        quality = is_good_cell(merged_geom, target_area)
+        gdf_working.at[neighbor_idx, "geometry"] = merged_geom
+        gdf_working.at[neighbor_idx, "is_good"] = quality.get("is_good", False)
+        gdf_working.at[neighbor_idx, "reason"] = quality.get("reason", "")
+        gdf_working.at[neighbor_idx, "right_angles"] = quality.get("right_angles", 0)
+        gdf_working.at[neighbor_idx, "area_ratio"] = quality.get("area_ratio", 0.0)
+        gdf_working.at[neighbor_idx, "num_vertices"] = quality.get("num_vertices", 0)
+
+        gdf_working = gdf_working.drop(small_cell_idx)
+
+        merged_count += 1
+
+    print(f"  Merged {merged_count} small cells")
+    print(f"  Remaining cells: {len(gdf_working)}")
+
+    if "_processed" in gdf_working.columns:
+        gdf_working = gdf_working.drop(columns=["_processed"])
+
+    output_layer_name = f"{grid_cells_layer}_merged_small"
+    gdf_working.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved merged cells to layer: {output_layer_name}")
+    return output_layer_name
+
+
 def remove_dead_end_cells(
     output_path: Path,
     grid_cells_layer: str,
