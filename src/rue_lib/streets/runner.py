@@ -13,6 +13,7 @@ from rue_lib.streets.grids import (
 )
 from rue_lib.streets.runner_utils import (
     apply_inner_buffer_to_cells,
+    create_dead_end_boundary_lines,
     create_guide_points_from_site_boundary,
     create_perpendicular_lines_from_guide_points,
     create_perpendicular_lines_inside_buffer_from_points,
@@ -157,6 +158,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "13_site_boundary_lines",
     )
 
+    print("Step 13a: Deriving dead-end boundary lines (site edges minus boundary lines)...")
+    dead_end_lines_layer = create_dead_end_boundary_lines(
+        output_gpkg,
+        "09_site_minus_all_setbacks",
+        "13_site_boundary_lines",
+        output_layer_name="09_dead_end_lines",
+    )
+
     print("Step 14: Generating off-grid blocks...")
     grids_from_site(
         output_gpkg,
@@ -166,6 +175,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         preferred_depth_off_cluster_grid,
         grid_layer_name="14_off_grid_cells",
         point_layer_name="14_off_grid_points",
+        dead_end_lines_layer=dead_end_lines_layer,
     )
 
     print("Step 14a: Creating inner buffer zone from site boundary...")

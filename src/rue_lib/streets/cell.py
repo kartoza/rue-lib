@@ -949,7 +949,7 @@ def remove_dead_end_cells(
 
     for idx, row in gdf_cells.iterrows():
         cell_geom = row.geometry
-        cell_quality = row.get("quality", "")
+        is_good = row.get("is_good", 0) == 1
 
         if cell_geom is None or cell_geom.is_empty:
             continue
@@ -959,14 +959,10 @@ def remove_dead_end_cells(
             if cell_geom.buffer(0.1).intersects(non_arterial_boundaries):
                 touches_non_arterial = True
 
-        if touches_non_arterial and (
-            cell_quality == "area_too_small" or cell_quality == "area_too_large"
-        ):
+        if touches_non_arterial and not is_good:
             cells_removed += 1
             cells_to_remove.append(cell_geom)
-            print(
-                f"    Removing cell {idx}: touches non-arterial boundary and quality={cell_quality}"
-            )
+            print(f"    Removing cell {idx}: touches non-arterial boundary and quality={is_good}")
         else:
             cells_to_keep.append(row)
 
