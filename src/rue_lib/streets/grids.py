@@ -805,7 +805,7 @@ def generate_local_streets(
     """Generate local streets zone from grid blocks.
 
     Creates a zone for local streets with sidewalks by:
-    1. Creating an inner buffer: -(sidewalk_width + road_width/2)
+    1. Creating an inner buffer: -(road_width/2)
     2. Creating an outer rounded buffer: +sidewalk_width
 
     Both inner and outer zones are saved as separate layers.

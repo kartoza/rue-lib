@@ -31,3 +31,15 @@ class StreetConfig:
     part_art_d: float = 40.0  # Depth of on-grid clusters along arteries
     part_sec_d: float = 30.0  # Depth of on-grid clusters along secondaries
     part_loc_d: float = 20.0  # Depth of on-grid clusters along local roads
+
+    off_grid_cluster_depth: float = 45.0  # Depth of off-grid clusters (meters)
+    off_grid_cluster_width: float = 30.0  # Width of off-grid clusters (meters)
+
+    # Number of clusters along depth for arterial road off-grid partitions
+    off_grid_arterial_clusters_depth: int = 0
+    # Number of clusters along depth for secondary road off-grid partitions
+    off_grid_secondary_clusters_depth: int = 0
+    # Number of clusters along depth for local road off-grid partitions
+    off_grid_local_clusters_depth: int = 2
+    # Number of clusters along width for local road off-grid partitions
+    off_grid_local_clusters_width: int = 3
