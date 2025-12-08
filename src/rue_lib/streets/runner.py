@@ -240,10 +240,18 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 16a: Classifying on-grid cells by road type (arterial vs secondary)...")
+    buffer_layer(
+        output_path,
+        "04_arterial_roads",
+        cfg.on_grid_partition_depth_arterial_roads / 2,
+        output_path,
+        "06_arterial_buffer_for_classification",
+        dissolve=True,
+    )
     arterial_cells_layer, secondary_cells_layer = classify_on_grid_cells_by_setback(
         output_gpkg,
         "16_on_grid_cells",
-        "10a_arterial_setback_clipped",
+        "06_arterial_buffer_for_classification",
         output_gpkg,
         "16a_on_grid_arterial_cells",
         "16b_on_grid_secondary_cells",
