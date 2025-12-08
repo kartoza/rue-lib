@@ -25,6 +25,7 @@ from .cell import (
 )
 from .config import StreetConfig
 from .operations import (
+    classify_on_grid_cells_by_setback,
     create_on_grid_cells_from_perpendiculars,
     erase_layer,
     export_layer_to_geojson,
@@ -238,8 +239,21 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "16_on_grid_cells",
     )
 
-    on_grid_outer_layer, on_grid_inner_layer = generate_local_streets(
-        output_gpkg, cfg, "16_on_grid_cells"
+    print("Step 16a: Classifying on-grid cells by road type (arterial vs secondary)...")
+    arterial_cells_layer, secondary_cells_layer = classify_on_grid_cells_by_setback(
+        output_gpkg,
+        "16_on_grid_cells",
+        "10a_arterial_setback_clipped",
+        output_gpkg,
+        "16a_on_grid_arterial_cells",
+        "16b_on_grid_secondary_cells",
+    )
+
+    on_grid_arterial_outer_layer, on_grid_arterial_inner_layer = generate_local_streets(
+        output_gpkg, cfg, arterial_cells_layer
+    )
+    on_grid_secondary_outer_layer, on_grid_secondary_inner_layer = generate_local_streets(
+        output_gpkg, cfg, secondary_cells_layer
     )
     off_grid_outer_layer, off_grid_inner_layer = generate_local_streets(
         output_gpkg, cfg, cleaned_cells_layer
@@ -253,8 +267,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
         [
             (cleaned_cells_layer, "off_grid_local_streets"),
             (off_grid_inner_layer, "off_grid"),
-            ("16_on_grid_cells", "on_grid_local_streets"),
-            (on_grid_inner_layer, "on_grid"),
+            ("16a_on_grid_arterial_cells", "on_grid_art_local_streets"),
+            (on_grid_arterial_inner_layer, "on_grid_art"),
+            ("16b_on_grid_secondary_cells", "on_grid_sec_local_streets"),
+            (on_grid_secondary_inner_layer, "on_grid_sec"),
             ("14_cold_boundaries", "cold_boundaries"),
         ],
     )
