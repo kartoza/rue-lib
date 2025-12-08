@@ -309,6 +309,7 @@ def grids_from_polygon(
             - cell_quality: List of quality dictionaries for each cell
     """
     polygon_shply = feature_geom_to_shapely(polygon)
+    mesh_padding = 0.25 * grid_width
 
     def _norm_angle_deg(angle: float) -> float:
         return ((angle + 90.0) % 180.0) - 90.0
@@ -352,7 +353,7 @@ def grids_from_polygon(
 
     for angle_deg in candidate_angles_deg:
         polygon_rot = rotate(
-            polygon_shply,
+            polygon_shply.oriented_envelope,
             -angle_deg,
             origin=(origin_point.x, origin_point.y),
             use_radians=False,
@@ -369,10 +370,12 @@ def grids_from_polygon(
         else:
             start_y = miny
 
+        padded_start_x = minx + mesh_padding if minx + mesh_padding < maxx else minx
+
         if arterial_line is None:
             cells_rot, quality_rot, mesh_points_rot, best_good, best_good_area = (
                 _build_mesh_and_cells(
-                    minx,
+                    padded_start_x,
                     start_y,
                     maxx,
                     maxy,
@@ -392,7 +395,7 @@ def grids_from_polygon(
             shift_step = min(10.0, grid_width)
             shift = -grid_width
             while shift <= grid_width + 1e-6:
-                start_x = minx + shift
+                start_x = padded_start_x + shift
                 cells_cand, quality_cand, mesh_points_cand, good_cells, good_area = (
                     _build_mesh_and_cells(
                         start_x,
@@ -805,7 +808,7 @@ def generate_local_streets(
     """Generate local streets zone from grid blocks.
 
     Creates a zone for local streets with sidewalks by:
-    1. Creating an inner buffer: -(road_width/2)
+    1. Creating an inner buffer: -(sidewalk_width + road_width/2)
     2. Creating an outer rounded buffer: +sidewalk_width
 
     Both inner and outer zones are saved as separate layers.
