@@ -615,8 +615,12 @@ def fix_grid_cells_with_perpendicular_lines(
 
                     try:
                         merge_polygon = Polygon(coords)
+                        # Simplify to ensure straight edges have minimal vertices
+                        merge_polygon = merge_polygon.simplify(0.01, preserve_topology=True)
                         if not merge_polygon.is_valid:
                             merge_polygon = merge_polygon.buffer(0)
+                            # Simplify again after buffer(0)
+                            merge_polygon = merge_polygon.simplify(0.01, preserve_topology=True)
 
                         if merge_polygon.is_valid and merge_polygon.area > 0.1:
                             if not result_geom.intersects(merge_polygon):
@@ -627,6 +631,8 @@ def fix_grid_cells_with_perpendicular_lines(
 
                             if merged.geom_type == "Polygon":
                                 new_geom = merged.buffer(0)
+                                # Simplify to remove unnecessary vertices on straight edges
+                                new_geom = new_geom.simplify(0.01, preserve_topology=True)
                                 area_change = new_geom.area - original_area
 
                                 if area_change > 0.1:
@@ -645,6 +651,8 @@ def fix_grid_cells_with_perpendicular_lines(
                                     new_geom = max(new_geom.geoms, key=lambda p: p.area)
 
                                 new_geom = new_geom.buffer(0)
+                                # Simplify to remove unnecessary vertices on straight edges
+                                new_geom = new_geom.simplify(0.01, preserve_topology=True)
                                 area_change = new_geom.area - original_area
 
                                 if area_change > 0.1:

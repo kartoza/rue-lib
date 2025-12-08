@@ -4,6 +4,7 @@ import os
 
 from osgeo import ogr
 from shapely import geometry, wkb, wkt
+from shapely.geometry import CAP_STYLE, JOIN_STYLE
 from shapely.ops import split, unary_union
 
 from .geometry_utils import (
@@ -860,15 +861,9 @@ def create_local_streets_zone(
     Raises:
         Exception: Propagated GDAL/OGR errors.
     """
-    from shapely import wkb as shapely_wkb
-
-    # Calculate buffer distances
-    # Inner buffer: negative, to shrink by sidewalk + half road width
     inner_buffer_distance = -(road_width_m / 2.0)
-    # Outer buffer: positive, rounded buffer for sidewalk
     outer_buffer_distance = sidewalk_width_m
 
-    # Open input dataset
     input_ds = ogr.Open(input_path)
     if input_ds is None:
         raise RuntimeError(f"Could not open input dataset: {input_path}")
@@ -879,8 +874,6 @@ def create_local_streets_zone(
 
     srs = input_layer.GetSpatialRef()
 
-    # Step 1: Create inner and outer buffers for each geometry individually
-    # Keep geometries separate to preserve individual areas
     inner_geoms = []
     outer_geoms = []
 
@@ -889,20 +882,46 @@ def create_local_streets_zone(
         if geom is None:
             continue
 
-        # Convert to Shapely
-        wkb_data = geom.ExportToWkb()
-        if isinstance(wkb_data, bytearray):
-            wkb_data = bytes(wkb_data)
-        shapely_geom = shapely_wkb.loads(wkb_data)
+        shapely_geom = _ogr_to_shapely(geom.Clone())
+        if shapely_geom is None or shapely_geom.is_empty:
+            continue
 
-        # Inner buffer with sharp edges (mitre join, square cap)
-        inner_buffered = shapely_geom.buffer(inner_buffer_distance, join_style=2, cap_style=2)
+        if not shapely_geom.is_valid:
+            shapely_geom = shapely_geom.buffer(0)
 
-        if not inner_buffered.is_empty:
-            # Create outer buffer from this individual inner buffer
-            outer_buffered = inner_buffered.buffer(outer_buffer_distance, join_style=1, cap_style=1)
-            inner_geoms.append(inner_buffered)
-            outer_geoms.append(outer_buffered)
+        inner_buffered = shapely_geom.buffer(
+            inner_buffer_distance,
+            join_style=JOIN_STYLE.mitre,
+            cap_style=CAP_STYLE.square,
+        )
+
+        if inner_buffered.is_empty:
+            continue
+
+        if not inner_buffered.is_valid:
+            inner_buffered = inner_buffered.buffer(0)
+        if inner_buffered.is_empty:
+            continue
+
+        inner_buffered = inner_buffered.simplify(0.01, preserve_topology=True)
+        outer_buffered = inner_buffered.buffer(
+            outer_buffer_distance,
+            join_style=JOIN_STYLE.round,
+            cap_style=CAP_STYLE.round,
+        )
+
+        if outer_buffered.is_empty:
+            continue
+
+        if not outer_buffered.is_valid:
+            outer_buffered = outer_buffered.buffer(0)
+        if outer_buffered.is_empty:
+            continue
+
+        outer_buffered = outer_buffered.simplify(0.01, preserve_topology=True)
+
+        inner_geoms.append(ogr.CreateGeometryFromWkb(inner_buffered.wkb))
+        outer_geoms.append(ogr.CreateGeometryFromWkb(outer_buffered.wkb))
 
     input_ds = None
 
@@ -910,26 +929,21 @@ def create_local_streets_zone(
         print(f"No valid geometries after inner buffer from {input_layer_name}")
         return (None, None)
 
-    # Write to output
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):
         output_ds = driver.Open(output_path, 1)
     else:
         output_ds = driver.CreateDataSource(output_path)
 
-    # Layer names
     inner_layer_name = f"{output_layer_name}_inner"
     outer_layer_name = f"{output_layer_name}_outer"
 
-    # Remove existing layers if present
     for layer_name in [inner_layer_name, outer_layer_name]:
         for i in range(output_ds.GetLayerCount()):
             if output_ds.GetLayerByIndex(i).GetName() == layer_name:
                 output_ds.DeleteLayer(i)
                 break
 
-    # Create inner layer (shrunk grid blocks) with attributes
-    # Use wkbUnknown to allow both Polygon and MultiPolygon
     inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbUnknown)
     inner_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
@@ -938,8 +952,6 @@ def create_local_streets_zone(
     inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
 
-    # Create outer layer (with sidewalk buffer) with attributes
-    # Use wkbUnknown to allow both Polygon and MultiPolygon
     outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbUnknown)
     outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
     outer_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
@@ -949,15 +961,12 @@ def create_local_streets_zone(
     outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
 
     for _idx, (inner_geom, outer_geom) in enumerate(zip(inner_geoms, outer_geoms)):
-        inner_ogr_geom = ogr.CreateGeometryFromWkb(inner_geom.wkb)
-        outer_ogr_geom = ogr.CreateGeometryFromWkb(outer_geom.wkb)
-
-        inner_area = inner_ogr_geom.GetArea()
-        outer_area = outer_ogr_geom.GetArea()
+        inner_area = inner_geom.GetArea()
+        outer_area = outer_geom.GetArea()
         sidewalk_area = outer_area - inner_area
 
         inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
-        inner_feature.SetGeometry(inner_ogr_geom)
+        inner_feature.SetGeometry(inner_geom)
         inner_feature.SetField("area_m2", inner_area)
         inner_feature.SetField("sidewalk_area", sidewalk_area)
         inner_feature.SetField("buffer_dist", abs(inner_buffer_distance))
@@ -967,21 +976,110 @@ def create_local_streets_zone(
         inner_layer.CreateFeature(inner_feature)
         inner_feature = None
 
-        # Create outer feature
         outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
-        outer_feature.SetGeometry(outer_ogr_geom)
+        outer_feature.SetGeometry(outer_geom)
         outer_feature.SetField("area_m2", outer_area)
         outer_feature.SetField("sidewalk_area", sidewalk_area)
-        outer_feature.SetField("buffer_dist", abs(road_width_m / 2.0))
+        outer_feature.SetField("buffer_dist", abs(outer_buffer_distance))
         outer_feature.SetField("sidewalk_w", sidewalk_width_m)
         outer_feature.SetField("road_w", road_width_m)
         outer_feature.SetField("zone_type", "street_sidewalk")
         outer_layer.CreateFeature(outer_feature)
         outer_feature = None
 
+    if output_ds is not None:
+        output_ds.FlushCache()
     output_ds = None
 
     return (outer_layer_name, inner_layer_name)
+
+
+def export_geometry_vertices(
+    input_path,
+    input_layer_name,
+    output_path,
+    output_layer_name,
+):
+    """Export all vertices (points) from geometries in a layer for debugging.
+
+    Args:
+        input_path: Path to input GeoPackage
+        input_layer_name: Name of layer to extract vertices from
+        output_path: Path to output GeoPackage
+        output_layer_name: Name for output points layer
+
+    Returns:
+        str: Name of created points layer
+    """
+    input_ds = ogr.Open(input_path)
+    if input_ds is None:
+        raise RuntimeError(f"Cannot open input dataset: {input_path}")
+
+    input_layer = input_ds.GetLayerByName(input_layer_name)
+    if input_layer is None:
+        input_ds = None
+        raise RuntimeError(f"Cannot find layer: {input_layer_name}")
+
+    srs = input_layer.GetSpatialRef()
+
+    # Collect all vertices
+    vertices = []
+    for feature in input_layer:
+        geom = feature.GetGeometryRef()
+        if geom is None:
+            continue
+
+        # Extract vertices based on geometry type
+        if geom.GetGeometryName() in ["POLYGON", "MULTIPOLYGON"]:
+            # Get all rings from polygon(s)
+            for i in range(geom.GetGeometryCount()):
+                ring = geom.GetGeometryRef(i)
+                if ring.GetGeometryName() == "POLYGON":
+                    # MultiPolygon case
+                    for j in range(ring.GetGeometryCount()):
+                        linear_ring = ring.GetGeometryRef(j)
+                        for k in range(linear_ring.GetPointCount()):
+                            x, y = linear_ring.GetPoint_2D(k)
+                            vertices.append((x, y))
+                else:
+                    # Simple Polygon case - ring is LinearRing
+                    for k in range(ring.GetPointCount()):
+                        x, y = ring.GetPoint_2D(k)
+                        vertices.append((x, y))
+
+    input_ds = None
+
+    if not vertices:
+        print(f"No vertices found in layer {input_layer_name}")
+        return None
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+    points_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint)
+    points_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
+    for idx, (x, y) in enumerate(vertices):
+        point = ogr.Geometry(ogr.wkbPoint)
+        point.AddPoint(x, y)
+
+        feature = ogr.Feature(points_layer.GetLayerDefn())
+        feature.SetGeometry(point)
+        feature.SetField("vertex_id", idx)
+        points_layer.CreateFeature(feature)
+        feature = None
+
+    if output_ds is not None:
+        output_ds.FlushCache()
+    output_ds = None
+
+    print(f"Exported {len(vertices)} vertices to {output_layer_name}")
+    return output_layer_name
 
 
 def extract_site_boundary_lines(
