@@ -5,9 +5,7 @@ from dataclasses import dataclass
 @dataclass
 class ClusterConfig:
     """Configuration for cluster/partition generation."""
-
     # Input paths
-    site_path: str  # Path to site boundary
     roads_path: str  # Path to roads network
     blocks_path: str  # Path to blocks (output from streets module)
 
@@ -48,3 +46,7 @@ class ClusterConfig:
     # Road widths
     road_arterial_width_m: float = 20.0
     road_secondary_width_m: float = 15.0
+    road_local_width_m: float = 12.0
+
+    # Fixed data
+    off_grid_plot_threshold: float = 0.5  # Off-grid plot threshold (0.5 = 50% of target, below it is park)

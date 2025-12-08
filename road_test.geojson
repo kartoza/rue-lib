@@ -1,9 +1,0 @@
-{
-"type": "FeatureCollection",
-"name": "road_test",
-"crs": { "type": "name", "properties": { "name": "urn:ogc:def:crs:EPSG::3857" } },
-"features": [
-{ "type": "Feature", "properties": { "id": 1, "road_type": "road_art" }, "geometry": { "type": "MultiLineString", "coordinates": [ [ [ 2380208.053200000431389, -2927366.673100000247359 ], [ 2380507.429200000595301, -2927365.665100000333041 ], [ 2380507.429200000595301, -2927365.665100000333041 ] ] ] } },
-{ "type": "Feature", "properties": { "id": 2, "road_type": "road_sec" }, "geometry": { "type": "MultiLineString", "coordinates": [ [ [ 2380208.557200000155717, -2927366.673100000247359 ], [ 2380207.549200000241399, -2927066.793100000359118 ], [ 2380207.549200000241399, -2927066.793100000359118 ] ] ] } }
-]
-}

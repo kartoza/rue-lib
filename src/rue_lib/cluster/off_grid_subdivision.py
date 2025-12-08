@@ -1,90 +1,20 @@
 # src/rue_lib/cluster/off_grid_subdivision.py
 """Subdivide off-grid areas into smaller plot clusters."""
 
-from typing import Optional
+from pathlib import Path
 
+import geopandas as gpd
 import numpy as np
 from shapely.geometry import Polygon
 
-
-def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
-    """
-    Compute the dot product of normalized edge vectors at a vertex.
-
-    This helps identify sharp corners (low dot product = sharp angle).
-
-    Args:
-        polygon: Input polygon
-        vertex_idx: Index of vertex to check
-
-    Returns:
-        Dot product of normalized edge vectors (-1 to 1)
-    """
-    coords = list(polygon.exterior.coords)[:-1]
-    n = len(coords)
-
-    p_prev = np.array(coords[(vertex_idx - 1) % n])
-    p_curr = np.array(coords[vertex_idx % n])
-    p_next = np.array(coords[(vertex_idx + 1) % n])
-
-    vec0 = p_curr - p_prev
-    vec1 = p_next - p_curr
-
-    vec0_norm = vec0 / np.linalg.norm(vec0) if np.linalg.norm(vec0) > 0 else vec0
-    vec1_norm = vec1 / np.linalg.norm(vec1) if np.linalg.norm(vec1) > 0 else vec1
-
-    return np.dot(vec0_norm, vec1_norm)
-
-
-def convert_to_quadrilateral(polygon: Polygon, min_area: float = 100.0) -> Optional[Polygon]:
-    """
-    Convert an off-grid polygon to a quadrilateral by removing vertices with sharpest angles.
-
-    This simplifies complex polygons to rectangles/quads suitable for grid subdivision.
-
-    Args:
-        polygon: Input off-grid polygon
-        min_area: Minimum area threshold (m²)
-
-    Returns:
-        Quadrilateral polygon or None if area too small or too few vertices
-    """
-    if polygon.area < min_area:
-        return None
-
-    coords = list(polygon.exterior.coords)[:-1]
-    n_vertices = len(coords)
-
-    if n_vertices < 4:
-        return None
-
-    # Compute angle dot products for all vertices
-    vertex_dots = []
-    for i in range(n_vertices):
-        dot = compute_angle_dot(polygon, i)
-        vertex_dots.append((i, dot))
-
-    sorted_vertices = sorted(vertex_dots, key=lambda x: x[1], reverse=True)
-
-    vertices_to_keep = sorted([v[0] for v in sorted_vertices[-4:]])
-
-    quad_coords = [coords[i] for i in vertices_to_keep]
-    quad_coords.append(quad_coords[0])
-    quad = Polygon(quad_coords)
-
-    worst_dot = sorted_vertices[-1][1]
-
-    if worst_dot > -0.7:
-        return quad
-
-    return quad
+from rue_lib.cluster.helpers import convert_to_quadrilateral
 
 
 def create_grid_positions(
-    quad: Polygon,
-    part_og_w: float,
-    part_og_d: float,
-    swap_orientation: bool = False,
+        quad: Polygon,
+        part_og_w: float,
+        part_og_d: float,
+        swap_orientation: bool = False,
 ) -> list[list[tuple[float, float]]]:
     """
     Create a grid of positions within a quadrilateral for plot subdivision.
@@ -115,7 +45,8 @@ def create_grid_positions(
 
     x_dots = []
     for i in range(4):
-        edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else edges[i][1]
+        edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else \
+            edges[i][1]
         dot = np.dot([1, 0], edge_vec_norm[:2])
         x_dots.append(dot)
 
@@ -172,7 +103,8 @@ def create_grid_positions(
             x1 = x1 + vec_right_exp
 
         vec_up = (x1 - x0) / (num_y - 1)
-        vec_up_exp = vec_up / np.linalg.norm(vec_up) * 100 if np.linalg.norm(vec_up) > 0 else vec_up
+        vec_up_exp = vec_up / np.linalg.norm(vec_up) * 100 if np.linalg.norm(
+            vec_up) > 0 else vec_up
 
         for j in range(num_y):
             xyz = x0 + vec_up * j
@@ -190,8 +122,8 @@ def create_grid_positions(
 
 
 def create_plot_grid_from_positions(
-    positions: list[list[tuple[float, float]]],
-    off_grid_boundary: Polygon,
+        positions: list[list[tuple[float, float]]],
+        off_grid_boundary: Polygon,
 ) -> list[Polygon]:
     """
     Create individual plot polygons from grid positions.
@@ -240,11 +172,11 @@ def create_plot_grid_from_positions(
 
 
 def subdivide_off_grid(
-    off_grid: Polygon,
-    part_og_w: float = 140.0,
-    part_og_d: float = 140.0,
-    swap_orientation: bool = False,
-    min_plot_area: float = None,
+        off_grid: Polygon,
+        part_og_w: float = 140.0,
+        part_og_d: float = 140.0,
+        swap_orientation: bool = False,
+        min_plot_area: float = None,
 ) -> list[Polygon]:
     """
     Subdivide an off-grid polygon into a grid of smaller plots.
@@ -312,10 +244,10 @@ def subdivide_off_grid(
 
 
 def classify_plot_by_area(
-    plot: Polygon,
-    part_og_w: float,
-    part_og_d: float,
-    threshold: float = 0.3,
+        plot: Polygon,
+        part_og_w: float,
+        part_og_d: float,
+        threshold: float = 0.3,
 ) -> str:
     """
     Classify a plot as 'plot' or 'park' based on area.
@@ -335,3 +267,147 @@ def classify_plot_by_area(
         return "plot"
     else:
         return "park"
+
+
+def extract_off_grid_inner_cluster(
+        output_path: Path,
+        off_grids_inner_layer_name: str,
+        part_og_w: float,
+        part_og_d: float,
+        output_layer_name: str,
+        off_grid_plot_threshold: float
+):
+    """
+    Extract and subdivide off-grid areas into plot clusters.
+
+    Reads off-grid geometries from a GeoPackage layer, subdivides each into
+    individual plots, and classifies them by area. Prints progress information
+    for each block processed.
+
+    Args:
+        output_path: Path to the GeoPackage file containing off-grid data
+        off_grids_inner_layer_name: Name of the layer containing off-grid geometries
+        part_og_w: Target plot width in meters
+        part_og_d: Target plot depth in meters
+        output_layer_name: Layer name for the output plots
+
+    Returns:
+        None (currently collects plots but doesn't return them)
+    """
+    off_grids_inner_layer = gpd.read_file(
+        output_path, layer=off_grids_inner_layer_name
+    )
+
+    all_plots = []
+
+    for _idx, off_grid_part in off_grids_inner_layer.iterrows():
+        off_grid_geom = off_grid_part.geometry
+        block_id = off_grid_part.get("block_id")
+
+        print(f"  Block {block_id}:")
+        print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
+
+        try:
+            # Subdivide the off-grid area using oriented approach
+            plots = subdivide_off_grid(
+                off_grid_geom,
+                part_og_w=part_og_w,
+                part_og_d=part_og_d,
+                min_plot_area=part_og_w * part_og_d * off_grid_plot_threshold,
+            )
+
+            print(f"    ✓ Created {len(plots)} plots")
+
+            # Collect plots
+            for i, plot in enumerate(plots):
+                all_plots.append(
+                    {
+                        "geometry": plot,
+                        "block_id": block_id,
+                        "plot_type": classify_plot_by_area(
+                            plot, part_og_w, part_og_d
+                        ),
+                        "plot_index": i,
+                        "area": plot.area,
+                        "parent_part": "off_grid",
+                    }
+                )
+
+        except Exception as e:
+            print(f"    ✗ Error subdividing off-grid: {e}")
+
+    gdf_out = gpd.GeoDataFrame(all_plots, crs=off_grids_inner_layer.crs)
+    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    return output_layer_name
+
+
+def extract_off_grid_side_cluster(
+        output_path: Path,
+        off_grid_sides_layer_name: str,
+        part_og_d: float,
+        part_og_w: float,
+        output_layer_name: str,
+        off_grid_plot_threshold: float
+):
+    """
+    Extract and subdivide off-grid areas into plot clusters.
+
+    Reads off-grid geometries from a GeoPackage layer, subdivides each into
+    individual plots, and classifies them by area. Prints progress information
+    for each block processed.
+
+    Args:
+        output_path: Path to the GeoPackage file containing off-grid data
+        off_grid_sides_layer_name: Name of the layer containing off-grid geometries
+        part_og_d: Target plot depth in meters
+        part_og_w: Target plot width in meters
+        output_layer_name: Layer name for the output plots
+
+    Returns:
+        None (currently collects plots but doesn't return them)
+    """
+    off_grid_sides_layer = gpd.read_file(
+        output_path, layer=off_grid_sides_layer_name
+    )
+
+    all_plots = []
+
+    for _idx, off_grid_part in off_grid_sides_layer.iterrows():
+        off_grid_geom = off_grid_part.geometry
+        block_id = off_grid_part.get("block_id")
+
+        print(f"  Block {block_id}:")
+        print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
+
+        try:
+            # Subdivide the off-grid area using oriented approach
+            plots = subdivide_off_grid(
+                off_grid_geom,
+                part_og_w=part_og_w,
+                part_og_d=part_og_d,
+                min_plot_area=part_og_w * part_og_d * off_grid_plot_threshold,
+            )
+
+            print(f"    ✓ Created {len(plots)} plots")
+
+            # Collect plots
+            for i, plot in enumerate(plots):
+                all_plots.append(
+                    {
+                        "geometry": plot,
+                        "block_id": block_id,
+                        "plot_type": classify_plot_by_area(
+                            plot, part_og_w, part_og_d
+                        ),
+                        "plot_index": i,
+                        "area": plot.area,
+                        "parent_part": "off_grid",
+                    }
+                )
+
+        except Exception as e:
+            print(f"    ✗ Error subdividing off-grid: {e}")
+
+    gdf_out = gpd.GeoDataFrame(all_plots, crs=off_grid_sides_layer.crs)
+    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    return output_layer_name

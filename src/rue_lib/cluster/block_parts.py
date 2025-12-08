@@ -1,6 +1,9 @@
 # src/rue_lib/cluster/block_parts.py
 """Create corner and side block parts from off-grid polygons."""
 
+from pathlib import Path
+
+import geopandas as gpd
 import numpy as np
 from shapely.geometry import Polygon
 
@@ -23,7 +26,8 @@ def set_vector_length(v: np.ndarray, length: float) -> np.ndarray:
     return normalize_vector(v) * length
 
 
-def compute_internal_angle(coords: list[tuple[float, float]], idx: int) -> float:
+def compute_internal_angle(coords: list[tuple[float, float]],
+                           idx: int) -> float:
     """
     Compute internal angle at vertex idx in a polygon.
 
@@ -57,7 +61,8 @@ def compute_internal_angle(coords: list[tuple[float, float]], idx: int) -> float
     return angle_deg
 
 
-def get_edge_direction(coords: list[tuple[float, float]], idx: int) -> np.ndarray:
+def get_edge_direction(coords: list[tuple[float, float]],
+                       idx: int) -> np.ndarray:
     """
     Get direction vector of edge starting at vertex idx.
 
@@ -79,7 +84,8 @@ def get_edge_direction(coords: list[tuple[float, float]], idx: int) -> np.ndarra
 
 
 def create_corner_fan(
-    origin: np.ndarray, dir0: np.ndarray, dir1: np.ndarray, distance: float = 1000.0
+        origin: np.ndarray, dir0: np.ndarray, dir1: np.ndarray,
+        distance: float = 1000.0
 ) -> Polygon:
     """
     Create a corner fan polygon at a sharp corner.
@@ -107,13 +113,15 @@ def create_corner_fan(
     xyz1 = origin[:2] + v1_perp[:2]
     xyz_mid = origin[:2] + v_mid_perp[:2]
 
-    fan_coords = [tuple(origin[:2]), tuple(xyz0), tuple(xyz_mid), tuple(xyz1), tuple(origin[:2])]
+    fan_coords = [tuple(origin[:2]), tuple(xyz0), tuple(xyz_mid), tuple(xyz1),
+                  tuple(origin[:2])]
 
     return Polygon(fan_coords)
 
 
 def get_positions_between_edges(
-    coords: list[tuple[float, float]], start_idx: int, end_idx: int, include_end: bool = True
+        coords: list[tuple[float, float]], start_idx: int, end_idx: int,
+        include_end: bool = True
 ) -> list[tuple[float, float]]:
     """
     Get all vertex positions along the perimeter between two edge indices.
@@ -144,11 +152,11 @@ def get_positions_between_edges(
 
 
 def create_side_polygon(
-    a_origin: tuple[float, float],
-    a_outer: tuple[float, float],
-    b_outer: tuple[float, float],
-    b_origin: tuple[float, float],
-    perimeter_positions: list[tuple[float, float]],
+        a_origin: tuple[float, float],
+        a_outer: tuple[float, float],
+        b_outer: tuple[float, float],
+        b_origin: tuple[float, float],
+        perimeter_positions: list[tuple[float, float]],
 ) -> Polygon:
     """
     Create a side polygon between two corner fans.
@@ -182,12 +190,75 @@ def create_side_polygon(
     return Polygon(side_coords)
 
 
+def get_side_parts(
+        block: Polygon,
+        off_grid: Polygon,
+        corner_parts: list[Polygon],
+        simplify_tolerance: float = 0.1,
+) -> list[Polygon]:
+    """
+    Get side block parts by subtracting off-grid and corners from block.
+
+    Computes: side_parts = block - off_grid - corners
+    Then removes spikes by simplifying the geometry.
+
+    Args:
+        block: Original block polygon (outer boundary)
+        off_grid: Off-grid polygon (inner part of block)
+        corner_parts: List of corner polygons to subtract
+        simplify_tolerance: Tolerance for simplifying geometry to remove spikes
+
+    Returns:
+        list of side strip polygons with spikes removed
+
+    Example:
+        >>> block = Polygon([(0, 0), (100, 0), (100, 100), (0, 100)])
+        >>> off_grid = Polygon([(20, 20), (80, 20), (80, 80), (20, 80)])
+        >>> corners = [...]
+        >>> sides = get_side_parts(block, off_grid, corners)
+    """
+    try:
+        # Start with block - off_grid
+        result = block.difference(off_grid)
+
+        # Subtract each corner part
+        for corner in corner_parts:
+            result = result.difference(corner)
+
+        # Remove spikes using buffer technique
+        # Small negative buffer followed by positive buffer removes spikes
+        if not result.is_empty and result.area > 0:
+            buffer_distance = -0.01
+            result = result.buffer(buffer_distance,
+                                   join_style=2)  # join_style=2 is mitre
+            if not result.is_empty:
+                result = result.buffer(-buffer_distance, join_style=2)
+
+        # Simplify to remove unnecessary vertices
+        if not result.is_empty and result.area > 0:
+            result = result.simplify(simplify_tolerance,
+                                     preserve_topology=True)
+
+        # Handle result which could be Polygon, MultiPolygon, or empty
+        side_parts = []
+        if not result.is_empty and result.area > 0:
+            if result.geom_type == "Polygon":
+                side_parts.append(result)
+            elif result.geom_type == "MultiPolygon":
+                side_parts.extend(list(result.geoms))
+
+        return side_parts
+    except Exception as e:
+        print(f"Warning: Failed to compute side parts: {e}")
+        return []
+
+
 def create_block_parts_from_off_grid(
-    block: Polygon,
-    off_grid: Polygon,
-    angle_threshold: float = 155.0,
-    corner_distance: float = 1000.0,
-) -> tuple[list[Polygon], list[Polygon], Polygon]:
+        block: Polygon,
+        off_grid: Polygon,
+        angle_threshold: float = 155.0,
+        corner_distance: float = 1000.0,
+) -> tuple[list[Polygon], list[Polygon]]:
     """
     Create corner and side block parts using the off-grid polygon.
 
@@ -307,20 +378,114 @@ def create_block_parts_from_off_grid(
             print(f"Warning: Failed to intersect corner: {e}")
             continue
 
-    side_parts = []
-    for side in side_candidate_polys:
-        try:
-            intersected = block.intersection(side)
-            if intersected.is_empty or intersected.area == 0:
-                continue
-            frame_part = intersected.difference(off_grid)
-            if not frame_part.is_empty and frame_part.area > 0:
-                if frame_part.geom_type == "Polygon":
-                    side_parts.append(frame_part)
-                elif frame_part.geom_type == "MultiPolygon":
-                    side_parts.extend(list(frame_part.geoms))
-        except Exception as e:
-            print(f"Warning: Failed to intersect side: {e}")
-            continue
+    side_parts = get_side_parts(block, off_grid, corner_parts)
+    return corner_parts, side_parts
 
-    return corner_parts, side_parts, off_grid
+
+def extract_block_parts_from_off_grid(
+        output_path: Path,
+        off_grid_layer_name: str,
+        off_grids_inner_layer_name: str,
+        off_grid_frame_layer_name: str,
+        angle_threshold: float,
+        corner_distance: float,
+        output_corner_layer_name: str,
+        output_sides_layer_name: str,
+):
+    """Extract and categorize block parts (corners, sides, off-grids) from blocks with off-grid areas.
+
+    Processes blocks containing off-grid areas to decompose them into distinct
+    geometric parts: corner sections, side sections, and the central off-grid area.
+    This subdivision is useful for urban planning and block subdivision analysis.
+
+    Args:
+        output_path: Path to the GeoPackage file containing input layers and
+            where outputs will be saved.
+        off_grid_layer_name: Name of the layer containing the original block
+            geometries.
+        off_grids_inner_layer_name: Name of the layer containing inner off-grid
+            geometries with their associated block_id values.
+        off_grid_frame_layer_name: Name of the layer containing frame geometries
+            (the perimeter area around off-grids).
+        angle_threshold: Maximum angle in degrees to consider a vertex as a corner.
+            Vertices with angles below this threshold are identified as corners.
+        corner_distance: Distance in meters used to define the depth of corner
+            sections extending from corner vertices.
+        output_corner_layer_name: Name for the output layer containing corner
+            part geometries.
+        output_sides_layer_name: Name for the output layer containing side
+            part geometries.
+
+    Notes:
+        - Each output feature includes metadata: block_id, part_type, area,
+          and part_index (for corners and sides).
+        - Corner parts are created at sharp vertices of the block boundary.
+        - Side parts fill the space between corners along the block edges.
+        - Off-grid parts represent the central void within each block.
+        - Errors during part creation for individual blocks are caught and logged.
+    """
+    off_grid_layer = gpd.read_file(
+        output_path, layer=off_grid_layer_name
+    )
+    off_grids_inner_layer = gpd.read_file(
+        output_path, layer=off_grids_inner_layer_name
+    )
+    off_grid_frame_layer = gpd.read_file(
+        output_path, layer=off_grid_frame_layer_name
+    )
+    all_corner_parts = []
+    all_side_parts = []
+    for idx, frame_row in off_grid_frame_layer.iterrows():
+        print(frame_row)
+        block_id = frame_row.get("block_id")
+        # Find corresponding off-grid
+        off_grid_row = off_grids_inner_layer[
+            off_grids_inner_layer["block_id"] == block_id].iloc[0]
+        off_grid = off_grid_row.geometry
+
+        # Get original block (without hole)
+        original_block = off_grid_layer.loc[block_id].geometry
+
+        try:
+            # Pass original block (not frame) - the function creates parts from block and off_grid
+            corner_parts, side_parts = create_block_parts_from_off_grid(
+                original_block,  # Original block boundary
+                off_grid,  # Off-grid center polygon
+                angle_threshold=angle_threshold,
+                corner_distance=corner_distance,
+            )
+
+            print(
+                f"  ✓ Created {len(corner_parts)} corners, {len(side_parts)} sides")
+
+            # Collect corner parts
+            for i, corner in enumerate(corner_parts):
+                all_corner_parts.append(
+                    {
+                        "geometry": corner,
+                        "block_id": block_id,
+                        "part_type": "corner",
+                        "part_index": i,
+                        "area": corner.area,
+                    }
+                )
+
+            # Collect side parts
+            for i, side in enumerate(side_parts):
+                all_side_parts.append(
+                    {
+                        "geometry": side,
+                        "block_id": block_id,
+                        "part_type": "side",
+                        "part_index": i,
+                        "area": side.area,
+                    }
+                )
+
+        except Exception as e:
+            print(f"  ✗ Error creating parts: {e}")
+
+    gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=off_grid_layer.crs)
+    gdf_out.to_file(output_path, layer=output_corner_layer_name, driver="GPKG")
+    gdf_out = gpd.GeoDataFrame(all_side_parts, crs=off_grid_layer.crs)
+    gdf_out.to_file(output_path, layer=output_sides_layer_name, driver="GPKG")
