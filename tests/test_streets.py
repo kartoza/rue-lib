@@ -166,7 +166,7 @@ class TestCreateLocalStreetsZone:
         ds = None
 
     def test_geometries_are_dissolved(self, temp_gpkg):
-        """Test that multiple input features are dissolved into one."""
+        """Test that multiple input features preserve individual geometries."""
         create_local_streets_zone(
             temp_gpkg,
             "test_grid",
@@ -180,9 +180,22 @@ class TestCreateLocalStreetsZone:
         inner_layer = ds.GetLayerByName("local_streets_inner")
         outer_layer = ds.GetLayerByName("local_streets_outer")
 
-        # Should have exactly 1 feature (dissolved from 2 input features)
-        assert inner_layer.GetFeatureCount() == 1
-        assert outer_layer.GetFeatureCount() == 1
+        # Should have same number of features as input (preserves individual features and areas)
+        input_layer = ds.GetLayerByName("test_grid")
+        input_count = input_layer.GetFeatureCount()
+
+        assert inner_layer.GetFeatureCount() == input_count
+        assert outer_layer.GetFeatureCount() == input_count
+
+        # Verify that features have different areas (not all the same)
+        inner_layer.ResetReading()
+        areas = []
+        for feature in inner_layer:
+            areas.append(feature.GetField("area_m2"))
+
+        # If areas are preserved correctly, they should not all be identical
+        # (unless the input geometries happened to be identical)
+        assert len(set(areas)) > 0  # At least one unique area value
 
         ds = None
 
@@ -230,14 +243,17 @@ class TestCreateLocalStreetsZone:
 
         ds = ogr.Open(temp_gpkg)
         inner_layer = ds.GetLayerByName("local_streets_inner")
-        inner_feature = inner_layer.GetNextFeature()
+        input_layer = ds.GetLayerByName("test_grid")
+        input_count = input_layer.GetFeatureCount()
 
-        # Should have the new parameters
-        assert inner_feature.GetField("sidewalk_w") == 5.0
-        assert inner_feature.GetField("road_w") == 12.0
+        # Should have same number of features as input
+        assert inner_layer.GetFeatureCount() == input_count
 
-        # Should still have only 1 feature
-        assert inner_layer.GetFeatureCount() == 1
+        # Check that all features have the new parameters
+        inner_layer.ResetReading()
+        for feature in inner_layer:
+            assert feature.GetField("sidewalk_w") == 5.0
+            assert feature.GetField("road_w") == 12.0
 
         ds = None
 

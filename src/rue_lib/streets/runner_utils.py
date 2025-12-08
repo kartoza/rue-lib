@@ -290,19 +290,23 @@ def create_guide_points_from_site_boundary(
     site_boundary_lines_layer: str,
     perp_lines_layer: str,
     output_layer_name: str = "13_site_boundary_points",
+    lines_without_points_layer: str = "13_lines_without_points",
+    min_line_length_threshold: float = 100.0,
 ) -> str:
     """Create guide points from site boundary lines and perpendicular lines.
 
-    This function creates two types of points:
-    1. Corner points where 2 site boundary lines meet
+    This function creates multiple types of points (excluding dead-end corners):
+    1. Non-dead-end corner points where 2+ lines meet
     2. Points where perpendicular lines intersect/touch site boundary lines
+    3. Points at regular intervals along long segments (segments >= min_line_length_threshold)
 
     Args:
         output_path: Path to the GeoPackage
         site_boundary_lines_layer: Name of layer containing site boundary lines
         perp_lines_layer: Name of layer containing perpendicular lines
         output_layer_name: Name for the output points layer
-
+        lines_without_points_layer: Name for layer containing long segments between points
+        min_line_length_threshold: Minimum length for segments and interval for adding points
     Returns:
         Name of the created points layer
     """
@@ -337,7 +341,6 @@ def create_guide_points_from_site_boundary(
     for line in boundary_lines:
         coords = list(line.coords)
         if len(coords) >= 2:
-            # Start and end endpoints
             for coord in (coords[0], coords[-1]):
                 key = (round(coord[0], 6), round(coord[1], 6))
                 endpoint_counts[key] = endpoint_counts.get(key, 0) + 1
@@ -347,8 +350,6 @@ def create_guide_points_from_site_boundary(
     for pt_coords in corner_points_set:
         points.append(Point(pt_coords[0], pt_coords[1]))
         point_types.append("corner")
-
-    print(f"  Found {len(corner_points_set)} non-dead-end corner points")
 
     print("  Finding perpendicular line intersections...")
 
@@ -363,8 +364,6 @@ def create_guide_points_from_site_boundary(
             continue
 
         try:
-            from shapely.geometry import LineString
-
             coords = list(perp_geom.coords)
             if len(coords) < 2:
                 continue
@@ -446,6 +445,108 @@ def create_guide_points_from_site_boundary(
     print(f"    - {len(corner_points_set)} corner points")
     print(f"    - {intersection_count} perpendicular intersection points")
     print(f"  Saved to layer: {output_layer_name}")
+
+    print(f"\n  Breaking boundary lines at {len(points)} points...")
+    breaking_points_geom = points
+
+    broken_segments = []
+    segment_lengths = []
+
+    for line in boundary_lines:
+        points_on_line = []
+        snap_distance = 1.0
+
+        for pt in breaking_points_geom:
+            if line.distance(pt) < snap_distance:
+                distance_along = line.project(pt)
+                points_on_line.append(distance_along)
+
+        points_on_line = sorted(set(points_on_line))
+
+        if not points_on_line:
+            broken_segments.append(line)
+            segment_lengths.append(line.length)
+        else:
+            coords = list(line.coords)
+            line_positions = [0.0] + points_on_line + [line.length]
+
+            for i in range(len(line_positions) - 1):
+                start_dist = line_positions[i]
+                end_dist = line_positions[i + 1]
+
+                if end_dist - start_dist < 0.1:
+                    continue
+
+                start_pt = line.interpolate(start_dist)
+                end_pt = line.interpolate(end_dist)
+
+                segment = LineString([start_pt, end_pt])
+                broken_segments.append(segment)
+                segment_lengths.append(segment.length)
+
+    print(f"  Created {len(broken_segments)} segments from boundary lines")
+
+    long_segments = []
+    long_lengths = []
+
+    for segment, length in zip(broken_segments, segment_lengths):
+        if length >= min_line_length_threshold * 2:
+            long_segments.append(segment)
+            long_lengths.append(length)
+
+    if long_segments:
+        sorted_pairs = sorted(zip(long_segments, long_lengths), key=lambda x: x[1], reverse=True)
+        long_segments = [seg for seg, _ in sorted_pairs]
+        long_lengths = [length for _, length in sorted_pairs]
+
+        print(f"  Found {len(long_segments)} segments longer than {min_line_length_threshold}m")
+
+        gdf_long_segments = gpd.GeoDataFrame(
+            {"length_m": long_lengths},
+            geometry=long_segments,
+            crs=gdf_boundary.crs,
+        )
+
+        gdf_long_segments.to_file(output_path, layer=lines_without_points_layer, driver="GPKG")
+        print(f"  Saved longest segments to layer: {lines_without_points_layer}")
+
+        for i, length in enumerate(long_lengths[:10]):
+            print(f"    Segment {i + 1}: length = {length:.2f}m")
+        if len(long_lengths) > 10:
+            print(f"    ... and {len(long_lengths) - 10} more segments")
+
+        print(f"\n  Adding points along long segments at {min_line_length_threshold}m intervals...")
+        additional_points_count = 0
+        for segment in long_segments:
+            if segment.geom_type == "LineString":
+                segment_length = segment.length
+                num_intervals = int(segment_length / min_line_length_threshold)
+
+                for i in range(1, num_intervals + 1):
+                    distance = i * min_line_length_threshold
+                    if distance < segment_length:
+                        point = segment.interpolate(distance)
+                        key = (round(point.x, 6), round(point.y, 6))
+
+                        if key not in corner_points_set and not any(
+                            abs(pt.x - point.x) < 0.001 and abs(pt.y - point.y) < 0.001
+                            for pt in points
+                        ):
+                            points.append(Point(point.x, point.y))
+                            point_types.append("long_segment_interval")
+                            additional_points_count += 1
+
+        print(f"  Added {additional_points_count} additional points along long segments")
+        gdf_points = gpd.GeoDataFrame(
+            {"point_type": point_types},
+            geometry=points,
+            crs=gdf_boundary.crs,
+        )
+        gdf_points.to_file(output_path, layer=output_layer_name, driver="GPKG")
+        print(f"  Updated guide points layer with {len(points)} total points")
+
+    else:
+        print(f"  No segments longer than {min_line_length_threshold}m found")
 
     return output_layer_name
 

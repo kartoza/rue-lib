@@ -433,34 +433,6 @@
 
         <div class="params-section">
             <h2>Processing Parameters</h2>
-
-            <div class="section-subtitle">Step 1: Parcel Generation</div>
-            <div class="param-grid">
-                <div>
-                    <label class="param-label">Grid Rows</label>
-                    <input type="number" id="param-rows" class="param-input" value="4" min="1">
-                </div>
-                <div>
-                    <label class="param-label">Grid Columns</label>
-                    <input type="number" id="param-cols" class="param-input" value="4" min="1">
-                </div>
-                <div>
-                    <label class="param-label">Padding (m)</label>
-                    <input type="number" id="param-pad" class="param-input" value="50" min="0" step="0.1">
-                </div>
-                <div>
-                    <label class="param-label">Min Parcel Area (m²)</label>
-                    <input type="number" id="param-min-area" class="param-input" value="5" min="0" step="0.1">
-                </div>
-            </div>
-            <div style="margin-top: 8px;">
-                <label style="font-size: 12px; color: #ecf0f1; display: flex; align-items: center; gap: 6px; cursor: pointer;">
-                    <input type="checkbox" id="param-subtract-roads" style="width: 16px; height: 16px;">
-                    Subtract roads from parcels
-                </label>
-            </div>
-
-            <div class="section-subtitle">Step 2: Street Generation</div>
             <div class="param-grid">
                 <div>
                     <label class="param-label">Arterial Width (m)</label>
@@ -475,32 +447,24 @@
                     <input type="number" id="param-local-width" class="param-input" value="12" min="0" step="0.1">
                 </div>
                 <div>
-                    <label class="param-label">Arterial Setback (m)</label>
-                    <input type="number" id="param-arterial-setback" class="param-input" value="60" min="0" step="0.1">
+                    <label class="param-label">Off-Grid Preferred Depth (m)</label>
+                    <input type="number" id="param-pref-depth" class="param-input" value="100" min="0" step="0.1">
                 </div>
                 <div>
-                    <label class="param-label">Secondary Setback (m)</label>
-                    <input type="number" id="param-secondary-setback" class="param-input" value="60" min="0" step="0.1">
+                    <label class="param-label">Off-Grid Preferred Width (m)</label>
+                    <input type="number" id="param-pref-width" class="param-input" value="100" min="0" step="0.1">
                 </div>
                 <div>
-                    <label class="param-label">Preferred Depth (m)</label>
-                    <input type="number" id="param-pref-depth" class="param-input" value="45" min="0" step="0.1">
+                    <label class="param-label">On-Grid Depth Arterial (m)</label>
+                    <input type="number" id="param-grid-depth-arterial" class="param-input" value="60" min="0" step="0.1">
                 </div>
                 <div>
-                    <label class="param-label">Preferred Width (m)</label>
-                    <input type="number" id="param-pref-width" class="param-input" value="45" min="0" step="0.1">
-                </div>
-                <div>
-                    <label class="param-label">Grid Depth Arterial (m)</label>
-                    <input type="number" id="param-grid-depth-arterial" class="param-input" value="40" min="0" step="0.1">
-                </div>
-                <div>
-                    <label class="param-label">Grid Depth Secondary (m)</label>
-                    <input type="number" id="param-grid-depth-secondary" class="param-input" value="30" min="0" step="0.1">
+                    <label class="param-label">On-Grid Depth Secondary (m)</label>
+                    <input type="number" id="param-grid-depth-secondary" class="param-input" value="60" min="0" step="0.1">
                 </div>
             </div>
 
-            <button id="apply-steps-btn" class="btn" disabled style="margin-top: 15px;">Apply Steps 1 &amp; 2</button>
+            <button id="apply-steps-btn" class="btn" disabled style="margin-top: 15px;">Apply</button>
             <div id="apply-status" class="status-message"></div>
         </div>
 
@@ -1754,19 +1718,9 @@
 
             // Collect parameters from form
             const params = {
-                // Step 1 parameters
-                rows: parseInt(document.getElementById('param-rows').value) || 4,
-                cols: parseInt(document.getElementById('param-cols').value) || 4,
-                pad_m: parseFloat(document.getElementById('param-pad').value) || 50.0,
-                min_parcel_area_m2: parseFloat(document.getElementById('param-min-area').value) || 5.0,
-                subtract_roads: document.getElementById('param-subtract-roads').checked,
-
-                // Step 2 parameters
                 road_arterial_width_m: parseFloat(document.getElementById('param-arterial-width').value) || 20.0,
                 road_secondary_width_m: parseFloat(document.getElementById('param-secondary-width').value) || 15.0,
                 road_local_width_m: parseFloat(document.getElementById('param-local-width').value) || 12.0,
-                arterial_setback_depth: parseFloat(document.getElementById('param-arterial-setback').value) || 60.0,
-                secondary_setback_depth: parseFloat(document.getElementById('param-secondary-setback').value) || 60.0,
                 off_grid_partitions_preferred_depth: parseFloat(document.getElementById('param-pref-depth').value) || 140.0,
                 off_grid_partitions_preferred_width: parseFloat(document.getElementById('param-pref-width').value) || 140.0,
                 on_grid_partition_depth_arterial_roads: parseFloat(document.getElementById('param-grid-depth-arterial').value) || 40.0,

@@ -123,8 +123,6 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
     arterial_width = params.get("road_arterial_width_m", 20.0)
     secondary_width = params.get("road_secondary_width_m", 15.0)
     local_width = params.get("road_local_width_m", 12.0)
-    arterial_setback = params.get("arterial_setback_depth", 60.0)
-    secondary_setback = params.get("secondary_setback_depth", 60.0)
     pref_depth = params.get("off_grid_partitions_preferred_depth", 140.0)
     pref_width = params.get("off_grid_partitions_preferred_width", 140.0)
     grid_depth_arterial = params.get("on_grid_partition_depth_arterial_roads", 40.0)
@@ -150,8 +148,6 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
         road_secondary_width_m=secondary_width,
         geopackage_path=str(step2_dir / "output.gpkg"),
         road_locals_width_m=local_width,
-        arterial_setback_depth=arterial_setback,
-        secondary_setback_depth=secondary_setback,
         off_grid_partitions_preferred_depth=pref_depth,
         off_grid_partitions_preferred_width=pref_width,
         on_grid_partition_depth_arterial_roads=grid_depth_arterial,
@@ -195,7 +191,7 @@ def get_layers(gpkg_path):
         layers.append({"name": layer.GetName(), "feature_count": layer.GetFeatureCount()})
 
     ds = None
-    return layers
+    return sorted(layers, key=lambda k: k["name"])
 
 
 def layer_to_geojson(gpkg_path, layer_name):

@@ -5,6 +5,7 @@ import geopandas as gpd
 import numpy as np
 from osgeo import ogr
 from scipy.spatial import Voronoi
+from shapely import unary_union
 from shapely.affinity import rotate
 from shapely.errors import TopologicalError
 from shapely.geometry import LineString, Point, Polygon
@@ -49,9 +50,9 @@ def is_good_cell(poly: Polygon, target_area) -> dict:
     result["area_ratio"] = area / target_area if target_area > 0 else 0.0
 
     max_area = target_area * 1.10
-    min_area = target_area * 0.95
+    min_area = target_area * 1
 
-    if not (min_area <= area < max_area):
+    if not (min_area <= area <= max_area):
         result["is_good"] = False
         if area < min_area:
             result["reason"] = "area_too_small"
@@ -756,8 +757,10 @@ def extract_grid_lines_in_buffer(
         if not isinstance(inter_point, Point) or inter_point.is_empty:
             continue
 
-        x1, y1, z1 = edge.coords[0]
-        x2, y2, z2 = edge.coords[-1]
+        coord_start = edge.coords[0]
+        coord_end = edge.coords[-1]
+        x1, y1 = coord_start[0], coord_start[1]
+        x2, y2 = coord_end[0], coord_end[1]
         vx, vy = x2 - x1, y2 - y1
         length = math.hypot(vx, vy)
         if length == 0:
@@ -831,3 +834,126 @@ def generate_local_streets(
     print(f"  Created layers: {outer_layer} (outer), {inner_layer} (inner)")
 
     return (outer_layer, inner_layer)
+
+
+def create_cold_boundaries(
+    output_path: Path,
+    subsites_layer: str,
+    off_grid_cells_layer: str,
+    arterial_setback_layer: str,
+    secondary_setback_layer: str,
+    output_layer_name: str,
+) -> str:
+    """Create cold boundaries by erasing subsites from grid cells and setback areas.
+
+    Cold boundaries represent areas that are not suitable for development, calculated by
+    taking the subsite polygons and removing:
+    1. Off-grid cells (development cells)
+    2. Arterial setback areas
+    3. Secondary setback areas
+
+    Args:
+        output_path: Path to GeoPackage.
+        subsites_layer: Name of layer containing subsite polygons.
+        off_grid_cells_layer: Name of layer containing off-grid cells
+            (e.g., "14_off_grid_cells_fixed_by_perp_lines_no_dead_ends").
+        arterial_setback_layer: Name of layer containing arterial setback polygons
+            (e.g., "10a_arterial_setback_clipped").
+        secondary_setback_layer: Name of layer containing secondary setback polygons
+            (e.g., "10b_secondary_setback_clipped").
+        output_layer_name: Name of layer to save cleaned cells to.
+
+    Returns:
+        Name of the created cold boundaries layer.
+    """
+    print("\nCreating cold boundaries...")
+
+    gdf_subsites = gpd.read_file(output_path, layer=subsites_layer)
+    gdf_off_grid = gpd.read_file(output_path, layer=off_grid_cells_layer)
+    gdf_arterial_setback = gpd.read_file(output_path, layer=arterial_setback_layer)
+    gdf_secondary_setback = gpd.read_file(output_path, layer=secondary_setback_layer)
+
+    print(f"  Loaded {len(gdf_subsites)} subsite(s)")
+    print(f"  Loaded {len(gdf_off_grid)} off-grid cells")
+    print(f"  Loaded {len(gdf_arterial_setback)} arterial setback polygon(s)")
+    print(f"  Loaded {len(gdf_secondary_setback)} secondary setback polygon(s)")
+
+    if gdf_subsites.empty:
+        print("  Warning: No subsites found")
+        return None
+
+    subsites_union = gdf_subsites.geometry.unary_union
+    print("  Merged subsites into unified geometry")
+
+    layers_to_erase = []
+    gap_fill_buffer = 1.0
+
+    if not gdf_off_grid.empty:
+        layers_to_erase.append(gdf_off_grid.geometry.unary_union)
+        print("  Added off-grid cells to erase list")
+
+    if not gdf_arterial_setback.empty:
+        layers_to_erase.append(gdf_arterial_setback.geometry.unary_union)
+        print("  Added arterial setback to erase list")
+
+    if not gdf_secondary_setback.empty:
+        layers_to_erase.append(gdf_secondary_setback.geometry.unary_union)
+        print("  Added secondary setback to erase list")
+
+    if not layers_to_erase:
+        print("  Warning: No layers to erase, returning subsites as cold boundaries")
+        cold_result = subsites_union
+    else:
+        erase_union = unary_union(layers_to_erase)
+        print(f"  Merged {len(layers_to_erase)} layer(s) to erase")
+
+        erase_buffered = erase_union.buffer(gap_fill_buffer)
+        erase_final = erase_buffered.buffer(-gap_fill_buffer)
+        print(f"  Applied gap closure (buffer={gap_fill_buffer})")
+
+        cold_result = subsites_union.difference(erase_final)
+        print("  Erased development areas from subsites")
+
+    # Handle the result geometry
+    if cold_result.is_empty:
+        print("  Warning: No cold boundaries remain after erase operation")
+        return None
+
+    if cold_result.geom_type == "Polygon":
+        cold_polygons = [cold_result]
+    elif cold_result.geom_type == "MultiPolygon":
+        cold_polygons = list(cold_result.geoms)
+    else:
+        print(f"  Warning: Unexpected geometry type: {cold_result.geom_type}")
+        return None
+
+    print(f"  Created {len(cold_polygons)} initial cold boundary polygon(s)")
+
+    cold_boundaries = []
+    cold_attrs = []
+
+    for poly_id, poly in enumerate(cold_polygons):
+        if poly.is_empty or poly.area < 0.1:
+            continue
+
+        cold_boundaries.append(poly)
+        cold_attrs.append(
+            {
+                "id": poly_id,
+                "cold_boundary": True,
+                "area": poly.area,
+            }
+        )
+
+    if not cold_boundaries:
+        print("  Warning: No valid cold boundaries after filtering")
+        return None
+
+    gdf_cold = gpd.GeoDataFrame(cold_attrs, geometry=cold_boundaries, crs=gdf_subsites.crs)
+
+    if not output_layer_name:
+        output_layer_name = "cold_boundaries"
+    gdf_cold.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved {len(cold_boundaries)} cold boundary polygon(s) to layer: {output_layer_name}")
+    return output_layer_name

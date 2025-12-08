@@ -9,10 +9,10 @@ def main():
     """
 
     config = StreetConfig(
-        parcel_path="outputs/step1_parcels/parcels.geojson",
+        parcel_path="outputs/step1_parcels/subsites.geojson",
         roads_path="data/roads.geojson",
-        on_grid_partition_depth_arterial_roads=40.0,
-        on_grid_partition_depth_secondary_roads=30.0,
+        on_grid_partition_depth_arterial_roads=60.0,
+        on_grid_partition_depth_secondary_roads=60.0,
         off_grid_partitions_preferred_depth=100,
         off_grid_partitions_preferred_width=100,
         output_dir="outputs/step2_streets",
