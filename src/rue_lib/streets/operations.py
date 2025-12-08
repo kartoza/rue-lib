@@ -864,7 +864,7 @@ def create_local_streets_zone(
 
     # Calculate buffer distances
     # Inner buffer: negative, to shrink by sidewalk + half road width
-    inner_buffer_distance = -(sidewalk_width_m + road_width_m / 2.0)
+    inner_buffer_distance = -(road_width_m / 2.0)
     # Outer buffer: positive, rounded buffer for sidewalk
     outer_buffer_distance = sidewalk_width_m
 
