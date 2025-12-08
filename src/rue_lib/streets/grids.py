@@ -898,8 +898,8 @@ def create_cold_boundaries(
         erase_union = unary_union(layers_to_erase)
         print(f"  Merged {len(layers_to_erase)} layer(s) to erase")
 
-        erase_buffered = erase_union.buffer(gap_fill_buffer)
-        erase_final = erase_buffered.buffer(-gap_fill_buffer)
+        erase_buffered = erase_union.buffer(gap_fill_buffer, join_style=2, cap_style=2)
+        erase_final = erase_buffered.buffer(-gap_fill_buffer, join_style=2, cap_style=2)
         print(f"  Applied gap closure (buffer={gap_fill_buffer})")
 
         cold_result = subsites_union.difference(erase_final)
