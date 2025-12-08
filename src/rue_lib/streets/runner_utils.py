@@ -6,6 +6,7 @@ import geopandas as gpd
 from osgeo import ogr
 from shapely import LineString, Point, unary_union
 from shapely.errors import TopologicalError
+from shapely.geometry import MultiLineString
 
 from rue_lib.core.geometry import buffer_layer
 
@@ -198,6 +199,66 @@ def polygons_to_lines_layer(
         out_ds.FlushCache()
     out_ds = None
 
+    return output_layer_name
+
+
+def create_dead_end_boundary_lines(
+    output_path: Path,
+    site_minus_setbacks_layer: str,
+    site_boundary_lines_layer: str,
+    output_layer_name: str = "09_dead_end_lines",
+    diff_buffer: float = 0.05,
+) -> str:
+    """Create dead-end boundary lines"""
+    gdf_site = gpd.read_file(output_path, layer=site_minus_setbacks_layer)
+    gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
+
+    if gdf_site.empty:
+        raise RuntimeError(f"Layer {site_minus_setbacks_layer} is empty")
+
+    # Convert polygons to exterior lines
+    line_geoms = []
+    for geom in gdf_site.geometry:
+        if geom is None or geom.is_empty:
+            continue
+        if geom.geom_type == "Polygon":
+            line_geoms.append(LineString(geom.exterior))
+        elif geom.geom_type == "MultiPolygon":
+            for poly in geom.geoms:
+                line_geoms.append(LineString(poly.exterior))
+
+    if not line_geoms:
+        raise RuntimeError("No polygon boundaries found to convert to lines")
+
+    site_lines_union = unary_union(line_geoms)
+    boundary_union = unary_union(gdf_boundary.geometry) if not gdf_boundary.empty else None
+
+    if boundary_union and not boundary_union.is_empty:
+        site_lines_union = site_lines_union.difference(boundary_union.buffer(diff_buffer))
+
+    # Flatten to LineString parts
+    line_parts = []
+    if site_lines_union.geom_type == "LineString":
+        line_parts = [site_lines_union]
+    elif site_lines_union.geom_type == "MultiLineString":
+        line_parts = list(site_lines_union.geoms)
+    elif site_lines_union.geom_type == "GeometryCollection":
+        line_parts = [
+            g for g in site_lines_union.geoms if g.geom_type in ("LineString", "MultiLineString")
+        ]
+        expanded = []
+        for g in line_parts:
+            if isinstance(g, MultiLineString):
+                expanded.extend(list(g.geoms))
+            else:
+                expanded.append(g)
+        line_parts = expanded
+
+    if not line_parts:
+        raise RuntimeError("No dead-end boundary lines found after subtraction")
+
+    gdf_out = gpd.GeoDataFrame(geometry=line_parts, crs=gdf_site.crs)
+    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
     return output_layer_name
 
 

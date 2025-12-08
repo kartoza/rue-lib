@@ -278,6 +278,7 @@ def grids_from_polygon(
     arterial_line,
     grid_width: float = 100.0,
     grid_depth: float = 100.0,
+    dead_end_lines=None,
 ):
     """Create a mesh-based grid (Voronoi cells from equidistant mesh points).
 
@@ -301,6 +302,8 @@ def grids_from_polygon(
         arterial_line: Arterial line geometry for alignment (OGR or Shapely), or None.
         grid_width: Width of each grid cell in coordinate units. Default 100.0.
         grid_depth: Depth of each grid cell in coordinate units. Default 100.0.
+        dead_end_lines: Optional shapely LineString/MultiLineString; intersections with
+            bad cells are penalized in scoring.
 
     Returns:
         tuple: (grid_cells, mesh_points, cell_quality)
@@ -310,7 +313,7 @@ def grids_from_polygon(
     from rue_lib.streets.cell import Cell
 
     polygon_shply = feature_geom_to_shapely(polygon)
-    mesh_padding = 0.25 * grid_width
+    mesh_padding = 0
 
     def _norm_angle_deg(angle: float) -> float:
         return ((angle + 90.0) % 180.0) - 90.0
@@ -349,15 +352,32 @@ def grids_from_polygon(
     best_overall_points = []
     best_overall_good = -1
     best_overall_good_area = -1.0
+    best_overall_small = math.inf
+    best_overall_large = math.inf
+    best_overall_dead = math.inf
     best_angle_deg = 0.0
+
+    def _score_tuple(good_cells, dead_cnt, small_cnt, large_cnt, good_area_val):
+        return (good_cells, -dead_cnt, -small_cnt, -large_cnt, good_area_val)
 
     for angle_deg in candidate_angles_deg:
         polygon_rot = rotate(
-            polygon_shply.oriented_envelope,
+            polygon_shply,
             -angle_deg,
             origin=(origin_point.x, origin_point.y),
             use_radians=False,
         )
+        dead_end_rot = None
+        dead_end_prepped = None
+        if dead_end_lines is not None:
+            dead_end_rot = rotate(
+                dead_end_lines,
+                -angle_deg,
+                origin=(origin_point.x, origin_point.y),
+                use_radians=False,
+            )
+            if not dead_end_rot.is_empty:
+                dead_end_prepped = prep(dead_end_rot)
 
         minx, miny, maxx, maxy = polygon_rot.bounds
         prepared_poly = prep(polygon_rot)
@@ -385,15 +405,32 @@ def grids_from_polygon(
                     polygon_rot,
                 )
             )
+            small_cnt = sum(1 for q in quality_rot if q["reason"] == "area_too_small")
+            large_cnt = sum(1 for q in quality_rot if q["reason"] == "area_too_large")
+            dead_cnt = 0
+            if dead_end_prepped:
+                for cell_geom, quality in zip(cells_rot, quality_rot):
+                    if not quality["is_good"] and dead_end_prepped.intersects(cell_geom):
+                        dead_cnt += 1
+            best_small = small_cnt
+            best_large = large_cnt
+            best_dead = dead_cnt
         else:
             best_cells_rot = []
             best_mesh_points_rot = []
             best_good = -1
             best_good_area = -1.0
+            best_small = math.inf
+            best_large = math.inf
+            best_dead = math.inf
+            best_score = None
 
-            shift_step = min(10.0, grid_width)
+            shift_step = min(10, grid_width)
             shift = -grid_width
             while shift <= grid_width + 1e-6:
+                small_cells = []
+                large_cells = []
+
                 start_x = padded_start_x + shift
                 cells_cand, quality_cand, mesh_points_cand, good_cells, good_area = (
                     _build_mesh_and_cells(
@@ -408,24 +445,54 @@ def grids_from_polygon(
                     )
                 )
 
-                if good_cells > best_good or (
-                    good_cells == best_good and good_area > best_good_area
-                ):
+                for quality in quality_cand:
+                    if quality["reason"] == "area_too_small":
+                        small_cells.append(quality)
+                    elif quality["reason"] == "area_too_large":
+                        large_cells.append(quality)
+                dead_cnt = 0
+                if dead_end_prepped:
+                    for cell_geom, quality in zip(cells_cand, quality_cand):
+                        if not quality["is_good"] and dead_end_prepped.intersects(cell_geom):
+                            dead_cnt += 1
+
+                cand_score = _score_tuple(
+                    good_cells, dead_cnt, len(small_cells), len(large_cells), good_area
+                )
+                if (best_score is None) or (cand_score > best_score):
                     best_good = good_cells
                     best_good_area = good_area
                     best_cells_rot = cells_cand
                     best_mesh_points_rot = mesh_points_cand
+                    best_small = len(small_cells)
+                    best_large = len(large_cells)
+                    best_dead = dead_cnt
+                    best_score = cand_score
 
                 shift += shift_step
 
             cells_rot = best_cells_rot
             mesh_points_rot = best_mesh_points_rot
+            small_cnt = best_small
+            large_cnt = best_large
+            dead_cnt = best_dead
 
-        if best_good > best_overall_good or (
-            best_good == best_overall_good and best_good_area > best_overall_good_area
+        overall_score = _score_tuple(best_good, dead_cnt, small_cnt, large_cnt, best_good_area)
+        if (best_overall_points == []) or (
+            overall_score
+            > _score_tuple(
+                best_overall_good,
+                best_overall_dead,
+                best_overall_small,
+                best_overall_large,
+                best_overall_good_area,
+            )
         ):
             best_overall_good = best_good
             best_overall_good_area = best_good_area
+            best_overall_small = small_cnt
+            best_overall_large = large_cnt
+            best_overall_dead = dead_cnt
             best_overall_cells = cells_rot
             best_overall_points = mesh_points_rot
             best_angle_deg = angle_deg
@@ -476,6 +543,7 @@ def grids_from_site(
     grid_depth: float = 100.0,
     grid_layer_name: str | None = None,
     point_layer_name: str | None = None,
+    dead_end_lines_layer: str | None = None,
 ):
     """Generate mesh-based grids for site polygons and save to GeoPackage.
 
@@ -508,6 +576,12 @@ def grids_from_site(
         raise RuntimeError("Could not find site or boundary line layers in GeoPackage")
 
     srs = site_layer.GetSpatialRef()
+
+    dead_end_lines_geom = None
+    if dead_end_lines_layer:
+        gdf_dead = gpd.read_file(output_path, layer=dead_end_lines_layer)
+        if not gdf_dead.empty:
+            dead_end_lines_geom = unary_union(gdf_dead.geometry)
 
     if grid_layer_name is None:
         grid_layer_name = f"{site_name}_grid_cells"
@@ -553,7 +627,14 @@ def grids_from_site(
                     arterial_line = site_boundary_line
                     break
 
-        grid_cells, mesh_points = grids_from_polygon(polygon, arterial_line, grid_width, grid_depth)
+        print(f"\nDEBUG Generating grid for site polygon ID {polygon.GetFID()}")
+        grid_cells, mesh_points = grids_from_polygon(
+            polygon,
+            arterial_line,
+            grid_width,
+            grid_depth,
+            dead_end_lines=dead_end_lines_geom,
+        )
 
         for _i, _cell in enumerate(grid_cells):
             cell = _cell.geom
