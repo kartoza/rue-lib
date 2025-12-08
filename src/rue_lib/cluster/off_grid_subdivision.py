@@ -269,9 +269,9 @@ def classify_plot_by_area(
         return "park"
 
 
-def extract_off_grid_inner_cluster(
+def extract_off_grid_cluster(
         output_path: Path,
-        off_grids_inner_layer_name: str,
+        off_grids_layer_name: str,
         part_og_w: float,
         part_og_d: float,
         output_layer_name: str,
@@ -286,7 +286,7 @@ def extract_off_grid_inner_cluster(
 
     Args:
         output_path: Path to the GeoPackage file containing off-grid data
-        off_grids_inner_layer_name: Name of the layer containing off-grid geometries
+        off_grids_layer_name: Name of the layer containing off-grid geometries
         part_og_w: Target plot width in meters
         part_og_d: Target plot depth in meters
         output_layer_name: Layer name for the output plots
@@ -294,15 +294,16 @@ def extract_off_grid_inner_cluster(
     Returns:
         None (currently collects plots but doesn't return them)
     """
-    off_grids_inner_layer = gpd.read_file(
-        output_path, layer=off_grids_inner_layer_name
+    off_grids_layer = gpd.read_file(
+        output_path, layer=off_grids_layer_name
     )
 
     all_plots = []
 
-    for _idx, off_grid_part in off_grids_inner_layer.iterrows():
+    for _idx, off_grid_part in off_grids_layer.iterrows():
         off_grid_geom = off_grid_part.geometry
         block_id = off_grid_part.get("block_id")
+        parent_index = off_grid_part.get("part_index")
 
         print(f"  Block {block_id}:")
         print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
@@ -330,84 +331,13 @@ def extract_off_grid_inner_cluster(
                         "plot_index": i,
                         "area": plot.area,
                         "parent_part": "off_grid",
+                        "parent_index": parent_index,
                     }
                 )
 
         except Exception as e:
             print(f"    ✗ Error subdividing off-grid: {e}")
 
-    gdf_out = gpd.GeoDataFrame(all_plots, crs=off_grids_inner_layer.crs)
-    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
-    return output_layer_name
-
-
-def extract_off_grid_side_cluster(
-        output_path: Path,
-        off_grid_sides_layer_name: str,
-        part_og_d: float,
-        part_og_w: float,
-        output_layer_name: str,
-        off_grid_plot_threshold: float
-):
-    """
-    Extract and subdivide off-grid areas into plot clusters.
-
-    Reads off-grid geometries from a GeoPackage layer, subdivides each into
-    individual plots, and classifies them by area. Prints progress information
-    for each block processed.
-
-    Args:
-        output_path: Path to the GeoPackage file containing off-grid data
-        off_grid_sides_layer_name: Name of the layer containing off-grid geometries
-        part_og_d: Target plot depth in meters
-        part_og_w: Target plot width in meters
-        output_layer_name: Layer name for the output plots
-
-    Returns:
-        None (currently collects plots but doesn't return them)
-    """
-    off_grid_sides_layer = gpd.read_file(
-        output_path, layer=off_grid_sides_layer_name
-    )
-
-    all_plots = []
-
-    for _idx, off_grid_part in off_grid_sides_layer.iterrows():
-        off_grid_geom = off_grid_part.geometry
-        block_id = off_grid_part.get("block_id")
-
-        print(f"  Block {block_id}:")
-        print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
-
-        try:
-            # Subdivide the off-grid area using oriented approach
-            plots = subdivide_off_grid(
-                off_grid_geom,
-                part_og_w=part_og_w,
-                part_og_d=part_og_d,
-                min_plot_area=part_og_w * part_og_d * off_grid_plot_threshold,
-            )
-
-            print(f"    ✓ Created {len(plots)} plots")
-
-            # Collect plots
-            for i, plot in enumerate(plots):
-                all_plots.append(
-                    {
-                        "geometry": plot,
-                        "block_id": block_id,
-                        "plot_type": classify_plot_by_area(
-                            plot, part_og_w, part_og_d
-                        ),
-                        "plot_index": i,
-                        "area": plot.area,
-                        "parent_part": "off_grid",
-                    }
-                )
-
-        except Exception as e:
-            print(f"    ✗ Error subdividing off-grid: {e}")
-
-    gdf_out = gpd.GeoDataFrame(all_plots, crs=off_grid_sides_layer.crs)
+    gdf_out = gpd.GeoDataFrame(all_plots, crs=off_grids_layer.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
     return output_layer_name

@@ -12,9 +12,9 @@ def main():
         roads_path="data/roads.geojson",
         blocks_path="outputs/step2_streets/all_grids_merged.geojson",
         output_dir="outputs/step3_clusters",
-        part_art_d=20,
-        part_sec_d=15,
-        part_loc_d=10,
+        part_art_d=40,
+        part_sec_d=30,
+        part_loc_d=20,
         part_og_w=20.0,
         part_og_d=30.0,
     )

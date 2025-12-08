@@ -3,8 +3,9 @@
 
 from typing import Optional
 
+import geopandas as gpd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 
 
 def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
@@ -30,13 +31,17 @@ def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
     vec0 = p_curr - p_prev
     vec1 = p_next - p_curr
 
-    vec0_norm = vec0 / np.linalg.norm(vec0) if np.linalg.norm(vec0) > 0 else vec0
-    vec1_norm = vec1 / np.linalg.norm(vec1) if np.linalg.norm(vec1) > 0 else vec1
+    vec0_norm = vec0 / np.linalg.norm(vec0) if np.linalg.norm(
+        vec0) > 0 else vec0
+    vec1_norm = vec1 / np.linalg.norm(vec1) if np.linalg.norm(
+        vec1) > 0 else vec1
 
     return np.dot(vec0_norm, vec1_norm)
 
 
-def convert_to_quadrilateral(polygon: Polygon, min_area: float = 100.0) -> Optional[Polygon]:
+def convert_to_quadrilateral(
+        polygon: Polygon, min_area: float = 100.0
+) -> Optional[Polygon]:
     """
     Convert an off-grid polygon to a quadrilateral by removing vertices with sharpest angles.
 
@@ -78,3 +83,83 @@ def convert_to_quadrilateral(polygon: Polygon, min_area: float = 100.0) -> Optio
         return quad
 
     return quad
+
+
+def get_roads_near_block(
+        block: Polygon, roads: gpd.GeoDataFrame, road_type: str,
+        max_distance: float = 10.0
+) -> list[LineString]:
+    """
+    Get roads of a specific type that are near (within max_distance) of the block.
+
+    Args:
+        block: Block polygon
+        roads: GeoDataFrame with roads (must have 'road_type' column)
+        road_type: Type of road to filter ('road_art', 'road_sec', 'road_loc')
+        max_distance: Maximum distance from block to consider
+
+    Returns:
+        list of LineStrings near the block
+    """
+    # Filter roads by type
+    roads_filtered = (
+        roads[roads["road_type"] == road_type]
+        if "road_type" in roads.columns
+        else gpd.GeoDataFrame()
+    )
+
+    if roads_filtered.empty:
+        return []
+
+    # Find roads that are near the block
+    nearby_roads = []
+    block_buffered = block.buffer(max_distance)
+
+    for _, road in roads_filtered.iterrows():
+        road_geom = road.geometry
+
+        # Check if road intersects the buffered block
+        if road_geom.intersects(block_buffered):
+            nearby_roads.append(road_geom)
+
+    return nearby_roads
+
+
+def get_roads_near_line(
+        line: LineString,
+        roads: gpd.GeoDataFrame
+) -> Optional[gpd.GeoSeries]:
+    """
+    Get the nearest arterial or secondary road to the line.
+
+    Args:
+        line: LineString geometry (e.g., edge of a block)
+        roads: GeoDataFrame with roads (must have 'road_type' column)
+
+    Returns:
+        Nearest arterial or secondary road as GeoSeries (with geometry and properties),
+        or None if no road found
+    """
+    # Filter roads by type - only arterial and secondary
+    if "road_type" not in roads.columns:
+        return None
+
+    roads_filtered = roads[roads["road_type"].isin(["road_art", "road_sec"])]
+
+    if roads_filtered.empty:
+        return None
+
+    # Find the nearest road
+    nearest_road = None
+    min_distance = float('inf')
+
+    for idx, road in roads_filtered.iterrows():
+        road_geom = road.geometry
+        distance = line.distance(road_geom)
+
+        # Check if this road is closer than previous
+        if distance < min_distance:
+            min_distance = distance
+            nearest_road = road
+
+    return nearest_road

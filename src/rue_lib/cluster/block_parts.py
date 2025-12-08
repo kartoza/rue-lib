@@ -379,18 +379,20 @@ def create_block_parts_from_off_grid(
             continue
 
     side_parts = get_side_parts(block, off_grid, corner_parts)
-    return corner_parts, side_parts
+    return corner_parts, side_parts, off_grid
 
 
 def extract_block_parts_from_off_grid(
         output_path: Path,
-        off_grid_layer_name: str,
+        warm_grid_layer_name: str,
         off_grids_inner_layer_name: str,
         off_grid_frame_layer_name: str,
         angle_threshold: float,
         corner_distance: float,
+        output_off_grid_layer_name: str,
         output_corner_layer_name: str,
         output_sides_layer_name: str,
+        output_not_generated_block_layer_name: str,
 ):
     """Extract and categorize block parts (corners, sides, off-grids) from blocks with off-grid areas.
 
@@ -401,11 +403,13 @@ def extract_block_parts_from_off_grid(
     Args:
         output_path: Path to the GeoPackage file containing input layers and
             where outputs will be saved.
-        off_grid_layer_name: Name of the layer containing the original block
+        warm_grid_layer_name: Name of the layer containing the original block
             geometries.
         off_grids_inner_layer_name: Name of the layer containing inner off-grid
             geometries with their associated block_id values.
         off_grid_frame_layer_name: Name of the layer containing frame geometries
+            (the perimeter area around off-grids).
+        output_off_grid_layer_name: Name of the layer containing frame geometries
             (the perimeter area around off-grids).
         angle_threshold: Maximum angle in degrees to consider a vertex as a corner.
             Vertices with angles below this threshold are identified as corners.
@@ -424,8 +428,8 @@ def extract_block_parts_from_off_grid(
         - Off-grid parts represent the central void within each block.
         - Errors during part creation for individual blocks are caught and logged.
     """
-    off_grid_layer = gpd.read_file(
-        output_path, layer=off_grid_layer_name
+    warm_grid_layer = gpd.read_file(
+        output_path, layer=warm_grid_layer_name
     )
     off_grids_inner_layer = gpd.read_file(
         output_path, layer=off_grids_inner_layer_name
@@ -435,8 +439,10 @@ def extract_block_parts_from_off_grid(
     )
     all_corner_parts = []
     all_side_parts = []
+    all_off_grid_parts = []
+
+    used_block_ids = []
     for idx, frame_row in off_grid_frame_layer.iterrows():
-        print(frame_row)
         block_id = frame_row.get("block_id")
         # Find corresponding off-grid
         off_grid_row = off_grids_inner_layer[
@@ -444,11 +450,11 @@ def extract_block_parts_from_off_grid(
         off_grid = off_grid_row.geometry
 
         # Get original block (without hole)
-        original_block = off_grid_layer.loc[block_id].geometry
+        original_block = warm_grid_layer.loc[block_id].geometry
 
         try:
             # Pass original block (not frame) - the function creates parts from block and off_grid
-            corner_parts, side_parts = create_block_parts_from_off_grid(
+            corner_parts, side_parts, off_grid_final = create_block_parts_from_off_grid(
                 original_block,  # Original block boundary
                 off_grid,  # Off-grid center polygon
                 angle_threshold=angle_threshold,
@@ -482,10 +488,44 @@ def extract_block_parts_from_off_grid(
                     }
                 )
 
+            # Collect off-grid part
+            all_off_grid_parts.append(
+                {
+                    "geometry": off_grid_final,
+                    "block_id": block_id,
+                    "part_type": "off_grid",
+                    "area": off_grid_final.area,
+                }
+            )
+            used_block_ids.append(block_id)
         except Exception as e:
             print(f"  ✗ Error creating parts: {e}")
 
-    gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=off_grid_layer.crs)
-    gdf_out.to_file(output_path, layer=output_corner_layer_name, driver="GPKG")
-    gdf_out = gpd.GeoDataFrame(all_side_parts, crs=off_grid_layer.crs)
-    gdf_out.to_file(output_path, layer=output_sides_layer_name, driver="GPKG")
+    if all_corner_parts:
+        gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=warm_grid_layer.crs)
+        gdf_out.to_file(
+            output_path, layer=output_corner_layer_name, driver="GPKG"
+        )
+    if all_side_parts:
+        gdf_out = gpd.GeoDataFrame(all_side_parts, crs=warm_grid_layer.crs)
+        gdf_out.to_file(
+            output_path, layer=output_sides_layer_name, driver="GPKG"
+        )
+    if all_off_grid_parts:
+        gdf_out = gpd.GeoDataFrame(all_off_grid_parts, crs=warm_grid_layer.crs)
+        gdf_out.to_file(
+            output_path, layer=output_off_grid_layer_name, driver="GPKG"
+        )
+
+    all_not_used_block = []
+    for idx, frame_row in warm_grid_layer.iterrows():
+        block_id = idx
+        if block_id not in used_block_ids:
+            all_not_used_block.append(frame_row)
+
+    if all_not_used_block:
+        gdf_out = gpd.GeoDataFrame(all_not_used_block, crs=warm_grid_layer.crs)
+        gdf_out.to_file(
+            output_path, layer=output_not_generated_block_layer_name,
+            driver="GPKG"
+        )

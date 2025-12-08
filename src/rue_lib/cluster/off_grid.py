@@ -8,46 +8,7 @@ import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 
 from rue_lib.core.geometry import clean_angles
-
-
-def get_roads_near_block(
-        block: Polygon, roads: gpd.GeoDataFrame, road_type: str,
-        max_distance: float = 10.0
-) -> list[LineString]:
-    """
-    Get roads of a specific type that are near (within max_distance) of the block.
-
-    Args:
-        block: Block polygon
-        roads: GeoDataFrame with roads (must have 'road_type' column)
-        road_type: Type of road to filter ('road_art', 'road_sec', 'road_loc')
-        max_distance: Maximum distance from block to consider
-
-    Returns:
-        list of LineStrings near the block
-    """
-    # Filter roads by type
-    roads_filtered = (
-        roads[roads["road_type"] == road_type]
-        if "road_type" in roads.columns
-        else gpd.GeoDataFrame()
-    )
-
-    if roads_filtered.empty:
-        return []
-
-    # Find roads that are near the block
-    nearby_roads = []
-    block_buffered = block.buffer(max_distance)
-
-    for _, road in roads_filtered.iterrows():
-        road_geom = road.geometry
-
-        # Check if road intersects the buffered block
-        if road_geom.intersects(block_buffered):
-            nearby_roads.append(road_geom)
-
-    return nearby_roads
+from rue_lib.cluster.helpers import get_roads_near_block
 
 
 def extend_line(line: LineString, extension: float) -> LineString:
