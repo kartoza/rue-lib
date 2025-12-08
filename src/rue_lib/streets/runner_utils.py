@@ -3,12 +3,16 @@ from pathlib import Path
 from typing import Optional
 
 import geopandas as gpd
+from osgeo import ogr
 from shapely import LineString, Point, unary_union
 from shapely.errors import TopologicalError
 
 from rue_lib.core.geometry import buffer_layer
 
-from .operations import clip_layer
+from .operations import (
+    _ogr_to_shapely,  # reuse existing helper for validation
+    clip_layer,
+)
 
 
 def merge_setback_layers(
@@ -80,6 +84,119 @@ def merge_setback_layers(
 
     gdf_merged.to_file(output_path, layer=output_layer_name, driver="GPKG")
     print(f"  Saved merged setbacks layer as: {output_layer_name}")
+
+    return output_layer_name
+
+
+def polygons_to_lines_layer(
+    input_path: Path,
+    input_layer_names: str | list[str],
+    output_path: Path,
+    output_layer_name: str = "polygon_boundaries",
+) -> str:
+    """Extract polygon boundaries from one or more layers and write them as LineStrings.
+
+    This preserves individual polygon edges; shared edges are kept from both polygons
+    instead of dissolving the polygons into a single union.
+    """
+    input_path = str(input_path)
+    output_path = str(output_path)
+
+    layer_names = (
+        [input_layer_names] if isinstance(input_layer_names, str) else list(input_layer_names)
+    )
+    if not layer_names:
+        raise RuntimeError("No input layer names provided for polygons_to_lines_layer")
+
+    ds = ogr.Open(input_path)
+    if ds is None:
+        raise RuntimeError(f"Cannot open dataset: {input_path}")
+
+    srs = None
+    ring_records = []
+    feature_idx = 1
+
+    for layer_name in layer_names:
+        layer = ds.GetLayerByName(layer_name)
+        if layer is None:
+            ds = None
+            raise RuntimeError(f"Cannot find layer: {layer_name}")
+
+        if srs is None:
+            srs = layer.GetSpatialRef()
+
+        for feat in layer:
+            geom = feat.GetGeometryRef()
+            if geom is None:
+                continue
+
+            geom = geom.Clone()
+            if not geom.IsValid():
+                geom = geom.Buffer(0)
+
+            shapely_geom = _ogr_to_shapely(geom)
+            if shapely_geom is None or shapely_geom.is_empty:
+                continue
+
+            if shapely_geom.geom_type == "Polygon":
+                polygons = [shapely_geom]
+            elif shapely_geom.geom_type == "MultiPolygon":
+                polygons = list(shapely_geom.geoms)
+            elif shapely_geom.geom_type == "GeometryCollection":
+                polygons = [
+                    g for g in shapely_geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")
+                ]
+                expanded = []
+                for g in polygons:
+                    if g.geom_type == "Polygon":
+                        expanded.append(g)
+                    elif g.geom_type == "MultiPolygon":
+                        expanded.extend(list(g.geoms))
+                polygons = expanded
+            else:
+                polygons = []
+
+            for poly in polygons:
+                rings = [poly.exterior, *poly.interiors]
+                ring_id = 1
+                for ring in rings:
+                    if ring.is_empty:
+                        continue
+                    ring_records.append((feature_idx, ring_id, ring.wkb))
+                    ring_id += 1
+                feature_idx += 1
+
+    ds = None
+
+    if not ring_records:
+        raise RuntimeError(f"No geometries found to convert in layers: {', '.join(layer_names)}")
+
+    driver = ogr.GetDriverByName("GPKG")
+    out_ds = driver.Open(output_path, 1)
+    if out_ds is None:
+        out_ds = driver.CreateDataSource(output_path)
+    if out_ds.GetLayerByName(output_layer_name):
+        out_ds.DeleteLayer(output_layer_name)
+    out_layer = out_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbLineString)
+
+    out_layer.CreateField(ogr.FieldDefn("src_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("ring_id", ogr.OFTInteger))
+
+    for src_id, ring_id, ring_wkb in ring_records:
+        line_geom = ogr.CreateGeometryFromWkb(ring_wkb)
+        if line_geom is None or line_geom.IsEmpty():
+            continue
+
+        out_feat = ogr.Feature(out_layer.GetLayerDefn())
+        out_feat.SetGeometry(line_geom)
+        out_feat.SetField("src_id", src_id)
+        out_feat.SetField("ring_id", ring_id)
+        out_layer.CreateFeature(out_feat)
+        out_feat = None
+
+    if out_ds is not None:
+        out_ds.FlushCache()
+    out_ds = None
 
     return output_layer_name
 

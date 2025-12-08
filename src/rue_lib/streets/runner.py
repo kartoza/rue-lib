@@ -16,6 +16,7 @@ from rue_lib.streets.runner_utils import (
     create_guide_points_from_site_boundary,
     create_perpendicular_lines_from_guide_points,
     create_perpendicular_lines_inside_buffer_from_points,
+    polygons_to_lines_layer,
 )
 
 from .cell import (
@@ -70,6 +71,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 5: Extracting secondary roads...")
     extract_by_expression(
         output_path, roads_layer_name, "road_type = 'road_sec'", output_path, "05_secondary_roads"
+    )
+
+    print("Step 5a: Extracting local roads...")
+    extract_by_expression(
+        output_path, roads_layer_name, "road_type = 'road_loc'", output_path, "05_local_roads"
     )
 
     preferred_depth_on_grid_arterial = (
@@ -286,6 +292,18 @@ def generate_streets(cfg: StreetConfig) -> Path:
         output_gpkg, cfg, cleaned_cells_layer
     )
 
+    print("Exporting local roads from off-grid cells as linework...")
+    local_roads_layer_name = "local_roads"
+    polygons_to_lines_layer(
+        output_gpkg,
+        [
+            "14_off_grid_cells_fixed_by_perp_lines_no_dead_ends",
+            "16_on_grid_cells",
+        ],
+        output_gpkg,
+        local_roads_layer_name,
+    )
+
     print("Step 17: Merging all grid layers with grid_type information...")
     merge_grid_layers_with_type(
         str(output_gpkg),
@@ -299,6 +317,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
             ("16b_on_grid_secondary_cells", "on_grid_sec_local_streets"),
             (on_grid_secondary_inner_layer, "on_grid_sec"),
             ("14_cold_boundaries", "cold_boundaries"),
+            ("04_arterial_roads", "road_arterial"),
+            ("05_secondary_roads", "road_secondary"),
+            (local_roads_layer_name, "road_local"),
         ],
     )
 
