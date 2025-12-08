@@ -2,14 +2,13 @@
 """Extract edges from block polygons and assign road types."""
 
 import geopandas as gpd
-import numpy as np
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, Polygon
 
 
 def extract_block_edges(
-    blocks_gdf: gpd.GeoDataFrame,
-    roads_gdf: gpd.GeoDataFrame,
-    tolerance: float = 5.0
+        blocks_gdf: gpd.GeoDataFrame,
+        roads_gdf: gpd.GeoDataFrame,
+        tolerance: float = 5.0
 ) -> gpd.GeoDataFrame:
     """
     Extract edges (boundary segments) from blocks and assign road types.
@@ -52,9 +51,7 @@ def extract_block_edges(
             edge_geom = LineString([coords[i], coords[i + 1]])
 
             # Find the nearest road to this edge
-            road_type = _find_nearest_road_type(
-                edge_geom, roads_gdf, tolerance
-            )
+            road_type = _find_nearest_road_type(edge_geom, roads_gdf)
 
             edge_data = {
                 'geometry': edge_geom,
@@ -65,7 +62,8 @@ def extract_block_edges(
 
             # Copy over other block attributes
             for col in blocks_gdf.columns:
-                if col not in ['geometry', 'block_id', 'edge_index', 'road_type']:
+                if col not in ['geometry', 'block_id', 'edge_index',
+                               'road_type']:
                     edge_data[col] = block_row.get(col)
 
             all_edges.append(edge_data)
@@ -82,9 +80,8 @@ def extract_block_edges(
 
 
 def _find_nearest_road_type(
-    edge: LineString,
-    roads_gdf: gpd.GeoDataFrame,
-    tolerance: float
+        edge: LineString,
+        roads_gdf: gpd.GeoDataFrame
 ) -> str:
     """
     Find the road type of the nearest road to an edge.
@@ -104,7 +101,7 @@ def _find_nearest_road_type(
     edge_midpoint = edge.interpolate(0.5, normalized=True)
 
     min_distance = float('inf')
-    nearest_road_type = None
+    nearest_road_type = "road_loc"
 
     for _, road_row in roads_gdf.iterrows():
         road_geom = road_row.geometry
@@ -120,17 +117,15 @@ def _find_nearest_road_type(
 
         if effective_distance < min_distance:
             min_distance = effective_distance
-            nearest_road_type = road_row.get('road_type')
+            if road_row.get('road_type'):
+                nearest_road_type = road_row.get('road_type')
 
     # Only return road type if within tolerance
-    if min_distance <= tolerance:
-        return nearest_road_type
-    else:
-        return None
+    return nearest_road_type
 
 
 def extract_block_edges_simple(
-    blocks_gdf: gpd.GeoDataFrame
+        blocks_gdf: gpd.GeoDataFrame
 ) -> gpd.GeoDataFrame:
     """
     Extract edges from blocks without road type assignment (simplified version).
@@ -189,9 +184,8 @@ def extract_block_edges_simple(
 
 
 def assign_road_types_to_edges(
-    edges_gdf: gpd.GeoDataFrame,
-    roads_gdf: gpd.GeoDataFrame,
-    tolerance: float = 5.0
+        edges_gdf: gpd.GeoDataFrame,
+        roads_gdf: gpd.GeoDataFrame
 ) -> gpd.GeoDataFrame:
     """
     Assign road types to existing edges based on proximity to roads.
@@ -213,7 +207,7 @@ def assign_road_types_to_edges(
     road_types = []
     for _, edge_row in edges_gdf.iterrows():
         edge_geom = edge_row.geometry
-        road_type = _find_nearest_road_type(edge_geom, roads_gdf, tolerance)
+        road_type = _find_nearest_road_type(edge_geom, roads_gdf)
         road_types.append(road_type)
 
     edges_gdf['road_type'] = road_types

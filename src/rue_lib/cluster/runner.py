@@ -8,6 +8,8 @@ from pathlib import Path
 
 from osgeo import ogr
 
+from rue_lib.cluster.art_sec_no_offgrid import \
+    generate_art_sec_parts_no_offgrid
 from rue_lib.cluster.block_parts import extract_block_parts_from_off_grid
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.frame import extract_frame
@@ -178,7 +180,14 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     )
 
     print("Step 10: generate art sec parts no offgrid ")
-
+    generate_art_sec_parts_no_offgrid(
+        output_path=output_path,
+        blocks_layer_name=output_not_generated_block_layer_name,
+        roads_layer_name=roads_layer_name,
+        part_art_d=cfg.part_art_d,
+        part_sec_d=cfg.part_sec_d,
+        part_loc_d=cfg.part_loc_d,
+    )
 
     print("" + "=" * 60)
     print("CLUSTER GENERATION COMPLETE")
