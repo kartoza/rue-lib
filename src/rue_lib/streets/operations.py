@@ -12,6 +12,23 @@ from .geometry_utils import (
 )
 
 
+def _ogr_to_shapely(ogr_geom):
+    if ogr_geom is None:
+        return None
+    try:
+        wkb_data = ogr_geom.ExportToWkb()
+        if isinstance(wkb_data, memoryview):
+            wkb_data = bytes(wkb_data)
+        if isinstance(wkb_data, (bytes, bytearray)):
+            return wkb.loads(wkb_data)
+    except (TypeError, Exception):
+        pass
+    try:
+        return wkt.loads(ogr_geom.ExportToWkt())
+    except Exception:
+        return None
+
+
 def extract_by_expression(input_path, layer_name, expression, output_path, output_layer_name):
     """Extract features by attribute expression and write to a GeoPackage layer.
 
@@ -499,27 +516,6 @@ def create_on_grid_cells_from_perpendiculars(
 
     srs = setback_layer.GetSpatialRef()
 
-    def _ogr_to_shapely(ogr_geom):
-        if ogr_geom is None:
-            return None
-        try:
-            wkb_data = ogr_geom.ExportToWkb()
-            if isinstance(wkb_data, memoryview):
-                wkb_data = bytes(wkb_data)
-            if isinstance(wkb_data, (bytes, bytearray)):
-                return wkb.loads(wkb_data)
-        except TypeError:
-            pass
-        except Exception as e:
-            print(e)
-            pass
-
-        try:
-            return wkt.loads(ogr_geom.ExportToWkt())
-        except Exception as e:
-            print(e)
-            return None
-
     setback_polygons = []
     for feature in setback_layer:
         geom = feature.GetGeometryRef()
@@ -689,6 +685,148 @@ def create_on_grid_cells_from_perpendiculars(
     output_ds = None
 
     return output_layer_name
+
+
+def classify_on_grid_cells_by_setback(
+    input_path,
+    cells_layer_name,
+    arterial_setback_layer_name,
+    output_path,
+    arterial_output_layer_name,
+    secondary_output_layer_name,
+):
+    """Classify on-grid cells into arterial and secondary based on setback intersection.
+
+    For each cell:
+    - If it intersects arterial setback → classify as arterial (priority)
+    - Else → classify as secondary
+
+    Args:
+        input_path: Path to GeoPackage with cells and setback layers
+        cells_layer_name: Name of the on-grid cells layer to classify
+        arterial_setback_layer_name: Name of arterial setback layer
+        output_path: Path to output GeoPackage
+        arterial_output_layer_name: Name for arterial cells output layer
+        secondary_output_layer_name: Name for secondary cells output layer
+
+    Returns:
+        Tuple of (arterial_layer_name, secondary_layer_name)
+    """
+    ds = ogr.Open(input_path, 1 if input_path == output_path else 0)
+    if ds is None:
+        raise RuntimeError(f"Cannot open dataset: {input_path}")
+
+    cells_layer = ds.GetLayerByName(cells_layer_name)
+    arterial_layer = ds.GetLayerByName(arterial_setback_layer_name)
+
+    if cells_layer is None:
+        ds = None
+        raise RuntimeError(f"Cannot find cells layer: {cells_layer_name}")
+    if arterial_layer is None:
+        ds = None
+        raise RuntimeError(f"Cannot find arterial setback layer: {arterial_setback_layer_name}")
+
+    srs = cells_layer.GetSpatialRef()
+
+    arterial_geoms = []
+    for feat in arterial_layer:
+        geom = feat.GetGeometryRef()
+        if geom is not None:
+            shapely_geom = _ogr_to_shapely(geom.Clone())
+            if shapely_geom and not shapely_geom.is_empty:
+                arterial_geoms.append(shapely_geom)
+
+    arterial_cells = []
+    secondary_cells = []
+
+    cells_layer.ResetReading()
+    for cell_feat in cells_layer:
+        cell_geom_ogr = cell_feat.GetGeometryRef()
+        if cell_geom_ogr is None:
+            continue
+
+        cell_geom = _ogr_to_shapely(cell_geom_ogr.Clone())
+        if cell_geom is None or cell_geom.is_empty:
+            continue
+
+        intersects_arterial = any(cell_geom.intersects(art_geom) for art_geom in arterial_geoms)
+
+        cell_data = {
+            "geometry": cell_geom_ogr.Clone(),
+            "fields": {},
+        }
+
+        for i in range(cell_feat.GetFieldCount()):
+            field_name = cell_feat.GetFieldDefnRef(i).GetName()
+            if cell_feat.IsFieldSet(i):
+                cell_data["fields"][field_name] = cell_feat.GetField(i)
+
+        if intersects_arterial:
+            arterial_cells.append(cell_data)
+        else:
+            secondary_cells.append(cell_data)
+
+    if input_path == output_path:
+        output_ds = ds
+    else:
+        output_ds = ogr.Open(output_path, 1)
+        if output_ds is None:
+            ds = None
+            raise RuntimeError(f"Cannot open output dataset: {output_path}")
+
+    cells_layer_defn = cells_layer.GetLayerDefn()
+
+    if output_ds.GetLayerByName(arterial_output_layer_name):
+        output_ds.DeleteLayer(arterial_output_layer_name)
+    arterial_output_layer = output_ds.CreateLayer(
+        arterial_output_layer_name, srs, geom_type=ogr.wkbPolygon
+    )
+
+    for i in range(cells_layer_defn.GetFieldCount()):
+        field_defn = cells_layer_defn.GetFieldDefn(i)
+        arterial_output_layer.CreateField(field_defn)
+
+    for cell_data in arterial_cells:
+        feat = ogr.Feature(arterial_output_layer.GetLayerDefn())
+        feat.SetGeometry(cell_data["geometry"])
+        for field_name, field_value in cell_data["fields"].items():
+            try:
+                feat.SetField(field_name, field_value)
+            except RuntimeError:
+                pass
+        arterial_output_layer.CreateFeature(feat)
+        feat = None
+
+    if output_ds.GetLayerByName(secondary_output_layer_name):
+        output_ds.DeleteLayer(secondary_output_layer_name)
+    secondary_output_layer = output_ds.CreateLayer(
+        secondary_output_layer_name, srs, geom_type=ogr.wkbPolygon
+    )
+
+    for i in range(cells_layer_defn.GetFieldCount()):
+        field_defn = cells_layer_defn.GetFieldDefn(i)
+        secondary_output_layer.CreateField(field_defn)
+
+    for cell_data in secondary_cells:
+        feat = ogr.Feature(secondary_output_layer.GetLayerDefn())
+        feat.SetGeometry(cell_data["geometry"])
+        for field_name, field_value in cell_data["fields"].items():
+            try:
+                feat.SetField(field_name, field_value)
+            except RuntimeError:
+                pass
+        secondary_output_layer.CreateFeature(feat)
+        feat = None
+
+    print(f"  Classified {len(arterial_cells)} arterial cells")
+    print(f"  Classified {len(secondary_cells)} secondary cells")
+
+    if output_ds is not None:
+        output_ds.FlushCache()
+    ds = None
+    output_ds = None
+
+    return arterial_output_layer_name, secondary_output_layer_name
 
 
 def create_local_streets_zone(
@@ -2471,6 +2609,8 @@ def merge_grid_layers_with_type(
             out_feature = None
             feature_count += 1
 
+        if ds is not None:
+            ds.FlushCache()
         ds = None
 
     else:
@@ -2551,6 +2691,8 @@ def merge_grid_layers_with_type(
 
             print(f"  Merged {source_layer.GetFeatureCount()} features from '{layer_name}'")
 
+        if output_ds is not None:
+            output_ds.FlushCache()
         input_ds = None
         output_ds = None
 
