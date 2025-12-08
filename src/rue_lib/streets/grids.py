@@ -306,8 +306,9 @@ def grids_from_polygon(
         tuple: (grid_cells, mesh_points, cell_quality)
             - grid_cells: List of Polygon objects in original coordinates
             - mesh_points: List of Point objects in original coordinates
-            - cell_quality: List of quality dictionaries for each cell
     """
+    from rue_lib.streets.cell import Cell
+
     polygon_shply = feature_geom_to_shapely(polygon)
     mesh_padding = 0.25 * grid_width
 
@@ -345,7 +346,6 @@ def grids_from_polygon(
         candidate_angles_deg = {0.0}
 
     best_overall_cells = []
-    best_overall_quality = []
     best_overall_points = []
     best_overall_good = -1
     best_overall_good_area = -1.0
@@ -387,7 +387,6 @@ def grids_from_polygon(
             )
         else:
             best_cells_rot = []
-            best_quality_rot = []
             best_mesh_points_rot = []
             best_good = -1
             best_good_area = -1.0
@@ -415,13 +414,11 @@ def grids_from_polygon(
                     best_good = good_cells
                     best_good_area = good_area
                     best_cells_rot = cells_cand
-                    best_quality_rot = quality_cand
                     best_mesh_points_rot = mesh_points_cand
 
                 shift += shift_step
 
             cells_rot = best_cells_rot
-            quality_rot = best_quality_rot
             mesh_points_rot = best_mesh_points_rot
 
         if best_good > best_overall_good or (
@@ -430,12 +427,11 @@ def grids_from_polygon(
             best_overall_good = best_good
             best_overall_good_area = best_good_area
             best_overall_cells = cells_rot
-            best_overall_quality = quality_rot
             best_overall_points = mesh_points_rot
             best_angle_deg = angle_deg
 
     if not best_overall_points:
-        return [], [], []
+        return [], []
 
     if best_angle_deg != 0.0:
         grid_cells = [
@@ -460,23 +456,16 @@ def grids_from_polygon(
         grid_cells = best_overall_cells
         mesh_points = best_overall_points
 
-    cell_quality = best_overall_quality
-
     final_cells = []
-    final_quality = []
     for i, c in enumerate(grid_cells):
         clipped = c.intersection(polygon_shply)
         if not clipped.is_empty and clipped.area > 0:
             if clipped.geom_type == "Polygon":
-                final_cells.append(clipped)
-                final_quality.append(cell_quality[i])
-            elif clipped.geom_type == "MultiPolygon":
-                for g in clipped.geoms:
-                    if not g.is_empty and g.area > 0:
-                        final_cells.append(g)
-                        final_quality.append(cell_quality[i])
+                _cell_quality = is_good_cell(clipped, grid_width * grid_depth)
+                _cell = Cell(i, clipped, _cell_quality)
+                final_cells.append(_cell)
 
-    return final_cells, mesh_points, final_quality
+    return final_cells, mesh_points
 
 
 def grids_from_site(
@@ -564,16 +553,15 @@ def grids_from_site(
                     arterial_line = site_boundary_line
                     break
 
-        grid_cells, mesh_points, cell_quality = grids_from_polygon(
-            polygon, arterial_line, grid_width, grid_depth
-        )
+        grid_cells, mesh_points = grids_from_polygon(polygon, arterial_line, grid_width, grid_depth)
 
-        for i, cell in enumerate(grid_cells):
+        for _i, _cell in enumerate(grid_cells):
+            cell = _cell.geom
+            quality_info = _cell.quality
             feat = ogr.Feature(grid_layer.GetLayerDefn())
             feat.SetField("grid_id", grid_id)
             feat.SetField("area", cell.area)
 
-            quality_info = cell_quality[i]
             feat.SetField("is_good", 1 if quality_info["is_good"] else 0)
             feat.SetField("quality", quality_info["reason"])
             feat.SetField("right_angles", quality_info["right_angles"])

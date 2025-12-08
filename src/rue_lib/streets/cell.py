@@ -959,7 +959,9 @@ def remove_dead_end_cells(
             if cell_geom.buffer(0.1).intersects(non_arterial_boundaries):
                 touches_non_arterial = True
 
-        if touches_non_arterial and cell_quality == "area_too_small":
+        if touches_non_arterial and (
+            cell_quality == "area_too_small" or cell_quality == "area_too_large"
+        ):
             cells_removed += 1
             cells_to_remove.append(cell_geom)
             print(
