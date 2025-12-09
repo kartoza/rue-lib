@@ -4,7 +4,38 @@ from dataclasses import dataclass
 
 @dataclass
 class ClusterConfig:
-    """Configuration for cluster/partition generation."""
+    """
+    Configuration for cluster/partition generation.
+
+    This dataclass holds all configuration parameters for generating clusters/partitions
+    from street blocks, including partition dimensions, plot sizes, road widths, and
+    output settings.
+
+    Attributes:
+        roads_path: Path to roads network (GeoJSON or GeoPackage)
+        input_path: Path to streets output or previous step output
+        part_art_d: Depth of on-grid partitions along arterial roads (meters)
+        part_sec_d: Depth of on-grid partitions along secondary roads (meters)
+        part_loc_d: Depth of on-grid partitions along local roads (meters)
+        part_og_d: Depth of off-grid partitions (meters)
+        part_og_w: Width of off-grid strips (meters)
+        plot_art_w: Typical plot width on arterial roads (meters)
+        plot_sec_w: Typical plot width on secondary roads (meters)
+        plot_loc_w: Typical plot width on local roads (meters)
+        blk_art_num_og_d: Number of off-grid layers in depth behind arterial roads
+        blk_sec_num_og_d: Number of off-grid layers in depth behind secondary roads
+        blk_loc_num_og_d: Number of off-grid layers in depth behind local roads
+        blk_art_num_og_w: Number of off-grid layers in width behind arterial roads
+        blk_sec_num_og_w: Number of off-grid layers in width behind secondary roads
+        blk_loc_num_og_w: Number of off-grid layers in width behind local roads
+        open_percent: Target percent of site area for open space
+        amen_percent: Target percent of site area for social amenities
+        output_dir: Directory for output files
+        road_arterial_width_m: Width of arterial roads (meters)
+        road_secondary_width_m: Width of secondary roads (meters)
+        road_local_width_m: Width of local roads (meters)
+        off_grid_plot_threshold: Off-grid plot threshold (0.5 = 50% of target)
+    """
     # Input paths
     roads_path: str  # Path to roads network
     input_path: str  # Path to streets output, or previous step output

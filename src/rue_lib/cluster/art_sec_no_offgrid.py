@@ -325,14 +325,17 @@ def create_parts_from_block(
 
 def get_edge_angle(coords: list, vertex_idx: int) -> float:
     """
-    Calculate the angle at a vertex.
+    Calculate the internal angle at a vertex in a polygon.
+
+    Computes the angle between the incoming and outgoing edges at the
+    specified vertex using the dot product of normalized edge vectors.
 
     Args:
         coords: List of polygon coordinates
-        vertex_idx: Index of vertex
+        vertex_idx: Index of vertex to calculate angle at
 
     Returns:
-        Angle in degrees
+        Internal angle in degrees (0-180)
     """
     n = len(coords) - 1
 

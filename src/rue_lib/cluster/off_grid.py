@@ -16,14 +16,17 @@ from rue_lib.core.geometry import remove_vertices_by_angle
 
 def extend_line(line: LineString, extension: float) -> LineString:
     """
-    Extend a LineString at both ends.
+    Extend a LineString at both ends by a specified distance.
+
+    This function extends the line by projecting from the first and last
+    vertices in the direction of the line segments.
 
     Args:
         line: LineString to extend
-        extension: Distance to extend at each end
+        extension: Distance to extend at each end (meters)
 
     Returns:
-        Extended LineString
+        Extended LineString with same internal vertices but extended endpoints
     """
     if line.is_empty or line.length == 0:
         return line
@@ -90,26 +93,33 @@ def create_extended_roads(
 def clean_small_polygons(polygons: list[Polygon], min_area: float = 1.0) -> \
         list[Polygon]:
     """
-    Remove very small polygons that are likely artifacts.
+    Remove very small polygons that are likely geometric artifacts.
+
+    Filters out polygons smaller than the minimum area threshold, which often
+    result from floating-point precision issues in geometric operations.
 
     Args:
-        polygons: list of polygons to clean
-        min_area: Minimum area to keep
+        polygons: List of polygons to clean
+        min_area: Minimum area threshold in square meters (default: 1.0)
 
     Returns:
-        Cleaned list of polygons
+        Filtered list containing only polygons >= min_area
     """
     return [p for p in polygons if p.area >= min_area]
 
 def get_block_edges(block: Polygon) -> list[LineString]:
     """
-    Get the four edges of a rectangular block.
+    Extract all edges from a block polygon as individual LineStrings.
+
+    Decomposes the block's exterior ring into individual edge segments.
+    For a rectangular block, this returns 4 edges; for other polygons,
+    returns one edge per side.
 
     Args:
-        block: Block polygon
+        block: Block polygon to extract edges from
 
     Returns:
-        list of LineStrings representing edges [bottom, right, top, left]
+        List of LineStrings, one for each edge of the polygon
     """
     coords = list(block.exterior.coords)
     if len(coords) < 5:  # Not a proper closed polygon

@@ -1,5 +1,5 @@
-# src/rue_lib/cluster/runner.py
-"""Main runner for cluster/partition generation."""
+# src/rue_lib/cluster/runner_warm.py
+"""Generate warm blocks with off-grid subdivision and partitioning."""
 
 from __future__ import annotations
 
@@ -24,7 +24,20 @@ def generate_warm(
         roads_layer_name: str
 ):
     """
-    Generate warm blocks from parcels.
+    Generate warm blocks with off-grid subdivision and partitioning.
+
+    This function processes blocks to create:
+    - Inner off-grid areas by offsetting edges inward
+    - Frame parts (perimeter around off-grid)
+    - Corner and side parts from block decomposition
+    - Subdivided plots within off-grid areas
+    - On-grid parts for arterial and secondary roads
+
+    Args:
+        cfg: ClusterConfig with partition settings
+        output_gpkg: Path to output GeoPackage
+        input_blocks_layer_name: Name of input blocks layer
+        roads_layer_name: Name of roads layer
     """
     output_path = str(output_gpkg)
     print("==============================================================")

@@ -1,5 +1,5 @@
 # src/rue_lib/cluster/frame.py
-"""Create frame ."""
+"""Create frame geometries from blocks by subtracting off-grid areas."""
 
 from pathlib import Path
 

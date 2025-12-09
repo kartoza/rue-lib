@@ -251,16 +251,20 @@ def classify_plot_by_area(
         threshold: float = 0.3,
 ) -> str:
     """
-    Classify a plot as 'plot' or 'park' based on area.
+    Classify a plot as 'plot' or 'park' based on area comparison.
+
+    Determines whether a plot is large enough to be a buildable plot or
+    should be classified as park/open space based on a percentage of the
+    target plot area.
 
     Args:
-        plot: Plot polygon
-        part_og_w: Target plot width
-        part_og_d: Target plot depth
-        threshold: Area threshold (0.3 = 30% of target)
+        plot: Plot polygon to classify
+        part_og_w: Target plot width (meters)
+        part_og_d: Target plot depth (meters)
+        threshold: Area threshold as fraction of target (0.3 = 30% of target)
 
     Returns:
-        'plot' or 'park'
+        'plot' if area >= threshold * target_area, otherwise 'park'
     """
     target_area = part_og_w * part_og_d
 

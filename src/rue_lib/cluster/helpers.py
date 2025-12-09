@@ -1,5 +1,5 @@
-# src/rue_lib/cluster/off_grid_subdivision.py
-"""Subdivide off-grid areas into smaller plot clusters."""
+# src/rue_lib/cluster/helpers.py
+"""Helper functions for cluster generation and geometry operations."""
 
 from typing import Optional
 

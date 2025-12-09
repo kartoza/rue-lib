@@ -11,12 +11,28 @@ from rue_lib.core.geometry import remove_vertices_by_angle
 
 
 def vector_length(v: np.ndarray) -> float:
-    """Calculate length of a vector."""
+    """
+    Calculate the Euclidean length of a vector.
+
+    Args:
+        v: Input vector (any dimension)
+
+    Returns:
+        Length (magnitude) of the vector
+    """
     return np.linalg.norm(v)
 
 
 def normalize_vector(v: np.ndarray) -> np.ndarray:
-    """Normalize a vector to unit length."""
+    """
+    Normalize a vector to unit length.
+
+    Args:
+        v: Input vector to normalize
+
+    Returns:
+        Unit vector in the same direction, or original vector if length is 0
+    """
     length = vector_length(v)
     if length == 0:
         return v
@@ -24,7 +40,16 @@ def normalize_vector(v: np.ndarray) -> np.ndarray:
 
 
 def set_vector_length(v: np.ndarray, length: float) -> np.ndarray:
-    """Set vector to a specific length."""
+    """
+    Scale a vector to a specific length.
+
+    Args:
+        v: Input vector
+        length: Target length for the vector
+
+    Returns:
+        Vector with same direction but specified length
+    """
     return normalize_vector(v) * length
 
 

@@ -5,7 +5,7 @@ from rue_lib.cluster.runner import ClusterConfig, generate_clusters
 
 def main():
     """
-    Step 2: Generate street blocks from parcels and roads.
+    Step 3: Generate clusters/partitions from street blocks and roads.
     """
 
     config = ClusterConfig(
@@ -53,7 +53,7 @@ def main():
     output_path = generate_clusters(config)
 
     print()
-    print("✔ Step 2 completed successfully!")
+    print("✔ Step 3 completed successfully!")
     print(f"  Output: {output_path}")
 
 
