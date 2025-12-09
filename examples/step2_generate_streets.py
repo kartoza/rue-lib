@@ -13,11 +13,11 @@ def main():
         roads_path="data/roads.geojson",
         on_grid_partition_depth_arterial_roads=60.0,
         on_grid_partition_depth_secondary_roads=60.0,
-        off_grid_partitions_preferred_depth=140,
-        off_grid_partitions_preferred_width=140,
+        off_grid_partitions_preferred_depth=100,
+        off_grid_partitions_preferred_width=100,
         output_dir="outputs/step2_streets",
-        road_arterial_width_m=20.0,
-        road_secondary_width_m=15.0,
+        road_arterial_width_m=40.0,
+        road_secondary_width_m=30.0,
     )
 
     print("=" * 60)
