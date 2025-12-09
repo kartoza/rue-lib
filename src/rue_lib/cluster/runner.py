@@ -8,8 +8,9 @@ from pathlib import Path
 
 from osgeo import ogr
 
-from rue_lib.cluster.art_sec_no_offgrid import \
+from rue_lib.cluster.art_sec_no_offgrid import (
     generate_art_sec_parts_no_offgrid
+)
 from rue_lib.cluster.block_parts import extract_block_parts_from_off_grid
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.frame import extract_frame
@@ -20,7 +21,8 @@ from rue_lib.core.geometry import (
     reproject_layer
 )
 from rue_lib.core.helpers import merge_gpkg_layers
-from rue_lib.streets.operations import extract_by_expression
+from rue_lib.streets.operations import extract_by_expression, \
+    extract_by_geometry_type
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -64,33 +66,31 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
 
     # Step 1: Read input data
     print("Step 1: Determining UTM zone...")
-    site_ds = ogr.Open(cfg.blocks_path)
+    site_ds = ogr.Open(cfg.input_path)
     site_layer = site_ds.GetLayer()
     utm_epsg = get_utm_zone_from_layer(site_layer)
     print(f"  Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
+    input_layer_name = reproject_layer(
+        cfg.input_path, output_path, utm_epsg, layer_name="00_input"
+    )
     roads_layer_name = reproject_layer(
         cfg.roads_path, output_path, utm_epsg, layer_name="01_roads"
     )
-    # Roads
-    road_art_layer_name = "01_road_art"
-    extract_by_expression(
-        output_path, roads_layer_name,
-        "road_type = 'road_art'",
+    input_blocks_layer_name = "02_input_blocks"
+    extract_by_geometry_type(
+        output_path, input_layer_name,
+        ["POLYGON", "MULTIPOLYGON"],
         output_path,
-        road_art_layer_name
+        input_blocks_layer_name
     )
-    road_sec_layer_name = "01_road_sec"
-    extract_by_expression(
-        output_path, roads_layer_name,
-        "road_type = 'road_sec'",
+    input_roads_layer_name = "02_input_roads"
+    extract_by_geometry_type(
+        output_path, input_layer_name,
+        ["LINESTRING", "MULTILINESTRING"],
         output_path,
-        road_sec_layer_name
-    )
-
-    blocks_layer_name = reproject_layer(
-        cfg.blocks_path, output_path, utm_epsg, layer_name="02_blocks"
+        input_roads_layer_name
     )
 
     print("==============================================================")
@@ -99,16 +99,17 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     print("Step 3: Generate inner part of off grid blocks...")
     warm_grid_layer_name = "03_warm_grid"
     extract_by_expression(
-        output_path, blocks_layer_name,
+        output_path, input_blocks_layer_name,
         "type = 'on_grid_art' OR type = 'on_grid_sec' OR type = 'off_grid'",
         output_path,
         warm_grid_layer_name
     )
-    off_grids_inner_layer_name = extract_off_grid_inner_layer(
+    off_grids_inner_layer_name = "04_off_grids_inner_layer"
+    extract_off_grid_inner_layer(
         output_path=output_gpkg,
         roads_layer_name=roads_layer_name,
         off_grid_layer_name=warm_grid_layer_name,
-        output_layer_name="04_off_grids_inner_layer",
+        output_layer_name=off_grids_inner_layer_name,
         part_art_d=cfg.part_art_d,
         part_sec_d=cfg.part_sec_d,
         part_loc_d=cfg.part_loc_d
@@ -184,9 +185,11 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_path=output_path,
         blocks_layer_name=output_not_generated_block_layer_name,
         roads_layer_name=roads_layer_name,
+        road_local_width_m=cfg.road_local_width_m,
         part_art_d=cfg.part_art_d,
         part_sec_d=cfg.part_sec_d,
         part_loc_d=cfg.part_loc_d,
+        output_layer_name="14_generate_art_sec_parts_no_offgrid",
     )
 
     print("" + "=" * 60)

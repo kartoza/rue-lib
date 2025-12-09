@@ -10,19 +10,25 @@ def main():
 
     config = ClusterConfig(
         roads_path="data/roads.geojson",
-        blocks_path="outputs/step2_streets/all_grids_merged.geojson",
+        input_path="outputs/step2_streets/all_grids_merged.geojson",
         output_dir="outputs/step3_clusters",
         part_art_d=40,
         part_sec_d=30,
         part_loc_d=20,
-        part_og_w=20.0,
-        part_og_d=30.0,
+
+        part_og_d=45.0,
+        part_og_w=30.0,
+
+        # Road widths
+        road_arterial_width_m=40.0,
+        road_secondary_width_m=30.0,
+        road_local_width_m=10.0
     )
 
     print("=" * 60)
     print("STEP 3: Generating Clusters/Partitions")
     print("=" * 60)
-    print(f"Roads: {config.roads_path}")
+    print(f"Input: {config.input_path}")
     print(f"Output: {config.output_dir}")
     print()
 

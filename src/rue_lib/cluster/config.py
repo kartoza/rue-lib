@@ -7,7 +7,7 @@ class ClusterConfig:
     """Configuration for cluster/partition generation."""
     # Input paths
     roads_path: str  # Path to roads network
-    blocks_path: str  # Path to blocks (output from streets module)
+    input_path: str  # Path to streets output, or previous step output
 
     # Cluster / partition geometry
     # Depth of on-grid clusters along different road types (meters)

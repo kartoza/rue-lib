@@ -11,11 +11,11 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
-import pandas as pd
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from rue_lib.cluster.block_edges import extract_block_edges
 from rue_lib.cluster.off_grid import extend_line
+from rue_lib.core.definitions import RoadTypes
 
 
 def get_perimeter_lines_by_road_type(
@@ -183,10 +183,10 @@ def create_parts_from_block(
     """
     # Get perimeter lines for arterial and secondary roads
     plines_art = get_perimeter_lines_by_road_type(
-        block, block_edges_gdf, 'road_art'
+        block, block_edges_gdf, RoadTypes.Artery
     )
     plines_sec = get_perimeter_lines_by_road_type(
-        block, block_edges_gdf, 'road_sec'
+        block, block_edges_gdf, RoadTypes.Secondary
     )
 
     part_art_d = depths_dict.get('road_art', 40)
@@ -454,28 +454,34 @@ def generate_art_sec_parts_no_offgrid(
         output_path: Path,
         blocks_layer_name: str,
         roads_layer_name: str,
-        part_art_d: float = 40.0,
-        part_sec_d: float = 30.0,
-        part_loc_d: float = 20.0,
-        ortho_direction: Optional[np.ndarray] = None
-) -> gpd.GeoDataFrame:
+        road_local_width_m: float,
+        part_art_d: float,
+        part_sec_d: float,
+        part_loc_d: float,
+        output_layer_name,
+        ortho_direction: Optional[np.ndarray] = None,
+):
     """
     Generate arterial and secondary block parts without off-grid subdivision.
 
     This function processes blocks and creates parts based on arterial and
     secondary road adjacency. It performs geometric operations to create
-    corner parts, side parts, and other part types.
+    corner parts, side parts, and other part types by offsetting roads inward
+    and performing boolean operations. Results are saved to a GeoPackage file.
 
     Args:
-        blocks_gdf: GeoDataFrame with blocks (must have 'block_type' column)
-        roads_gdf: GeoDataFrame with roads
-        part_art_d: Offset depth for arterial roads (default: 40m)
-        part_sec_d: Offset depth for secondary roads (default: 30m)
-        part_loc_d: Offset depth for local roads (default: 20m)
-        ortho_direction: Orthogonal direction vector for perpendicular checks
-
-    Returns:
-        GeoDataFrame with generated parts
+        output_path: Path to the GeoPackage file containing input layers and
+            where output will be saved.
+        blocks_layer_name: Name of the layer containing block polygons.
+        roads_layer_name: Name of the layer containing road geometries.
+        road_local_width_m: Width of local roads in meters, used for extracting
+            block edges.
+        part_art_d: Offset depth for arterial roads in meters (typically 40m).
+        part_sec_d: Offset depth for secondary roads in meters (typically 30m).
+        part_loc_d: Offset depth for local roads in meters (typically 20m).
+        output_layer_name: Name for the output layer containing generated parts.
+        ortho_direction: Optional orthogonal direction vector for perpendicular
+            checks. Defaults to [0, 1, 0] if not provided.
     """
     blocks_layer = gpd.read_file(
         output_path, layer=blocks_layer_name
@@ -483,23 +489,16 @@ def generate_art_sec_parts_no_offgrid(
     roads_layer = gpd.read_file(
         output_path, layer=roads_layer_name
     )
-    block_edges_gdf = extract_block_edges(blocks_layer, roads_layer)
+    block_edges_gdf = extract_block_edges(
+        blocks_layer, roads_layer, road_local_width_m
+    )
     gdf_out = gpd.GeoDataFrame(block_edges_gdf, crs=blocks_layer.crs)
-    gdf_out.to_file(output_path, layer="block_edges_gdf", driver="GPKG")
-    return
+    gdf_out.to_file(output_path, layer="14_block_edges_gdf", driver="GPKG")
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])
 
-    # Filter to only arterial and secondary blocks
-    art_blocks = blocks_gdf[blocks_gdf['block_type'] == 'art']
-    sec_blocks = blocks_gdf[blocks_gdf['block_type'] == 'sec']
-
-    blocks_to_process = gpd.GeoDataFrame(
-        pd.concat([art_blocks, sec_blocks], ignore_index=True)
-    ) if not art_blocks.empty or not sec_blocks.empty else gpd.GeoDataFrame()
-
-    if blocks_to_process.empty:
+    if blocks_layer.empty:
         return gpd.GeoDataFrame(
             columns=['geometry', 'class', 'type', 'block_id'])
 
@@ -520,7 +519,7 @@ def generate_art_sec_parts_no_offgrid(
 
     all_parts = []
 
-    for idx, block_row in blocks_to_process.iterrows():
+    for idx, block_row in blocks_layer.iterrows():
         block = block_row.geometry
 
         # Get edges for this block
@@ -553,7 +552,7 @@ def generate_art_sec_parts_no_offgrid(
             if len(part_type) == 7:  # e.g., 'art_loc'
                 # Check local road edge lengths
                 loc_edges = part_edges[
-                    part_edges.get('road_type') == 'road_loc']
+                    part_edges.get('road_type') == RoadTypes.Local]
                 if not loc_edges.empty:
                     max_length = loc_edges.geometry.length.max()
                     if max_length > (part_loc_d * 2):
@@ -561,7 +560,7 @@ def generate_art_sec_parts_no_offgrid(
 
                 # Check secondary road edge lengths
                 sec_edges = part_edges[
-                    part_edges.get('road_type') == 'road_sec']
+                    part_edges.get('road_type') == RoadTypes.Secondary]
                 if not sec_edges.empty:
                     max_length = sec_edges.geometry.length.max()
                     if max_length > (part_sec_d * 2):
@@ -577,9 +576,6 @@ def generate_art_sec_parts_no_offgrid(
             })
 
     # Create GeoDataFrame
-    if all_parts:
-        parts_gdf = gpd.GeoDataFrame(all_parts, crs=blocks_gdf.crs)
-        return parts_gdf
-    else:
-        return gpd.GeoDataFrame(
-            columns=['geometry', 'class', 'type', 'block_id'])
+    gdf_out = gpd.GeoDataFrame(all_parts, crs=blocks_layer.crs)
+    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    return output_layer_name
