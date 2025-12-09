@@ -16,7 +16,7 @@ from rue_lib.core.geometry import (
 from rue_lib.streets.operations import (
     extract_by_geometry_type
 )
-from .runner_warm import generate_warm
+from .runner_cold import generate_cold
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -63,7 +63,6 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     site_ds = ogr.Open(cfg.input_path)
     site_layer = site_ds.GetLayer()
     utm_epsg = get_utm_zone_from_layer(site_layer)
-    utm_epsg = 3857
     print(f"  Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
@@ -87,7 +86,12 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_path,
         input_roads_layer_name
     )
-    generate_warm(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name)
+
+    # # Warm block generation
+    # generate_warm(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name)
+
+    # Cold block generation
+    generate_cold(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name, input_roads_layer_name)
 
     print("" + "=" * 60)
     print("CLUSTER GENERATION COMPLETE")

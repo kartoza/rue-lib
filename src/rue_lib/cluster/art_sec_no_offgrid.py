@@ -500,8 +500,6 @@ def generate_art_sec_parts_no_offgrid(
     block_edges_gdf = extract_block_edges(
         blocks_layer, roads_layer, 20
     )
-    gdf_out = gpd.GeoDataFrame(block_edges_gdf, crs=blocks_layer.crs)
-    gdf_out.to_file(output_path, layer="114_block_edges_gdf", driver="GPKG")
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])

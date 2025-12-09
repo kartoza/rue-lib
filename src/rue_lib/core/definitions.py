@@ -43,7 +43,9 @@ class BlockTypes(EnumType):
         ON_GRID_ART: On-grid arterial block type.
         ON_GRID_SEC: On-grid secondary block type.
         OFF_GRID: Off-grid block type.
+        COLD_GRID: Cold boundary block type.
     """
     ON_GRID_ART = "on_grid_art"
     ON_GRID_SEC = "on_grid_sec"
     OFF_GRID = "off_grid"
+    COLD_GRID = "cold_boundaries"

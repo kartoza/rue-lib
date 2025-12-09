@@ -580,7 +580,7 @@ def extract_block_parts_from_off_grid(
             all_corner_candidates, crs=warm_grid_layer.crs
         )
         gdf_out.to_file(
-            output_path, layer="06_all_corner_candidates", driver="GPKG"
+            output_path, layer="103_all_corner_candidates", driver="GPKG"
         )
 
     if all_corner_180_candidates:
@@ -588,7 +588,7 @@ def extract_block_parts_from_off_grid(
             all_corner_180_candidates, crs=warm_grid_layer.crs
         )
         gdf_out.to_file(
-            output_path, layer="06_all_corner_180_candidates", driver="GPKG"
+            output_path, layer="103_all_corner_180_candidates", driver="GPKG"
         )
 
     if all_corner_parts:

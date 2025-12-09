@@ -5,7 +5,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, Polygon
+from shapely.geometry import LineString, Polygon, Point
 
 from rue_lib.core.definitions import RoadTypes
 
@@ -128,7 +128,9 @@ def get_roads_near_block(
 
 
 def find_closest_road_type(
-        edge: LineString, roads: gpd.GeoDataFrame, max_distance: float = 20.0
+        edge: LineString | Point, roads: gpd.GeoDataFrame,
+        max_distance: float = 20.0,
+        default_type: Optional[RoadTypes] = RoadTypes.Local
 ) -> Optional[str]:
     """
     Find the road type that is closest to the center point of a given edge.
@@ -145,10 +147,13 @@ def find_closest_road_type(
         return None
 
     # Use the center point of the edge
-    edge_center = edge.interpolate(0.5, normalized=True)
+    if isinstance(edge, Point):
+        edge_center = edge
+    else:
+        edge_center = edge.interpolate(0.5, normalized=True)
 
     min_distance = float("inf")
-    closest_type = RoadTypes.Local
+    closest_type = default_type
 
     for _, road in roads.iterrows():
         dist = edge_center.distance(road.geometry)
@@ -164,4 +169,6 @@ def find_closest_road_type(
         closest_type = RoadTypes.Artery
     elif closest_type == "road_sec":
         closest_type = RoadTypes.Secondary
+    elif closest_type == "road_loc":
+        closest_type = RoadTypes.Local
     return closest_type
