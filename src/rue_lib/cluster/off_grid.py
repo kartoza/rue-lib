@@ -212,7 +212,6 @@ def create_off_grid_inner_layer(
 
     # Remove spike vertices based on angle threshold
     current_polygon = remove_vertices_by_angle(current_polygon, min_angle_threshold=10)
-
     return current_polygon
 
 
@@ -292,6 +291,7 @@ def create_off_grid_inner_layers(
                     "original_area": block.area,
                     "off_grid_area": off_grid.area,
                     "reduction_pct": reduction,
+                    "vertices": len(off_grid.exterior.coords) - 1
                 }
             )
     return off_grids

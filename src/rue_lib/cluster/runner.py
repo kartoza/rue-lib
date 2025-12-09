@@ -8,21 +8,15 @@ from pathlib import Path
 
 from osgeo import ogr
 
-from rue_lib.cluster.art_sec_no_offgrid import (
-    generate_art_sec_parts_no_offgrid
-)
-from rue_lib.cluster.block_parts import extract_block_parts_from_off_grid
 from rue_lib.cluster.config import ClusterConfig
-from rue_lib.cluster.frame import extract_frame
-from rue_lib.cluster.off_grid import extract_off_grid_inner_layer
-from rue_lib.cluster.off_grid_subdivision import extract_off_grid_cluster
 from rue_lib.core.geometry import (
     get_utm_zone_from_layer,
     reproject_layer
 )
-from rue_lib.core.helpers import merge_gpkg_layers
-from rue_lib.streets.operations import extract_by_expression, \
+from rue_lib.streets.operations import (
     extract_by_geometry_type
+)
+from .runner_warm import generate_warm
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -74,123 +68,26 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
 
     print("Step 2: Reprojecting layers to UTM...")
     input_layer_name = reproject_layer(
-        cfg.input_path, output_path, utm_epsg, layer_name="00_input"
+        cfg.input_path, output_path, utm_epsg, layer_name="000_input"
     )
     roads_layer_name = reproject_layer(
-        cfg.roads_path, output_path, utm_epsg, layer_name="01_roads"
+        cfg.roads_path, output_path, utm_epsg, layer_name="001_roads"
     )
-    input_blocks_layer_name = "02_input_blocks"
+    input_blocks_layer_name = "002_input_blocks"
     extract_by_geometry_type(
         output_path, input_layer_name,
         ["POLYGON", "MULTIPOLYGON"],
         output_path,
         input_blocks_layer_name
     )
-    input_roads_layer_name = "02_input_roads"
+    input_roads_layer_name = "002_input_roads"
     extract_by_geometry_type(
         output_path, input_layer_name,
         ["LINESTRING", "MULTILINESTRING"],
         output_path,
         input_roads_layer_name
     )
-
-    print("==============================================================")
-    print("WARM BLOCK")
-    print("==============================================================")
-    print("Step 3: Generate inner part of off grid blocks...")
-    warm_grid_layer_name = "03_warm_grid"
-    extract_by_expression(
-        output_path, input_blocks_layer_name,
-        "type = 'on_grid_art' OR type = 'on_grid_sec' OR type = 'off_grid'",
-        output_path,
-        warm_grid_layer_name
-    )
-    off_grids_inner_layer_name = "04_off_grids_inner_layer"
-    extract_off_grid_inner_layer(
-        output_path=output_gpkg,
-        roads_layer_name=roads_layer_name,
-        off_grid_layer_name=warm_grid_layer_name,
-        output_layer_name=off_grids_inner_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d
-    )
-    print("Step 4: Generate frame parts of off grid blocks...")
-    off_grid_frame_layer_name = "05_off_grid_frame"
-    extract_frame(
-        output_path=output_gpkg,
-        off_grid_layer_name=warm_grid_layer_name,
-        off_grids_inside_layer_name=off_grids_inner_layer_name,
-        output_layer_name=off_grid_frame_layer_name
-    )
-    print("Step 5: Extract all parts of blocks...")
-    off_grid_corners_layer_name = "06_corners"
-    off_grid_sides_layer_name = "07_sides"
-    off_grid_off_grid_layer_name = "08_off_grid"
-    output_not_generated_block_layer_name = "09_not_generated_block"
-    extract_block_parts_from_off_grid(
-        output_path=output_gpkg,
-        warm_grid_layer_name=warm_grid_layer_name,
-        off_grids_inner_layer_name=off_grids_inner_layer_name,
-        off_grid_frame_layer_name=off_grid_frame_layer_name,
-        output_not_generated_block_layer_name=output_not_generated_block_layer_name,
-        angle_threshold=155.0,
-        corner_distance=50.0,
-        output_corner_layer_name=off_grid_corners_layer_name,
-        output_sides_layer_name=off_grid_sides_layer_name,
-        output_off_grid_layer_name=off_grid_off_grid_layer_name
-    )
-    print(
-        "Step 6: Get blocks that is not in off grid and merge them with off grid blocks...")
-    merge_gpkg_layers(
-        gpkg_path=output_gpkg,
-        layer_names=[
-            off_grid_corners_layer_name, off_grid_sides_layer_name,
-            off_grid_off_grid_layer_name, output_not_generated_block_layer_name
-        ],
-        output_layer_name="10_generated_part_with_off_grid_checkpoint",
-    )
-    print("Step 7: Subdiv inner off grid into parts...")
-    off_grid_inner_cluster_layer_name = "11_inner_grid_subdiv"
-    extract_off_grid_cluster(
-        output_path=output_gpkg,
-        off_grids_layer_name=off_grid_off_grid_layer_name,
-        part_og_w=cfg.part_og_w,
-        part_og_d=cfg.part_og_d,
-        output_layer_name=off_grid_inner_cluster_layer_name,
-        off_grid_plot_threshold=cfg.off_grid_plot_threshold
-    )
-    print("Step 8: Subdiv side off grid into parts...")
-    off_grid_side_cluster_layer_name = "12_side_grid_subdiv"
-    extract_off_grid_cluster(
-        output_path=output_gpkg,
-        off_grids_layer_name=off_grid_sides_layer_name,
-        part_og_w=cfg.part_og_w,
-        part_og_d=cfg.part_og_d,
-        output_layer_name=off_grid_side_cluster_layer_name,
-        off_grid_plot_threshold=cfg.off_grid_plot_threshold
-    )
-    print("Step 9: Merge subdiv grids")
-    merge_gpkg_layers(
-        gpkg_path=output_gpkg,
-        layer_names=[
-            off_grid_inner_cluster_layer_name,
-            off_grid_side_cluster_layer_name,
-            off_grid_corners_layer_name
-        ],
-        output_layer_name="13_subdiv_into_parts_checkpoint",
-    )
-
-    print("Step 10: generate art sec parts no offgrid ")
-    generate_art_sec_parts_no_offgrid(
-        output_path=output_path,
-        blocks_layer_name=output_not_generated_block_layer_name,
-        roads_layer_name=roads_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d,
-        output_layer_name="14_generate_art_sec_parts_no_offgrid",
-    )
+    generate_warm(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name)
 
     print("" + "=" * 60)
     print("CLUSTER GENERATION COMPLETE")

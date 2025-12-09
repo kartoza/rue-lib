@@ -172,6 +172,7 @@ def create_plot_grid_from_positions(
 
 
 def subdivide_off_grid(
+        block_id: int,
         off_grid: Polygon,
         part_og_w: float = 140.0,
         part_og_d: float = 140.0,
@@ -205,10 +206,10 @@ def subdivide_off_grid(
     """
     if min_plot_area is None:
         min_plot_area = part_og_w * part_og_d * 0.3
-
     quad = convert_to_quadrilateral(off_grid, min_area=100.0)
 
     if quad is None:
+        print(f"Warning: No quad")
         return [off_grid]
 
     try:
@@ -240,7 +241,7 @@ def subdivide_off_grid(
     if not valid_plots:
         return [off_grid]
 
-    return valid_plots + small_plots
+    return (valid_plots + small_plots)
 
 
 def classify_plot_by_area(
@@ -275,7 +276,8 @@ def extract_off_grid_cluster(
         part_og_w: float,
         part_og_d: float,
         output_layer_name: str,
-        off_grid_plot_threshold: float
+        off_grid_plot_threshold: float,
+        min_plot_area:float
 ):
     """
     Extract and subdivide off-grid areas into plot clusters.
@@ -305,16 +307,18 @@ def extract_off_grid_cluster(
         block_id = off_grid_part.get("block_id")
         parent_index = off_grid_part.get("part_index")
 
-        print(f"  Block {block_id}:")
-        print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
+        # print(f"  ---------------------------")
+        # print(f"  Block {block_id}:")
+        # print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
 
         try:
             # Subdivide the off-grid area using oriented approach
             plots = subdivide_off_grid(
+                block_id,
                 off_grid_geom,
                 part_og_w=part_og_w,
                 part_og_d=part_og_d,
-                min_plot_area=part_og_w * part_og_d * off_grid_plot_threshold,
+                min_plot_area=min_plot_area
             )
 
             print(f"    ✓ Created {len(plots)} plots")
@@ -334,7 +338,6 @@ def extract_off_grid_cluster(
                         "parent_index": parent_index,
                     }
                 )
-
         except Exception as e:
             print(f"    ✗ Error subdividing off-grid: {e}")
 

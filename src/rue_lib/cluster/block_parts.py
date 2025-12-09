@@ -5,7 +5,9 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import MultiPolygon, Polygon
+
+from rue_lib.core.geometry import remove_vertices_by_angle
 
 
 def vector_length(v: np.ndarray) -> float:
@@ -200,6 +202,7 @@ def create_side_polygon(
 
 
 def get_side_parts(
+        block_id: int,
         block: Polygon,
         off_grid: Polygon,
         corner_parts: list[Polygon],
@@ -227,26 +230,31 @@ def get_side_parts(
         >>> sides = get_side_parts(block, off_grid, corners)
     """
     try:
-        # Start with block - off_grid
         result = block.difference(off_grid)
 
         # Subtract each corner part
         for corner in corner_parts:
             result = result.difference(corner)
 
-        # Remove spikes using buffer technique
-        # Small negative buffer followed by positive buffer removes spikes
-        if not result.is_empty and result.area > 0:
-            buffer_distance = -0.01
-            result = result.buffer(buffer_distance,
-                                   join_style=2)  # join_style=2 is mitre
-            if not result.is_empty:
-                result = result.buffer(-buffer_distance, join_style=2)
+        # Clean the polygon
+        if result.geom_type == "Polygon":
+            result = remove_vertices_by_angle(
+                result, min_angle_threshold=10
+            )
+        elif result.geom_type == "MultiPolygon":
+            cleaned_geoms = []
+            for geom in result.geoms:
+                clean_polygon = remove_vertices_by_angle(
+                    geom, min_angle_threshold=10
+                )
+                cleaned_geoms.append(clean_polygon)
+            result = MultiPolygon(cleaned_geoms)
 
         # Simplify to remove unnecessary vertices
         if not result.is_empty and result.area > 0:
-            result = result.simplify(simplify_tolerance,
-                                     preserve_topology=True)
+            result = result.simplify(
+                simplify_tolerance, preserve_topology=True
+            )
 
         # Handle result which could be Polygon, MultiPolygon, or empty
         side_parts = []
@@ -255,7 +263,6 @@ def get_side_parts(
                 side_parts.append(result)
             elif result.geom_type == "MultiPolygon":
                 side_parts.extend(list(result.geoms))
-
         return side_parts
     except Exception as e:
         print(f"Warning: Failed to compute side parts: {e}")
@@ -263,6 +270,7 @@ def get_side_parts(
 
 
 def create_block_parts_from_off_grid(
+        block_id: int,
         block: Polygon,
         off_grid: Polygon,
         angle_threshold: float = 155.0,
@@ -392,7 +400,7 @@ def create_block_parts_from_off_grid(
             print(f"Warning: Failed to intersect corner: {e}")
             continue
 
-    side_parts = get_side_parts(block, off_grid, corner_parts)
+    side_parts = get_side_parts(block_id, block, off_grid, corner_parts)
     return corner_parts, side_parts, off_grid, corner_candidates, corner_180_candidates
 
 
@@ -463,16 +471,16 @@ def extract_block_parts_from_off_grid(
         # Find corresponding off-grid
         off_grid_row = off_grids_inner_layer[
             off_grids_inner_layer["block_id"] == block_id].iloc[0]
-        off_grid = off_grid_row.geometry
 
         # Get original block (without hole)
-        original_block = warm_grid_layer.loc[block_id].geometry
+        original_block = warm_grid_layer.loc[block_id]
 
         try:
             # Pass original block (not frame) - the function creates parts from block and off_grid
             corner_parts, side_parts, off_grid_final, corner_candidates, corner_180_candidates = create_block_parts_from_off_grid(
-                original_block,  # Original block boundary
-                off_grid,  # Off-grid center polygon
+                block_id,
+                original_block.geometry,  # Original block boundary
+                off_grid_row.geometry,  # Off-grid center polygon
                 angle_threshold=angle_threshold,
                 corner_distance=corner_distance,
             )
@@ -480,7 +488,8 @@ def extract_block_parts_from_off_grid(
             print(
                 f"  ✓ Created {len(corner_parts)} corners, {len(side_parts)} sides")
 
-            # Collect corner parts
+            # Collect corner for candidates with 90 degree rotation
+            # Currently we are using this
             for i, corner in enumerate(corner_candidates):
                 all_corner_candidates.append(
                     {
@@ -492,7 +501,7 @@ def extract_block_parts_from_off_grid(
                     }
                 )
 
-            # Collect corner parts
+            # Collect corner for candidates with 180 degree rotation
             for i, corner in enumerate(corner_180_candidates):
                 all_corner_180_candidates.append(
                     {
