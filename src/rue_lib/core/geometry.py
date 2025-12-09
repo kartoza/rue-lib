@@ -337,3 +337,90 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
         out_feature = None
 
     output_ds = None
+
+def remove_vertices_by_angle(
+        polygon: Polygon, min_angle_threshold: float = 175.0
+) -> Polygon:
+    """
+    Remove vertices where the interior angle is too close to 180 degrees (nearly straight).
+    This helps remove spike vertices that don't contribute to the polygon shape.
+
+    Args:
+        polygon: Input polygon
+        min_angle_threshold: Minimum angle in degrees to keep vertex (default 175.0).
+                           Vertices with angles >= this value (nearly straight) are removed.
+
+    Returns:
+        Polygon with spike vertices removed
+    """
+    import math
+
+    if polygon.is_empty or not isinstance(polygon, Polygon):
+        return polygon
+
+    coords = list(polygon.exterior.coords)
+    if len(coords) < 5:  # Need at least 3 unique points for a polygon
+        return polygon
+
+    # Remove duplicate last point if it exists
+    if coords[0] == coords[-1]:
+        coords = coords[:-1]
+
+    if len(coords) < 5:
+        return polygon
+
+    filtered_coords = []
+
+    is_delete = False
+    for i in range(len(coords)):
+        # Get three consecutive points
+        p1 = coords[i - 1]
+        p2 = coords[i]
+        p3 = coords[(i + 1) % len(coords)]
+
+        # Calculate vectors
+        v1 = (p1[0] - p2[0], p1[1] - p2[1])
+        v2 = (p3[0] - p2[0], p3[1] - p2[1])
+
+        # Calculate angle between vectors
+        len_v1 = math.sqrt(v1[0] ** 2 + v1[1] ** 2)
+        len_v2 = math.sqrt(v2[0] ** 2 + v2[1] ** 2)
+
+        if len_v1 == 0 or len_v2 == 0:
+            continue  # Skip degenerate points
+
+        # Dot product
+        dot = v1[0] * v2[0] + v1[1] * v2[1]
+        cos_angle = dot / (len_v1 * len_v2)
+
+        # Clamp to [-1, 1] to avoid numerical errors
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+
+        # Calculate angle in degrees
+        angle_rad = math.acos(cos_angle)
+        angle_deg = math.degrees(angle_rad)
+
+        # Keep vertex if angle is significant (not nearly straight)
+        if angle_deg > min_angle_threshold:
+            filtered_coords.append(p2)
+        else:
+            is_delete = True
+
+    # Need at least 3 points for a valid polygon
+    if len(filtered_coords) < 4:
+        return polygon
+
+    if is_delete:
+        # Close the polygon
+        filtered_coords.append(filtered_coords[0])
+        return remove_vertices_by_angle(
+            Polygon(filtered_coords), min_angle_threshold=min_angle_threshold
+        )
+
+    try:
+        # Close the polygon
+        filtered_coords.append(filtered_coords[0])
+        return Polygon(filtered_coords)
+    except Exception:
+        # If creation fails, return original
+        return polygon

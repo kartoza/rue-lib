@@ -11,6 +11,7 @@ from rue_lib.cluster.helpers import (
     get_roads_near_block, find_closest_road_type
 )
 from rue_lib.core.definitions import RoadTypes
+from rue_lib.core.geometry import remove_vertices_by_angle
 
 
 def extend_line(line: LineString, extension: float) -> LineString:
@@ -100,7 +101,6 @@ def clean_small_polygons(polygons: list[Polygon], min_area: float = 1.0) -> \
     """
     return [p for p in polygons if p.area >= min_area]
 
-
 def get_block_edges(block: Polygon) -> list[LineString]:
     """
     Get the four edges of a rectangular block.
@@ -172,7 +172,7 @@ def create_off_grid_inner_layer(
             buffer_dist = part_art_d
         elif road_type == RoadTypes.Secondary:
             buffer_dist = part_sec_d
-        elif road_type ==RoadTypes.Local:
+        elif road_type == RoadTypes.Local:
             buffer_dist = part_loc_d
         else:
             buffer_dist = part_loc_d
@@ -184,7 +184,8 @@ def create_off_grid_inner_layer(
 
             if new_polygon.is_empty:
                 print(
-                    f"  Edge {i} ({road_type}): Buffer consumed entire polygon")
+                    f"  Edge {i} ({road_type}): Buffer consumed entire polygon"
+                )
                 return None
 
             if new_polygon.geom_type == "MultiPolygon":
@@ -209,8 +210,8 @@ def create_off_grid_inner_layer(
     if current_polygon.area < 1.0:
         return None
 
-    # Remove spikes by applying buffer(0) which cleans up topology issues
-    current_polygon = current_polygon.buffer(0)
+    # Remove spike vertices based on angle threshold
+    current_polygon = remove_vertices_by_angle(current_polygon, min_angle_threshold=10)
 
     return current_polygon
 
@@ -291,16 +292,6 @@ def create_off_grid_inner_layers(
                     "original_area": block.area,
                     "off_grid_area": off_grid.area,
                     "reduction_pct": reduction,
-                }
-            )
-        else:
-            off_grids.append(
-                {
-                    "geometry": block,  # Keep original
-                    "block_id": block_id,
-                    "original_area": block.area,
-                    "off_grid_area": 0,
-                    "reduction_pct": 0,
                 }
             )
     return off_grids

@@ -56,7 +56,6 @@ def extract_block_edges(
             road_type = find_closest_road_type(
                 edge_geom, roads_gdf, tolerance
             )
-            print(road_type)
 
             edge_data = {
                 'geometry': edge_geom,
@@ -76,7 +75,6 @@ def extract_block_edges(
     # Create GeoDataFrame
     if all_edges:
         edges_gdf = gpd.GeoDataFrame(all_edges, crs=blocks_gdf.crs)
-        print(edges_gdf)
         return edges_gdf
     else:
         return gpd.GeoDataFrame(

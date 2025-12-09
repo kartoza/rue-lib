@@ -148,14 +148,13 @@ def find_closest_road_type(
     edge_center = edge.interpolate(0.5, normalized=True)
 
     min_distance = float("inf")
-    closest_type = None
+    closest_type = RoadTypes.Local
 
     for _, road in roads.iterrows():
         dist = edge_center.distance(road.geometry)
         if dist < min_distance:
             min_distance = dist
             closest_type = road["road_type"]
-            print(closest_type)
 
     # Return None if the closest road is too far
     if min_distance > max_distance:
@@ -165,6 +164,4 @@ def find_closest_road_type(
         closest_type = RoadTypes.Artery
     elif closest_type == "road_sec":
         closest_type = RoadTypes.Secondary
-    elif closest_type == "road_loc":
-        closest_type = RoadTypes.Local
     return closest_type

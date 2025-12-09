@@ -48,8 +48,12 @@ def extract_frame(
         block_id = idx
 
         # Find corresponding off-grid
-        off_grid_row = off_grids_inside_layer[
-            off_grids_inside_layer["block_id"] == block_id].iloc[0]
+        try:
+            off_grid_row = off_grids_inside_layer[
+                off_grids_inside_layer["block_id"] == block_id].iloc[0]
+        except IndexError:
+            continue
+
         off_grid = off_grid_row.geometry
 
         # Create frame by subtracting off-grid from block
