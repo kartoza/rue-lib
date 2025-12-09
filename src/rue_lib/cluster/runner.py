@@ -185,7 +185,6 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_path=output_path,
         blocks_layer_name=output_not_generated_block_layer_name,
         roads_layer_name=roads_layer_name,
-        road_local_width_m=cfg.road_local_width_m,
         part_art_d=cfg.part_art_d,
         part_sec_d=cfg.part_sec_d,
         part_loc_d=cfg.part_loc_d,

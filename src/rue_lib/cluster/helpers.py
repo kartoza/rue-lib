@@ -7,6 +7,8 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import LineString, Polygon
 
+from rue_lib.core.definitions import RoadTypes
+
 
 def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
     """
@@ -125,41 +127,44 @@ def get_roads_near_block(
     return nearby_roads
 
 
-def get_roads_near_line(
-        line: LineString,
-        roads: gpd.GeoDataFrame
-) -> Optional[gpd.GeoSeries]:
+def find_closest_road_type(
+        edge: LineString, roads: gpd.GeoDataFrame, max_distance: float = 20.0
+) -> Optional[str]:
     """
-    Get the nearest arterial or secondary road to the line.
+    Find the road type that is closest to the center point of a given edge.
 
     Args:
-        line: LineString geometry (e.g., edge of a block)
-        roads: GeoDataFrame with roads (must have 'road_type' column)
+        edge: Edge line of the block
+        roads: GeoDataFrame with roads
+        max_distance: Maximum distance to consider
 
     Returns:
-        Nearest arterial or secondary road as GeoSeries (with geometry and properties),
-        or None if no road found
+        Road type string or None if no road within max_distance
     """
-    # Filter roads by type - only arterial and secondary
-    if "road_type" not in roads.columns:
+    if roads.empty or "road_type" not in roads.columns:
         return None
 
-    roads_filtered = roads[roads["road_type"].isin(["road_art", "road_sec"])]
+    # Use the center point of the edge
+    edge_center = edge.interpolate(0.5, normalized=True)
 
-    if roads_filtered.empty:
+    min_distance = float("inf")
+    closest_type = None
+
+    for _, road in roads.iterrows():
+        dist = edge_center.distance(road.geometry)
+        if dist < min_distance:
+            min_distance = dist
+            closest_type = road["road_type"]
+            print(closest_type)
+
+    # Return None if the closest road is too far
+    if min_distance > max_distance:
         return None
 
-    # Find the nearest road
-    nearest_road = None
-    min_distance = float('inf')
-
-    for idx, road in roads_filtered.iterrows():
-        road_geom = road.geometry
-        distance = line.distance(road_geom)
-
-        # Check if this road is closer than previous
-        if distance < min_distance:
-            min_distance = distance
-            nearest_road = road
-
-    return nearest_road
+    if closest_type == "road_art":
+        closest_type = RoadTypes.Artery
+    elif closest_type == "road_sec":
+        closest_type = RoadTypes.Secondary
+    elif closest_type == "road_loc":
+        closest_type = RoadTypes.Local
+    return closest_type

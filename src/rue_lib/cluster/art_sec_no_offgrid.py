@@ -454,7 +454,6 @@ def generate_art_sec_parts_no_offgrid(
         output_path: Path,
         blocks_layer_name: str,
         roads_layer_name: str,
-        road_local_width_m: float,
         part_art_d: float,
         part_sec_d: float,
         part_loc_d: float,
@@ -490,7 +489,7 @@ def generate_art_sec_parts_no_offgrid(
         output_path, layer=roads_layer_name
     )
     block_edges_gdf = extract_block_edges(
-        blocks_layer, roads_layer, road_local_width_m
+        blocks_layer, roads_layer, 20
     )
     gdf_out = gpd.GeoDataFrame(block_edges_gdf, crs=blocks_layer.crs)
     gdf_out.to_file(output_path, layer="14_block_edges_gdf", driver="GPKG")
@@ -545,10 +544,9 @@ def generate_art_sec_parts_no_offgrid(
             if corner_expected_area is not None:
                 if part.area > (corner_expected_area * 3):
                     # It's too large for a corner, make it a side part
-                    part_type = part_type[
-                                :3]  # Take first 3 chars (e.g., 'art_sec' -> 'art')
+                    part_type = part_type[:3]
 
-            # Check for local road length
+                    # Check for local road length
             if len(part_type) == 7:  # e.g., 'art_loc'
                 # Check local road edge lengths
                 loc_edges = part_edges[

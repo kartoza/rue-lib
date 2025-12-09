@@ -7,8 +7,10 @@ from typing import Optional
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 
-from rue_lib.core.geometry import clean_angles
-from rue_lib.cluster.helpers import get_roads_near_block
+from rue_lib.cluster.helpers import (
+    get_roads_near_block, find_closest_road_type
+)
+from rue_lib.core.definitions import RoadTypes
 
 
 def extend_line(line: LineString, extension: float) -> LineString:
@@ -122,42 +124,6 @@ def get_block_edges(block: Polygon) -> list[LineString]:
     return edges
 
 
-def find_closest_road_type(
-        edge: LineString, roads: gpd.GeoDataFrame, max_distance: float = 20.0
-) -> Optional[str]:
-    """
-    Find the road type that is closest to the center point of a given edge.
-
-    Args:
-        edge: Edge line of the block
-        roads: GeoDataFrame with roads
-        max_distance: Maximum distance to consider
-
-    Returns:
-        Road type string or None if no road within max_distance
-    """
-    if roads.empty or "road_type" not in roads.columns:
-        return None
-
-    # Use the center point of the edge
-    edge_center = edge.interpolate(0.5, normalized=True)
-
-    min_distance = float("inf")
-    closest_type = None
-
-    for _, road in roads.iterrows():
-        dist = edge_center.distance(road.geometry)
-        if dist < min_distance:
-            min_distance = dist
-            closest_type = road["road_type"]
-
-    # Return None if the closest road is too far
-    if min_distance > max_distance:
-        return None
-
-    return closest_type
-
-
 def create_off_grid_inner_layer(
         block: Polygon,
         roads: gpd.GeoDataFrame,
@@ -202,18 +168,14 @@ def create_off_grid_inner_layer(
     for i, edge in enumerate(edges):
         road_type = find_closest_road_type(edge, roads, max_distance=20.0)
 
-        if road_type == "road_art":
+        if road_type == RoadTypes.Artery:
             buffer_dist = part_art_d
-            road_label = "arterial"
-        elif road_type == "road_sec":
+        elif road_type == RoadTypes.Secondary:
             buffer_dist = part_sec_d
-            road_label = "secondary"
-        elif road_type == "road_loc":
+        elif road_type ==RoadTypes.Local:
             buffer_dist = part_loc_d
-            road_label = "local"
         else:
             buffer_dist = part_loc_d
-            road_label = "default(local)"
 
         try:
             edge_buffer = edge.buffer(buffer_dist, cap_style=2)
@@ -222,7 +184,7 @@ def create_off_grid_inner_layer(
 
             if new_polygon.is_empty:
                 print(
-                    f"  Edge {i} ({road_label}): Buffer consumed entire polygon")
+                    f"  Edge {i} ({road_type}): Buffer consumed entire polygon")
                 return None
 
             if new_polygon.geom_type == "MultiPolygon":
@@ -233,20 +195,24 @@ def create_off_grid_inner_layer(
                 new_polygon = max(polygons, key=lambda p: p.area)
             elif new_polygon.geom_type != "Polygon":
                 print(
-                    f"  Edge {i} ({road_label}): Invalid geometry type {new_polygon.geom_type}")
+                    f"  Edge {i} ({road_type}): Invalid geometry type {new_polygon.geom_type}"
+                )
                 return None
 
             current_polygon = new_polygon
 
         except Exception as e:
-            print(f"  Warning: Failed to process edge {i} ({road_label}): {e}")
+            print(f"  Warning: Failed to process edge {i} ({road_type}): {e}")
             continue
 
     # Final validation
     if current_polygon.area < 1.0:
         return None
 
-    return clean_angles(current_polygon, 0.01)
+    # Remove spikes by applying buffer(0) which cleans up topology issues
+    current_polygon = current_polygon.buffer(0)
+
+    return current_polygon
 
 
 def create_off_grid_inner_layers(
@@ -298,7 +264,7 @@ def create_off_grid_inner_layers(
     ...     'road_type': ['road_art', 'road_loc'],
     ...     'geometry': [LineString([(0, 0), (100, 0)]), LineString([(200, 0), (300, 0)])]
     ... })
-    >>> result = create_off_grid_areas(blocks, roads)
+    >>> result = create_off_grid_inner_layer(blocks, roads)
     >>> len(result)
     2
     """
