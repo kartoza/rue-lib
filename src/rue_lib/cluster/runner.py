@@ -69,6 +69,7 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     site_ds = ogr.Open(cfg.input_path)
     site_layer = site_ds.GetLayer()
     utm_epsg = get_utm_zone_from_layer(site_layer)
+    utm_epsg = 3857
     print(f"  Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")

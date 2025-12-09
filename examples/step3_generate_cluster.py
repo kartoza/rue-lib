@@ -25,6 +25,24 @@ def main():
         road_local_width_m=10.0
     )
 
+
+    # config = ClusterConfig(
+    #     roads_path="examples/test/roads.geojson",
+    #     input_path="examples/test/block.geojson",
+    #     output_dir="outputs/step3_clusters",
+    #     part_art_d=10,
+    #     part_sec_d=10,
+    #     part_loc_d=15,
+    #
+    #     part_og_d=35.0,
+    #     part_og_w=30.0,
+    #
+    #     # Road widths
+    #     road_arterial_width_m=40.0,
+    #     road_secondary_width_m=30.0,
+    #     road_local_width_m=10.0
+    # )
+
     print("=" * 60)
     print("STEP 3: Generating Clusters/Partitions")
     print("=" * 60)

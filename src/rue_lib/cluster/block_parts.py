@@ -26,8 +26,9 @@ def set_vector_length(v: np.ndarray, length: float) -> np.ndarray:
     return normalize_vector(v) * length
 
 
-def compute_internal_angle(coords: list[tuple[float, float]],
-                           idx: int) -> float:
+def compute_internal_angle(
+        coords: list[tuple[float, float]], idx: int
+) -> float:
     """
     Compute internal angle at vertex idx in a polygon.
 
@@ -61,8 +62,9 @@ def compute_internal_angle(coords: list[tuple[float, float]],
     return angle_deg
 
 
-def get_edge_direction(coords: list[tuple[float, float]],
-                       idx: int) -> np.ndarray:
+def get_edge_direction(
+        coords: list[tuple[float, float]], idx: int
+) -> np.ndarray:
     """
     Get direction vector of edge starting at vertex idx.
 
@@ -85,7 +87,8 @@ def get_edge_direction(coords: list[tuple[float, float]],
 
 def create_corner_fan(
         origin: np.ndarray, dir0: np.ndarray, dir1: np.ndarray,
-        distance: float = 1000.0
+        distance: float = 1000.0,
+        rorate_90: bool = True, rotate_180: bool = False
 ) -> Polygon:
     """
     Create a corner fan polygon at a sharp corner.
@@ -99,9 +102,13 @@ def create_corner_fan(
     Returns:
         Corner fan polygon
     """
-    # Compute perpendicular vectors (rotate 90° counterclockwise)
-    v0_perp = -np.array([dir0[1], -dir0[0], 0.0])
-    v1_perp = -np.array([dir1[1], -dir1[0], 0.0])
+    if rorate_90:
+        # Compute perpendicular vectors (rotate 90° counterclockwise)
+        v0_perp = -np.array([dir0[1], -dir0[0], 0.0])
+        v1_perp = -np.array([dir1[1], -dir1[0], 0.0])
+    elif rotate_180:
+        v0_perp = np.array([dir0[0], dir0[1], 0.0])
+        v1_perp = -np.array([dir1[0], dir1[1], 0.0])
 
     v0_perp = set_vector_length(v0_perp, distance)
     v1_perp = set_vector_length(v1_perp, distance)
@@ -113,8 +120,10 @@ def create_corner_fan(
     xyz1 = origin[:2] + v1_perp[:2]
     xyz_mid = origin[:2] + v_mid_perp[:2]
 
-    fan_coords = [tuple(origin[:2]), tuple(xyz0), tuple(xyz_mid), tuple(xyz1),
-                  tuple(origin[:2])]
+    fan_coords = [
+        tuple(origin[:2]), tuple(xyz0), tuple(xyz_mid), tuple(xyz1),
+        tuple(origin[:2])
+    ]
 
     return Polygon(fan_coords)
 
@@ -288,8 +297,8 @@ def create_block_parts_from_off_grid(
     n_vertices = len(coords) - 1
 
     corner_candidates = []
+    corner_180_candidates = []
     side_anchor_data = []
-
     for i in range(n_vertices):
         angle = compute_internal_angle(coords, i)
 
@@ -302,7 +311,12 @@ def create_block_parts_from_off_grid(
         origin = np.array([coords[i][0], coords[i][1], 0.0])
 
         corner_fan = create_corner_fan(origin, dir0, dir1, corner_distance)
+        corner_fan_180 = create_corner_fan(
+            origin, dir0, dir1, corner_distance, rotate_180=True,
+            rorate_90=False
+        )
         corner_candidates.append(corner_fan)
+        corner_180_candidates.append(corner_fan_180)
 
         v0_perp = np.array([dir0[1], -dir0[0], 0.0])
         v1_perp = np.array([dir1[1], -dir1[0], 0.0])
@@ -379,7 +393,7 @@ def create_block_parts_from_off_grid(
             continue
 
     side_parts = get_side_parts(block, off_grid, corner_parts)
-    return corner_parts, side_parts, off_grid
+    return corner_parts, side_parts, off_grid, corner_candidates, corner_180_candidates
 
 
 def extract_block_parts_from_off_grid(
@@ -440,6 +454,8 @@ def extract_block_parts_from_off_grid(
     all_corner_parts = []
     all_side_parts = []
     all_off_grid_parts = []
+    all_corner_candidates = []
+    all_corner_180_candidates = []
 
     used_block_ids = []
     for idx, frame_row in off_grid_frame_layer.iterrows():
@@ -454,7 +470,7 @@ def extract_block_parts_from_off_grid(
 
         try:
             # Pass original block (not frame) - the function creates parts from block and off_grid
-            corner_parts, side_parts, off_grid_final = create_block_parts_from_off_grid(
+            corner_parts, side_parts, off_grid_final, corner_candidates, corner_180_candidates = create_block_parts_from_off_grid(
                 original_block,  # Original block boundary
                 off_grid,  # Off-grid center polygon
                 angle_threshold=angle_threshold,
@@ -463,6 +479,30 @@ def extract_block_parts_from_off_grid(
 
             print(
                 f"  ✓ Created {len(corner_parts)} corners, {len(side_parts)} sides")
+
+            # Collect corner parts
+            for i, corner in enumerate(corner_candidates):
+                all_corner_candidates.append(
+                    {
+                        "geometry": corner,
+                        "block_id": block_id,
+                        "part_type": "corner",
+                        "part_index": i,
+                        "area": corner.area,
+                    }
+                )
+
+            # Collect corner parts
+            for i, corner in enumerate(corner_180_candidates):
+                all_corner_180_candidates.append(
+                    {
+                        "geometry": corner,
+                        "block_id": block_id,
+                        "part_type": "corner",
+                        "part_index": i,
+                        "area": corner.area,
+                    }
+                )
 
             # Collect corner parts
             for i, corner in enumerate(corner_parts):
@@ -500,6 +540,22 @@ def extract_block_parts_from_off_grid(
             used_block_ids.append(block_id)
         except Exception as e:
             print(f"  ✗ Error creating parts: {e}")
+
+    if all_corner_candidates:
+        gdf_out = gpd.GeoDataFrame(
+            all_corner_candidates, crs=warm_grid_layer.crs
+        )
+        gdf_out.to_file(
+            output_path, layer="06_all_corner_candidates", driver="GPKG"
+        )
+
+    if all_corner_180_candidates:
+        gdf_out = gpd.GeoDataFrame(
+            all_corner_180_candidates, crs=warm_grid_layer.crs
+        )
+        gdf_out.to_file(
+            output_path, layer="06_all_corner_180_candidates", driver="GPKG"
+        )
 
     if all_corner_parts:
         gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=warm_grid_layer.crs)

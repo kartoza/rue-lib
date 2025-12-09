@@ -11,6 +11,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
+import pyogrio.errors
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from rue_lib.cluster.block_edges import extract_block_edges
@@ -482,9 +483,14 @@ def generate_art_sec_parts_no_offgrid(
         ortho_direction: Optional orthogonal direction vector for perpendicular
             checks. Defaults to [0, 1, 0] if not provided.
     """
-    blocks_layer = gpd.read_file(
-        output_path, layer=blocks_layer_name
-    )
+    try:
+        blocks_layer = gpd.read_file(
+            output_path, layer=blocks_layer_name
+        )
+    except pyogrio.errors.DataLayerError:
+        print(f"No off grid on on grid.")
+        return
+
     roads_layer = gpd.read_file(
         output_path, layer=roads_layer_name
     )
