@@ -1,8 +1,6 @@
 # src/rue_lib/core/roads.py
 """Functions for processing road geometries."""
 
-from pathlib import Path
-
 import geopandas as gpd
 
 from rue_lib.core.definitions import RoadTypes
@@ -48,7 +46,7 @@ def extract_roads_buffer(
     output = []
 
     # Process each road feature
-    for idx, row in gdf_roads.iterrows():
+    for _idx, row in gdf_roads.iterrows():
         road_type = row.get('type', None)
         geometry = row.geometry
 

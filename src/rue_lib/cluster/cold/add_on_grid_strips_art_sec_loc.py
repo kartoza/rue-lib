@@ -14,7 +14,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon, Point
+from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
 
 from rue_lib.cluster.block_edges import extract_block_edges
@@ -376,15 +376,18 @@ def create_on_grid_strips(
     # Union multi-parts into single geometries
     on_arts3 = None
     if on_arts2 is not None and not on_arts2.is_empty:
-        on_arts3 = unary_union([on_arts2]) if not isinstance(on_arts2, MultiPolygon) else unary_union(on_arts2.geoms)
+        on_arts3 = (unary_union([on_arts2]) if not isinstance(
+            on_arts2, MultiPolygon) else unary_union(on_arts2.geoms))
 
     on_secs3 = None
     if on_secs2 is not None and not on_secs2.is_empty:
-        on_secs3 = unary_union([on_secs2]) if not isinstance(on_secs2, MultiPolygon) else unary_union(on_secs2.geoms)
+        on_secs3 = (unary_union([on_secs2]) if not isinstance(
+            on_secs2, MultiPolygon) else unary_union(on_secs2.geoms))
 
     on_locs3 = None
     if on_locs2 is not None and not on_locs2.is_empty:
-        on_locs3 = unary_union([on_locs2]) if not isinstance(on_locs2, MultiPolygon) else unary_union(on_locs2.geoms)
+        on_locs3 = (unary_union([on_locs2]) if not isinstance(
+            on_locs2, MultiPolygon) else unary_union(on_locs2.geoms))
 
     # Create intersection parts (corners)
     art_sec = None
@@ -527,7 +530,7 @@ def generate_on_grid_strips_art_sec_loc(
     # Process each block
     all_parts = []
 
-    for idx, block_row in blocks_layer.iterrows():
+    for _idx, block_row in blocks_layer.iterrows():
         parts = process_block(
             block_row,
             roads_layer,

@@ -26,7 +26,8 @@ class ClusterConfig:
     output_dir: str  # Path to output directory
 
     # Fixed data
-    off_grid_plot_threshold: float = 0.5  # Off-grid plot threshold (0.5 = 50% of target, below it is park)
+    # Off-grid plot threshold (0.5 = 50% of target, below it is park)
+    off_grid_plot_threshold: float = 0.5
 
     # Neighborhood / public roads
     road_arterial_width_m: float = 20.0

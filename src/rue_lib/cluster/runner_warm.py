@@ -5,9 +5,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rue_lib.cluster.art_sec_no_offgrid import (
-    generate_art_sec_parts_no_offgrid
-)
+from rue_lib.cluster.art_sec_no_offgrid import generate_art_sec_parts_no_offgrid
 from rue_lib.cluster.block_parts import extract_block_parts_from_off_grid
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.frame import extract_frame
@@ -15,9 +13,7 @@ from rue_lib.cluster.off_grid import extract_off_grid_inner_layer
 from rue_lib.cluster.off_grid_subdivision import extract_off_grid_cluster
 from rue_lib.core.definitions import BlockTypes
 from rue_lib.core.helpers import merge_gpkg_layers
-from rue_lib.streets.operations import (
-    extract_by_expression
-)
+from rue_lib.streets.operations import extract_by_expression
 
 
 def generate_warm(
@@ -55,21 +51,25 @@ def generate_warm(
     warm_grid_layer_name = "100_warm_grid"
     extract_by_expression(
         output_path, input_blocks_layer_name,
-        f"type = '{BlockTypes.ON_GRID_ART}' OR type = '{BlockTypes.ON_GRID_SEC}' OR type = '{BlockTypes.OFF_GRID}'",
+        (
+            f"type = '{BlockTypes.ON_GRID_ART}' OR "
+            f"type = '{BlockTypes.ON_GRID_SEC}' OR "
+            f"type = '{BlockTypes.OFF_GRID}'"
+        ),
         output_path,
         warm_grid_layer_name
     )
     warm_grid_off_grid_layer_name = "100_warm_grid_off_grid"
     extract_by_expression(
         output_path, warm_grid_layer_name,
-        f"type = 'off_grid'",
+        "type = 'off_grid'",
         output_path,
         warm_grid_off_grid_layer_name
     )
     warm_grid_on_grid_layer_name = "100_warm_grid_on_grid"
     extract_by_expression(
         output_path, warm_grid_layer_name,
-        f"type != 'off_grid'",
+        "type != 'off_grid'",
         output_path,
         warm_grid_on_grid_layer_name
     )

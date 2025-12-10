@@ -7,7 +7,7 @@ subdivides them by creating cut lines perpendicular to the block edges at those 
 """
 
 from pathlib import Path
-from typing import Optional, Tuple, List
+from typing import Optional
 
 import geopandas as gpd
 import numpy as np
@@ -71,7 +71,7 @@ def get_vertex_angle(coords: list, vertex_idx: int) -> float:
 def get_edges_on_roads(
         block: Polygon,
         roads: gpd.GeoDataFrame
-) -> Tuple[List[int], List[int]]:
+) -> tuple[list[int], list[int]]:
     """
     Separate block edges into road edges and other edges.
 
@@ -118,9 +118,9 @@ def get_edges_on_roads(
 def ray_intersect_edges(
         ray_origin: np.ndarray,
         ray_direction: np.ndarray,
-        edges: List[LineString],
-        exclude_edges: List[LineString] = None
-) -> Tuple[Optional[np.ndarray], Optional[int]]:
+        edges: list[LineString],
+        exclude_edges: list[LineString] = None
+) -> tuple[Optional[np.ndarray], Optional[int]]:
     """
     Find the nearest intersection between a ray and a list of edges.
 
@@ -137,7 +137,7 @@ def ray_intersect_edges(
         exclude_edges = []
 
     # Check if ray intersects any excluded edges
-    for exclude_edge in exclude_edges:
+    for _exclude_edge in exclude_edges:
         # Simple check - in a full implementation would do proper ray-line intersection
         pass
 
@@ -146,7 +146,7 @@ def ray_intersect_edges(
     edge_min_idx = None
 
     # Extend ray to a very long line
-    ray_end = ray_origin + ray_direction * 10000
+    ray_origin + ray_direction * 10000
 
     for edge_idx, edge in enumerate(edges):
         # Get edge coordinates
@@ -231,8 +231,8 @@ def get_positions_from_ring(
 
 def make_subdivision(
         block_coords: list,
-        cut0: Optional[Tuple[int, int]],
-        cut1: Optional[Tuple[int, int]],
+        cut0: Optional[tuple[int, int]],
+        cut1: Optional[tuple[int, int]],
         posis0: Optional[list],
         posis1: Optional[list]
 ) -> Optional[Polygon]:
@@ -318,7 +318,7 @@ def subdivide_block_at_concave_corners(
         part_loc_d: float = 20.0,
         angle_threshold: float = 250.0,
         max_cut_distance: float = 300.0
-) -> List[Polygon]:
+) -> list[Polygon]:
     """
     Subdivide a block at concave corners.
 
@@ -366,7 +366,7 @@ def subdivide_block_at_concave_corners(
     vec_long = vec_long / np.linalg.norm(vec_long)
 
     # Perpendicular vector
-    vec_long_perp = np.array([-vec_long[1], vec_long[0]])
+    np.array([-vec_long[1], vec_long[0]])
 
     # Create edges as LineStrings
     other_edge_lines = []
@@ -422,7 +422,7 @@ def subdivide_block_at_concave_corners(
 
         if edge_lengths[i - 1] > part_loc_d:
             # Create ray from edge 0
-            vec_a = -perp_vec0 * 1000
+            -perp_vec0 * 1000
             xyz_a = xyz - vec0 * (plot_loc_w / 2)
 
             isect_a, edge_a_idx = ray_intersect_edges(
@@ -441,7 +441,7 @@ def subdivide_block_at_concave_corners(
 
         if i < len(edge_lengths) and edge_lengths[i] > part_loc_d:
             # Create ray from edge 1
-            vec_b = -perp_vec1 * 1000
+            -perp_vec1 * 1000
             xyz_b = xyz + vec1 * (plot_loc_w / 2)
 
             isect_b, edge_b_idx = ray_intersect_edges(

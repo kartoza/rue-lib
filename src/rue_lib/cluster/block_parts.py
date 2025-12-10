@@ -447,7 +447,7 @@ def extract_block_parts_from_off_grid(
         part_sec_d: float,
         part_loc_d: float,
 ):
-    """Extract and categorize block parts (corners, sides, off-grids) from blocks with off-grid areas.
+    """Extract and categorize block parts from blocks with off-grid areas.
 
     Processes blocks containing off-grid areas to decompose them into distinct
     geometric parts: corner sections, side sections, and the central off-grid area.
@@ -502,7 +502,7 @@ def extract_block_parts_from_off_grid(
     all_corner_180_candidates = []
 
     used_block_ids = []
-    for idx, frame_row in off_grid_frame_layer.iterrows():
+    for _idx, frame_row in off_grid_frame_layer.iterrows():
         block_id = frame_row.get("block_id")
         # Find corresponding off-grid
         off_grid_row = off_grids_inner_layer[
@@ -512,8 +512,12 @@ def extract_block_parts_from_off_grid(
         original_block = warm_grid_layer.loc[block_id]
 
         try:
-            # Pass original block (not frame) - the function creates parts from block and off_grid
-            corner_parts, side_parts, off_grid_final, corner_candidates, corner_180_candidates = create_block_parts_from_off_grid(
+            # Pass original block (not frame)
+            # Function creates parts from block and off_grid
+            (
+                corner_parts, side_parts, off_grid_final,
+                corner_candidates, corner_180_candidates
+            ) = create_block_parts_from_off_grid(
                 block_id,
                 original_block.geometry,  # Original block boundary
                 off_grid_row.geometry,  # Off-grid center polygon

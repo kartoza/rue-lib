@@ -5,9 +5,9 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, Polygon, Point
+from shapely.geometry import LineString, Point, Polygon
 
-from rue_lib.core.definitions import RoadTypes, PropertyKeys
+from rue_lib.core.definitions import PropertyKeys, RoadTypes
 
 
 def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:

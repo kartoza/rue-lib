@@ -210,7 +210,7 @@ def subdivide_off_grid(
     quad = convert_to_quadrilateral(off_grid, min_area=100.0)
 
     if quad is None:
-        print(f"Warning: No quad")
+        print("Warning: No quad")
         return [off_grid]
 
     try:
@@ -281,7 +281,7 @@ def extract_off_grid_cluster(
         block_id = off_grid_part.get("block_id")
         parent_index = off_grid_part.get("part_index")
 
-        print(f"  ---------------------------")
+        print("  ---------------------------")
         print(f"  Block {block_id}:")
         print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
 

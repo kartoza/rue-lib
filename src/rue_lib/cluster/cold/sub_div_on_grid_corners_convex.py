@@ -2,7 +2,7 @@
 """Subdivide on-grid parts at convex corners.
 
 This module identifies convex corners along off-grid edges of on-grid parts
-and creates corner subdivisions. Convex corners are vertices with angles > 200°
+and creates corner subdivisions. Convex corners are vertices with angles > 200Â°
 where both adjacent edges are longer than half the plot width.
 """
 
@@ -13,10 +13,6 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 from shapely.ops import unary_union
-
-from rue_lib.cluster.block_edges import extract_block_edges
-from rue_lib.cluster.helpers import compute_angle_dot
-from rue_lib.core.definitions import RoadTypes
 
 
 def calculate_vertex_angle(polygon: Polygon, vertex_idx: int) -> float:
@@ -104,7 +100,7 @@ def make_convex_corner(
     vec0 = edge_vec0[:2] / (np.linalg.norm(edge_vec0[:2]) + 1e-10)
     vec1 = edge_vec1[:2] / (np.linalg.norm(edge_vec1[:2]) + 1e-10)
 
-    # Create perpendicular vectors (rotate 90° counter-clockwise)
+    # Create perpendicular vectors (rotate 90Â° counter-clockwise)
     vec0_perp = np.array([-vec0[1], vec0[0], 0]) * (part_depth + 1)
     vec1_perp = np.array([-vec1[1], vec1[0], 0]) * (part_depth + 1)
 
@@ -302,7 +298,7 @@ def subdivide_part_at_convex_corners(
     """
     Subdivide a part by creating corner pieces at convex vertices.
 
-    Identifies convex corners (angle > 200°) along off-grid edges and creates
+    Identifies convex corners (angle > 200Â°) along off-grid edges and creates
     corner subdivisions, leaving strips for the remaining area.
 
     Args:
@@ -322,10 +318,8 @@ def subdivide_part_at_convex_corners(
     # Determine part depth and plot width based on type
     if part_type == 'loc':
         part_depth = part_loc_d
-        plot_width = plot_loc_w
     else:
         part_depth = part_sec_d
-        plot_width = plot_sec_w
 
     # Get edges by type
     if part_edges_gdf.empty:
@@ -360,7 +354,7 @@ def subdivide_part_at_convex_corners(
                     # Calculate angle at this vertex
                     angle = calculate_vertex_angle(part, i)
 
-                    # Check if convex (angle > 200°)
+                    # Check if convex (angle > 200Â°)
                     ang_threshold = 200
                     if angle > ang_threshold:
                         # Check edge lengths at this vertex
@@ -456,7 +450,7 @@ def process_part(
 
     # Extract part edges (simplified - would need proper implementation)
     # For now, create a simple edge representation
-    part_gdf = gpd.GeoDataFrame([part_row], geometry='geometry', crs=roads_gdf.crs)
+    gpd.GeoDataFrame([part_row], geometry='geometry', crs=roads_gdf.crs)
 
     # Create edges from part boundary
     coords = list(part.exterior.coords)
@@ -559,7 +553,7 @@ def subdivide_on_grid_corners_convex(
     # Process each part
     all_subdivided = []
 
-    for idx, part_row in on_grid_parts.iterrows():
+    for _idx, part_row in on_grid_parts.iterrows():
         subdivided = process_part(
             part_row,
             roads_layer,

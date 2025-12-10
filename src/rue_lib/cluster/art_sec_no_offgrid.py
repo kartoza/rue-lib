@@ -17,7 +17,7 @@ from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 from rue_lib.cluster.block_edges import extract_block_edges
 from rue_lib.cluster.classification import classify_part_type
 from rue_lib.cluster.off_grid import extend_line
-from rue_lib.core.definitions import RoadTypes, ColorTypes
+from rue_lib.core.definitions import ColorTypes, RoadTypes
 
 
 def get_perimeter_lines_by_road_type(
@@ -360,7 +360,7 @@ def generate_art_sec_parts_no_offgrid(
             output_path, layer=blocks_layer_name
         )
     except pyogrio.errors.DataLayerError:
-        print(f"No off grid on on grid.")
+        print("No off grid on on grid.")
         return
 
     roads_layer = gpd.read_file(
@@ -402,7 +402,7 @@ def generate_art_sec_parts_no_offgrid(
 
         # TODO:
         #  Remove: Save it to layer
-        for idx, edge in edges_for_block.iterrows():
+        for _idx, edge in edges_for_block.iterrows():
             edges_for_blocks.append(edge)
 
         for part in parts:
@@ -421,7 +421,7 @@ def generate_art_sec_parts_no_offgrid(
 
             # TODO:
             #  Remove: Save it to layer
-            for idx, edge in part_edges.iterrows():
+            for _idx, edge in part_edges.iterrows():
                 edges_for_parts.append(edge)
 
             try:

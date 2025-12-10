@@ -7,9 +7,7 @@ from typing import Optional
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 
-from rue_lib.cluster.helpers import (
-    get_roads_near_block, find_closest_road_type
-)
+from rue_lib.cluster.helpers import find_closest_road_type, get_roads_near_block
 from rue_lib.core.definitions import RoadTypes
 from rue_lib.core.geometry import remove_vertices_by_angle
 
@@ -234,7 +232,7 @@ def create_off_grid_inner_layers(
         extension: float = 100.0,
 ) -> list[dict]:
     """
-    Create off-grid areas for multiple blocks by buffering edges inward based on adjacent road types.
+    Create off-grid areas for multiple blocks by buffering edges inward.
 
     This function processes each block in the input GeoDataFrame and creates an off-grid area
     by progressively buffering each edge of the block inward. The buffer distance depends on
@@ -254,7 +252,8 @@ def create_off_grid_inner_layers(
     :param extension: Extension distance for roads (not currently used, kept for compatibility).
     :type extension: float
     :return: List of dictionaries, one per input block, each containing:
-             - geometry: The resulting off-grid polygon (or original block if no valid off-grid created)
+             - geometry: The resulting off-grid polygon (or original block if
+               no valid off-grid created)
              - block_id: Identifier of the block (from 'id' column or row index)
              - original_area: Area of the original block
              - off_grid_area: Area of the off-grid polygon (0 if no valid off-grid created)
@@ -323,7 +322,8 @@ def extract_off_grid_inner_layer(
     to create off-grid areas by buffering edges based on adjacent road types, and saves
     the results back to the GeoPackage in a new layer.
 
-    :param output_path: Path to the GeoPackage file containing input layers and where output will be saved
+    :param output_path: Path to the GeoPackage file containing input layers
+        and where output will be saved
     :type output_path: Path
     :param roads_layer_name: Name of the layer in the GeoPackage containing road data
     :type roads_layer_name: str

@@ -5,11 +5,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rue_lib.cluster.cold.add_on_grid_strips_art_sec_loc import \
-    generate_on_grid_strips_art_sec_loc
-from rue_lib.cluster.cold.subdiv_at_concave_corner import (
-    subdivide_blocks_at_concave_corners
-)
+from rue_lib.cluster.cold.add_on_grid_strips_art_sec_loc import generate_on_grid_strips_art_sec_loc
+from rue_lib.cluster.cold.subdiv_at_concave_corner import subdivide_blocks_at_concave_corners
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.core.definitions import BlockTypes
 from rue_lib.streets.operations import extract_by_expression
@@ -39,8 +36,6 @@ def generate_cold(
     part_sec_d = cfg.on_grid_partition_depth_secondary_roads
     part_loc_d = cfg.on_grid_partition_depth_local_roads
 
-    part_og_w = cfg.off_grid_cluster_width
-    part_og_d = cfg.off_grid_cluster_width
 
     output_path = str(output_gpkg)
     print("==============================================================")
@@ -68,7 +63,7 @@ def generate_cold(
     )
     extract_by_expression(
         output_path, cold_grid_subdive_at_concave_layer_name,
-        f"type = 'block'",
+        "type = 'block'",
         output_path,
         cold_grid_block_layer_name
     )
