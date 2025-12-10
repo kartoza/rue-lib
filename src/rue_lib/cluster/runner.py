@@ -38,16 +38,6 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
 
     Returns:
         Path to output directory containing cluster GeoJSON and summary
-
-    Example:
-        >>> config = ClusterConfig(
-        ...     site_path="site.geojson",
-        ...     roads_path="roads.geojson",
-        ...     blocks_path="outputs/streets/all_grids_merged.geojson",
-        ...     part_og_w=30.0,
-        ...     part_og_d=35.0
-        ... )
-        >>> output = generate_clusters(config)
     """
     print("==============================================================")
     print("CLUSTER/PARTITION GENERATION")
@@ -97,8 +87,14 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         input_layer_name=input_roads_layer_name,
         output_path=output_path,
         output_layer_name=input_roads_buffer_layer_name,
-        road_arterial_width_m=cfg.road_arterial_width_m,
-        road_secondary_width_m=cfg.road_secondary_width_m,
+        # TODO:
+        #  We add half of local as currently it contains locals
+        road_arterial_width_m=(
+                cfg.road_arterial_width_m + cfg.road_local_width_m
+        ),
+        road_secondary_width_m=(
+                cfg.road_secondary_width_m + cfg.road_local_width_m
+        ),
         road_local_width_m=cfg.road_local_width_m
     )
 

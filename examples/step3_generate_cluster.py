@@ -1,6 +1,6 @@
 # examples/step3_generate_clusters.py
-
 from rue_lib.cluster.runner import ClusterConfig, generate_clusters
+from rue_lib.config import MainConfig
 
 
 def main():
@@ -12,36 +12,23 @@ def main():
         roads_path="data/roads.geojson",
         input_path="outputs/step2_streets/all_grids_merged.geojson",
         output_dir="outputs/step3_clusters",
-        part_art_d=40,
-        part_sec_d=30,
-        part_loc_d=20,
 
-        part_og_d=45.0,
-        part_og_w=30.0,
+        # Neighborhood / public roads
+        road_arterial_width_m=MainConfig.road_arterial_width_m,
+        road_secondary_width_m=MainConfig.road_secondary_width_m,
+        road_local_width_m=MainConfig.road_local_width_m,
 
-        # Road widths
-        road_arterial_width_m=40.0,
-        road_secondary_width_m=30.0,
-        road_local_width_m=10.0
+        # Neighbourhood / on-grid partitions
+        on_grid_partition_depth_arterial_roads=MainConfig.on_grid_partition_depth_arterial_roads,
+        on_grid_partition_depth_secondary_roads=MainConfig.on_grid_partition_depth_secondary_roads,
+
+        # Neighbourhood / off-grid partitions
+        off_grid_cluster_depth=MainConfig.off_grid_cluster_depth,
+        off_grid_cluster_width=MainConfig.off_grid_cluster_width,
+
+        # Neighborhood / public spaces
+        sidewalk_width_m=MainConfig.sidewalk_width_m,
     )
-
-
-    # config = ClusterConfig(
-    #     roads_path="examples/test/roads.geojson",
-    #     input_path="examples/test/block.geojson",
-    #     output_dir="outputs/step3_clusters",
-    #     part_art_d=10,
-    #     part_sec_d=10,
-    #     part_loc_d=15,
-    #
-    #     part_og_d=35.0,
-    #     part_og_w=30.0,
-    #
-    #     # Road widths
-    #     road_arterial_width_m=40.0,
-    #     road_secondary_width_m=30.0,
-    #     road_local_width_m=10.0
-    # )
 
     print("=" * 60)
     print("STEP 3: Generating Clusters/Partitions")

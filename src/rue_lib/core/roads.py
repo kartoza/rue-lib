@@ -65,6 +65,7 @@ def extract_roads_buffer(
         row_dict = row.to_dict()
         row_dict['geometry'] = buffered_geom
         row_dict['type'] = road_type
+        row_dict['buffer_width'] = buffer_width
 
         output.append(row_dict)
 

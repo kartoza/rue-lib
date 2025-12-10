@@ -159,7 +159,12 @@ def find_closest_road_type(
         dist = edge_center.distance(road.geometry)
         if dist < min_distance and dist <= max_distance:
             min_distance = dist
-            if closest_type not in [RoadTypes.Artery, RoadTypes.Secondary]:
+            new_type = road[PropertyKeys.RoadType]
+            if (
+                    new_type != RoadTypes.Local or
+                    new_type == RoadTypes.Local and closest_type not in [
+                RoadTypes.Artery, RoadTypes.Secondary
+            ]):
                 closest_type = road[PropertyKeys.RoadType]
 
     # Return None if the closest road is too far

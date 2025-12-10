@@ -251,7 +251,6 @@ def extract_off_grid_cluster(
         part_og_w: float,
         part_og_d: float,
         output_layer_name: str,
-        off_grid_plot_threshold: float,
         min_plot_area: float
 ):
     """

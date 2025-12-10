@@ -40,6 +40,13 @@ def generate_warm(
         input_blocks_layer_name: Name of input blocks layer
         roads_layer_name: Name of roads layer
     """
+    part_art_d = cfg.on_grid_partition_depth_arterial_roads
+    part_sec_d = cfg.on_grid_partition_depth_secondary_roads
+    part_loc_d = cfg.on_grid_partition_depth_local_roads
+
+    part_og_w = cfg.off_grid_cluster_width
+    part_og_d = cfg.off_grid_cluster_width
+
     output_path = str(output_gpkg)
     print("==============================================================")
     print("WARM BLOCK")
@@ -72,9 +79,9 @@ def generate_warm(
         roads_layer_name=roads_layer_name,
         off_grid_layer_name=warm_grid_off_grid_layer_name,
         output_layer_name=off_grids_inner_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d
+        part_art_d=part_art_d,
+        part_sec_d=part_sec_d,
+        part_loc_d=part_loc_d
     )
     print("Step 2: Generate frame parts of off grid blocks...")
     off_grid_frame_layer_name = "102_off_grid_frame"
@@ -99,9 +106,9 @@ def generate_warm(
         output_corner_layer_name=off_grid_corners_layer_name,
         output_sides_layer_name=off_grid_sides_layer_name,
         output_off_grid_layer_name=off_grid_off_grid_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d
+        part_art_d=part_art_d,
+        part_sec_d=part_sec_d,
+        part_loc_d=part_loc_d
     )
     print(
         "Step 4: Get blocks that is not in off grid and merge them with off grid blocks...")
@@ -118,22 +125,20 @@ def generate_warm(
     extract_off_grid_cluster(
         output_path=output_gpkg,
         off_grids_layer_name=off_grid_off_grid_layer_name,
-        part_og_w=cfg.part_og_w,
-        part_og_d=cfg.part_og_d,
+        part_og_w=part_og_w,
+        part_og_d=part_og_d,
         output_layer_name=off_grid_inner_cluster_layer_name,
-        off_grid_plot_threshold=cfg.off_grid_plot_threshold,
-        min_plot_area=cfg.part_og_w * cfg.part_og_d * cfg.off_grid_plot_threshold,
+        min_plot_area=part_og_w * part_og_d * cfg.off_grid_plot_threshold,
     )
     print("Step 6: Subdiv side off grid into parts...")
     off_grid_side_cluster_layer_name = "109_side_grid_subdiv"
     extract_off_grid_cluster(
         output_path=output_gpkg,
         off_grids_layer_name=off_grid_sides_layer_name,
-        part_og_w=cfg.part_og_w,
-        part_og_d=cfg.part_og_d,
+        part_og_w=part_og_w,
+        part_og_d=part_og_d,
         output_layer_name=off_grid_side_cluster_layer_name,
-        off_grid_plot_threshold=cfg.off_grid_plot_threshold,
-        min_plot_area=cfg.part_loc_d * cfg.plot_loc_w * cfg.off_grid_plot_threshold,
+        min_plot_area=part_loc_d * part_og_w * cfg.off_grid_plot_threshold,
     )
 
     print("Step 8: generate art sec parts no offgrid ")
@@ -141,9 +146,9 @@ def generate_warm(
         output_path=output_path,
         blocks_layer_name=warm_grid_on_grid_layer_name,
         roads_layer_name=roads_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d,
+        part_art_d=part_art_d,
+        part_sec_d=part_sec_d,
+        part_loc_d=part_loc_d,
         output_layer_name="110_generate_art_sec_parts_no_offgrid",
     )
 

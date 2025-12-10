@@ -190,9 +190,9 @@ def create_parts_from_block(
         block, block_edges_gdf, RoadTypes.Secondary
     )
 
-    part_art_d = depths_dict.get('road_art', 40)
-    part_sec_d = depths_dict.get('road_sec', 30)
-    part_loc_d = depths_dict.get('road_loc', 20)
+    part_art_d = depths_dict.get(RoadTypes.Artery, 40)
+    part_sec_d = depths_dict.get(RoadTypes.Secondary, 30)
+    part_loc_d = depths_dict.get(RoadTypes.Local, 20)
 
     # Case 1: Only arterial roads
     if len(plines_art) > 0 and len(plines_sec) == 0:
@@ -283,8 +283,8 @@ def create_parts_from_block(
             art_bool2 = block.difference(art_off)
 
             # Create corner and other parts
-            art_corners = art_bool1.intersection(sec_off) if hasattr(art_bool1,
-                                                                     'intersection') else Polygon()
+            art_corners = art_bool1.intersection(sec_off) if hasattr(
+                art_bool1, 'intersection') else Polygon()
             other_corners = art_bool2.intersection(sec_off) if hasattr(
                 art_bool2, 'intersection') else Polygon()
 
@@ -300,8 +300,10 @@ def create_parts_from_block(
             # Collect all parts
             all_parts = []
 
-            for geom in [art_corners, other_corners, art_bool1_trim,
-                         art_bool2_trim]:
+            for geom in [
+                art_corners, other_corners, art_bool1_trim,
+                art_bool2_trim
+            ]:
                 if isinstance(geom, Polygon) and geom.area > 1.0:
                     all_parts.append(geom)
                 elif isinstance(geom, MultiPolygon):
@@ -316,10 +318,8 @@ def create_parts_from_block(
                 return [p for p in result if p.area > 1.0]
             else:
                 return all_parts
-
         except Exception:
             return []
-
     return []
 
 
@@ -376,9 +376,9 @@ def generate_art_sec_parts_no_offgrid(
             columns=['geometry', 'class', 'type', 'block_id'])
 
     depths_dict = {
-        'road_art': part_art_d,
-        'road_sec': part_sec_d,
-        'road_loc': part_loc_d,
+        RoadTypes.Artery: part_art_d,
+        RoadTypes.Secondary: part_sec_d,
+        RoadTypes.Local: part_loc_d,
         'cold': 0
     }
 

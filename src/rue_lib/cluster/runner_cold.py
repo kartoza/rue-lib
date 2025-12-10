@@ -35,6 +35,13 @@ def generate_cold(
         input_blocks_layer_name: Name of input blocks layer
         roads_layer_name: Name of roads layer
     """
+    part_art_d = cfg.on_grid_partition_depth_arterial_roads
+    part_sec_d = cfg.on_grid_partition_depth_secondary_roads
+    part_loc_d = cfg.on_grid_partition_depth_local_roads
+
+    part_og_w = cfg.off_grid_cluster_width
+    part_og_d = cfg.off_grid_cluster_width
+
     output_path = str(output_gpkg)
     print("==============================================================")
     print("COLD BLOCK")
@@ -73,9 +80,9 @@ def generate_cold(
         output_path=output_path,
         blocks_layer_name=cold_grid_block_layer_name,
         roads_layer_name=roads_layer_name,
-        part_art_d=cfg.part_art_d,
-        part_sec_d=cfg.part_sec_d,
-        part_loc_d=cfg.part_loc_d,
+        part_art_d=part_art_d,
+        part_sec_d=part_sec_d,
+        part_loc_d=part_loc_d,
         output_layer_name=cold_grid_block_strip_layer_name
     )
 
