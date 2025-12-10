@@ -17,6 +17,9 @@ from rue_lib.streets.operations import (
     extract_by_geometry_type
 )
 from .runner_cold import generate_cold
+from .runner_warm import generate_warm
+from ..core import merge_gpkg_layers
+from ..core.roads import extract_roads_buffer
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -79,6 +82,7 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_path,
         input_blocks_layer_name
     )
+
     input_roads_layer_name = "002_input_roads"
     extract_by_geometry_type(
         output_path, input_layer_name,
@@ -87,12 +91,37 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         input_roads_layer_name
     )
 
+    input_roads_buffer_layer_name = "002_input_roads_buffer"
+    extract_roads_buffer(
+        input_path=output_path,
+        input_layer_name=input_roads_layer_name,
+        output_path=output_path,
+        output_layer_name=input_roads_buffer_layer_name,
+        road_arterial_width_m=cfg.road_arterial_width_m,
+        road_secondary_width_m=cfg.road_secondary_width_m,
+        road_local_width_m=cfg.road_local_width_m
+    )
+
     # # Warm block generation
-    # generate_warm(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name)
+    warm_final_layer_name = generate_warm(
+        cfg, output_gpkg, input_blocks_layer_name,
+        input_roads_buffer_layer_name
+    )
 
     # Cold block generation
-    generate_cold(cfg, output_gpkg, input_blocks_layer_name, roads_layer_name, input_roads_layer_name)
-
+    cold_final_layer_name = generate_cold(
+        cfg, output_gpkg, input_blocks_layer_name,
+        input_roads_buffer_layer_name
+    )
+    print("Final step: Merge all")
+    merge_gpkg_layers(
+        gpkg_path=output_gpkg,
+        layer_names=[
+            warm_final_layer_name,
+            cold_final_layer_name
+        ],
+        output_layer_name="300_final",
+    )
     print("" + "=" * 60)
     print("CLUSTER GENERATION COMPLETE")
     print("=" * 60)

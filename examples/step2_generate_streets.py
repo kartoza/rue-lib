@@ -14,6 +14,7 @@ def main():
         output_dir="outputs/step2_streets",
         road_arterial_width_m=40.0,
         road_secondary_width_m=30.0,
+        road_locals_width_m=10.0
     )
 
     print("=" * 60)

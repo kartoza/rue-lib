@@ -469,7 +469,7 @@ def process_block(
 
     # Extract block edges
     block_gdf = gpd.GeoDataFrame([block_row], geometry='geometry', crs=roads_gdf.crs)
-    block_edges_gdf = extract_block_edges(block_gdf, roads_gdf, tolerance=20)
+    block_edges_gdf = extract_block_edges(block_gdf, roads_gdf)
 
     # Create on-grid strips
     parts = create_on_grid_strips(

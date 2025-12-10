@@ -7,7 +7,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import LineString, Polygon, Point
 
-from rue_lib.core.definitions import RoadTypes
+from rue_lib.core.definitions import RoadTypes, PropertyKeys
 
 
 def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
@@ -129,7 +129,7 @@ def get_roads_near_block(
 
 def find_closest_road_type(
         edge: LineString | Point, roads: gpd.GeoDataFrame,
-        max_distance: float = 20.0,
+        max_distance: float = 1,
         default_type: Optional[RoadTypes] = RoadTypes.Local
 ) -> Optional[str]:
     """
@@ -143,7 +143,7 @@ def find_closest_road_type(
     Returns:
         Road type string or None if no road within max_distance
     """
-    if roads.empty or "road_type" not in roads.columns:
+    if roads.empty or PropertyKeys.RoadType not in roads.columns:
         return None
 
     # Use the center point of the edge
@@ -157,9 +157,10 @@ def find_closest_road_type(
 
     for _, road in roads.iterrows():
         dist = edge_center.distance(road.geometry)
-        if dist < min_distance:
+        if dist < min_distance and dist <= max_distance:
             min_distance = dist
-            closest_type = road["road_type"]
+            if closest_type not in [RoadTypes.Artery, RoadTypes.Secondary]:
+                closest_type = road[PropertyKeys.RoadType]
 
     # Return None if the closest road is too far
     if min_distance > max_distance:
@@ -172,3 +173,41 @@ def find_closest_road_type(
     elif closest_type == "road_loc":
         closest_type = RoadTypes.Local
     return closest_type
+
+
+def get_edge_angle(coords: list, vertex_idx: int) -> float:
+    """
+    Calculate the internal angle at a vertex in a polygon.
+
+    Computes the angle between the incoming and outgoing edges at the
+    specified vertex using the dot product of normalized edge vectors.
+
+    Args:
+        coords: List of polygon coordinates
+        vertex_idx: Index of vertex to calculate angle at
+
+    Returns:
+        Internal angle in degrees (0-180)
+    """
+    n = len(coords) - 1
+
+    p_prev = np.array(coords[(vertex_idx - 1) % n])
+    p_curr = np.array(coords[vertex_idx % n])
+    p_next = np.array(coords[(vertex_idx + 1) % n])
+
+    vec0 = p_prev - p_curr
+    vec1 = p_next - p_curr
+
+    vec0_norm = vec0 / (np.linalg.norm(vec0) + 1e-10)
+    vec1_norm = vec1 / (np.linalg.norm(vec1) + 1e-10)
+
+    vec0_rev = -vec0_norm
+
+    # Calculate angle
+    dot = np.clip(np.dot(vec1_norm, vec0_rev), -1.0, 1.0)
+    angle_rad = np.arccos(dot)
+
+    # Convert to degrees
+    angle_deg = np.degrees(angle_rad)
+
+    return angle_deg

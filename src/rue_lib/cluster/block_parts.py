@@ -7,6 +7,9 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import MultiPolygon, Polygon
 
+from rue_lib.cluster.block_edges import extract_block_edges
+from rue_lib.cluster.classification import classify_part_type
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
 from rue_lib.core.geometry import remove_vertices_by_angle
 
 
@@ -431,6 +434,7 @@ def create_block_parts_from_off_grid(
 
 def extract_block_parts_from_off_grid(
         output_path: Path,
+        roads_layer_name: str,
         warm_grid_layer_name: str,
         off_grids_inner_layer_name: str,
         off_grid_frame_layer_name: str,
@@ -439,7 +443,9 @@ def extract_block_parts_from_off_grid(
         output_off_grid_layer_name: str,
         output_corner_layer_name: str,
         output_sides_layer_name: str,
-        output_not_generated_block_layer_name: str,
+        part_art_d: float,
+        part_sec_d: float,
+        part_loc_d: float,
 ):
     """Extract and categorize block parts (corners, sides, off-grids) from blocks with off-grid areas.
 
@@ -450,6 +456,8 @@ def extract_block_parts_from_off_grid(
     Args:
         output_path: Path to the GeoPackage file containing input layers and
             where outputs will be saved.
+        roads_layer_name:
+            Name of the layer containing the roads
         warm_grid_layer_name: Name of the layer containing the original block
             geometries.
         off_grids_inner_layer_name: Name of the layer containing inner off-grid
@@ -484,6 +492,9 @@ def extract_block_parts_from_off_grid(
     off_grid_frame_layer = gpd.read_file(
         output_path, layer=off_grid_frame_layer_name
     )
+    roads_layer = gpd.read_file(
+        output_path, layer=roads_layer_name
+    )
     all_corner_parts = []
     all_side_parts = []
     all_off_grid_parts = []
@@ -513,6 +524,8 @@ def extract_block_parts_from_off_grid(
             print(
                 f"  ✓ Created {len(corner_parts)} corners, {len(side_parts)} sides")
 
+            # TODO:
+            #  This is temporary for checking the data
             # Collect corner for candidates with 90 degree rotation
             # Currently we are using this
             for i, corner in enumerate(corner_candidates):
@@ -526,6 +539,8 @@ def extract_block_parts_from_off_grid(
                     }
                 )
 
+            # TODO:
+            #  This is temporary for checking the data
             # Collect corner for candidates with 180 degree rotation
             for i, corner in enumerate(corner_180_candidates):
                 all_corner_180_candidates.append(
@@ -540,6 +555,16 @@ def extract_block_parts_from_off_grid(
 
             # Collect corner parts
             for i, corner in enumerate(corner_parts):
+                corner_gdf = gpd.GeoDataFrame(
+                    [{'geometry': corner, 'block_id': block_id}],
+                    crs=roads_layer.crs
+                )
+                part_edges = extract_block_edges(corner_gdf, roads_layer)
+                part_type = classify_part_type(
+                    corner, part_edges,
+                    part_art_d=part_art_d,
+                    part_sec_d=part_sec_d,
+                    part_loc_d=part_loc_d)
                 all_corner_parts.append(
                     {
                         "geometry": corner,
@@ -547,11 +572,24 @@ def extract_block_parts_from_off_grid(
                         "part_type": "corner",
                         "part_index": i,
                         "area": corner.area,
+                        "type": part_type,
+                        "color": ColorTypes[part_type],
                     }
                 )
 
             # Collect side parts
             for i, side in enumerate(side_parts):
+                side_gdf = gpd.GeoDataFrame(
+                    [{'geometry': side, 'block_id': block_id}],
+                    crs=roads_layer.crs
+                )
+                part_edges = extract_block_edges(side_gdf, roads_layer)
+                part_type = classify_part_type(
+                    side, part_edges,
+                    part_art_d=part_art_d,
+                    part_sec_d=part_sec_d,
+                    part_loc_d=part_loc_d
+                )
                 all_side_parts.append(
                     {
                         "geometry": side,
@@ -559,6 +597,8 @@ def extract_block_parts_from_off_grid(
                         "part_type": "side",
                         "part_index": i,
                         "area": side.area,
+                        "type": part_type,
+                        "color": ColorTypes[part_type],
                     }
                 )
 
@@ -569,53 +609,37 @@ def extract_block_parts_from_off_grid(
                     "block_id": block_id,
                     "part_type": "off_grid",
                     "area": off_grid_final.area,
+                    "type": ClusterTypes.OFF_GRID_WARM,
+                    "color": ColorTypes[ClusterTypes.OFF_GRID_WARM],
                 }
             )
             used_block_ids.append(block_id)
         except Exception as e:
             print(f"  ✗ Error creating parts: {e}")
 
-    if all_corner_candidates:
-        gdf_out = gpd.GeoDataFrame(
-            all_corner_candidates, crs=warm_grid_layer.crs
-        )
-        gdf_out.to_file(
-            output_path, layer="103_all_corner_candidates", driver="GPKG"
-        )
+    gdf_out = gpd.GeoDataFrame(
+        all_corner_candidates, crs=warm_grid_layer.crs
+    )
+    gdf_out.to_file(
+        output_path, layer="103_all_corner_candidates", driver="GPKG"
+    )
 
-    if all_corner_180_candidates:
-        gdf_out = gpd.GeoDataFrame(
-            all_corner_180_candidates, crs=warm_grid_layer.crs
-        )
-        gdf_out.to_file(
-            output_path, layer="103_all_corner_180_candidates", driver="GPKG"
-        )
+    gdf_out = gpd.GeoDataFrame(
+        all_corner_180_candidates, crs=warm_grid_layer.crs
+    )
+    gdf_out.to_file(
+        output_path, layer="103_all_corner_180_candidates", driver="GPKG"
+    )
 
-    if all_corner_parts:
-        gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=warm_grid_layer.crs)
-        gdf_out.to_file(
-            output_path, layer=output_corner_layer_name, driver="GPKG"
-        )
-    if all_side_parts:
-        gdf_out = gpd.GeoDataFrame(all_side_parts, crs=warm_grid_layer.crs)
-        gdf_out.to_file(
-            output_path, layer=output_sides_layer_name, driver="GPKG"
-        )
-    if all_off_grid_parts:
-        gdf_out = gpd.GeoDataFrame(all_off_grid_parts, crs=warm_grid_layer.crs)
-        gdf_out.to_file(
-            output_path, layer=output_off_grid_layer_name, driver="GPKG"
-        )
-
-    all_not_used_block = []
-    for idx, frame_row in warm_grid_layer.iterrows():
-        block_id = idx
-        if block_id not in used_block_ids:
-            all_not_used_block.append(frame_row)
-
-    if all_not_used_block:
-        gdf_out = gpd.GeoDataFrame(all_not_used_block, crs=warm_grid_layer.crs)
-        gdf_out.to_file(
-            output_path, layer=output_not_generated_block_layer_name,
-            driver="GPKG"
-        )
+    gdf_out = gpd.GeoDataFrame(all_corner_parts, crs=warm_grid_layer.crs)
+    gdf_out.to_file(
+        output_path, layer=output_corner_layer_name, driver="GPKG"
+    )
+    gdf_out = gpd.GeoDataFrame(all_side_parts, crs=warm_grid_layer.crs)
+    gdf_out.to_file(
+        output_path, layer=output_sides_layer_name, driver="GPKG"
+    )
+    gdf_out = gpd.GeoDataFrame(all_off_grid_parts, crs=warm_grid_layer.crs)
+    gdf_out.to_file(
+        output_path, layer=output_off_grid_layer_name, driver="GPKG"
+    )

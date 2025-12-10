@@ -17,7 +17,7 @@ from rue_lib.streets.operations import extract_by_expression
 
 def generate_cold(
         cfg: ClusterConfig, output_gpkg: Path, input_blocks_layer_name: str,
-        roads_layer_name: str, input_roads_layer_name:str
+        roads_layer_name: str
 ):
     """
     Generate cold blocks with off-grid subdivision and partitioning.
@@ -78,3 +78,5 @@ def generate_cold(
         part_loc_d=cfg.part_loc_d,
         output_layer_name=cold_grid_block_strip_layer_name
     )
+
+    return cold_grid_block_strip_layer_name

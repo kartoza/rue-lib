@@ -15,8 +15,9 @@ import pyogrio.errors
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from rue_lib.cluster.block_edges import extract_block_edges
+from rue_lib.cluster.classification import classify_part_type
 from rue_lib.cluster.off_grid import extend_line
-from rue_lib.core.definitions import RoadTypes
+from rue_lib.core.definitions import RoadTypes, ColorTypes
 
 
 def get_perimeter_lines_by_road_type(
@@ -39,7 +40,6 @@ def get_perimeter_lines_by_road_type(
     matching_edges = block_edges_gdf[
         block_edges_gdf.get('road_type', '') == road_type
         ]
-
     if matching_edges.empty:
         return []
 
@@ -323,137 +323,6 @@ def create_parts_from_block(
     return []
 
 
-def get_edge_angle(coords: list, vertex_idx: int) -> float:
-    """
-    Calculate the internal angle at a vertex in a polygon.
-
-    Computes the angle between the incoming and outgoing edges at the
-    specified vertex using the dot product of normalized edge vectors.
-
-    Args:
-        coords: List of polygon coordinates
-        vertex_idx: Index of vertex to calculate angle at
-
-    Returns:
-        Internal angle in degrees (0-180)
-    """
-    n = len(coords) - 1
-
-    p_prev = np.array(coords[(vertex_idx - 1) % n])
-    p_curr = np.array(coords[vertex_idx % n])
-    p_next = np.array(coords[(vertex_idx + 1) % n])
-
-    vec0 = p_prev - p_curr
-    vec1 = p_next - p_curr
-
-    vec0_norm = vec0 / (np.linalg.norm(vec0) + 1e-10)
-    vec1_norm = vec1 / (np.linalg.norm(vec1) + 1e-10)
-
-    vec0_rev = -vec0_norm
-
-    # Calculate angle
-    dot = np.clip(np.dot(vec1_norm, vec0_rev), -1.0, 1.0)
-    angle_rad = np.arccos(dot)
-
-    # Convert to degrees
-    angle_deg = np.degrees(angle_rad)
-
-    return angle_deg
-
-
-def classify_part_type(
-        part: Polygon,
-        part_edges_gdf: gpd.GeoDataFrame
-) -> str:
-    """
-    Classify part type based on curved road edges.
-
-    Args:
-        part: Part polygon
-        part_edges_gdf: GeoDataFrame with part edges and road_type attributes
-
-    Returns:
-        Part type string ('art', 'sec', 'loc', 'art_sec', etc.)
-    """
-    road_types = []
-
-    # Check each road type
-    for road_type_check in ['road_art', 'road_sec', 'road_loc']:
-        # Get edges matching this road type
-        matching_edges = part_edges_gdf[
-            part_edges_gdf.get('road_type', '') == road_type_check
-            ]
-
-        if matching_edges.empty:
-            continue
-
-        # Group consecutive edges
-        edge_groups = [[]]
-        prev_found = False
-
-        for _, edge in part_edges_gdf.iterrows():
-            if edge.get('road_type') == road_type_check:
-                edge_groups[-1].append(edge)
-                prev_found = True
-            else:
-                if prev_found and len(edge_groups[-1]) > 0:
-                    edge_groups.append([])
-                prev_found = False
-
-        # Remove empty groups
-        edge_groups = [g for g in edge_groups if len(g) > 0]
-
-        if not edge_groups:
-            continue
-
-        # Merge first and last if they connect
-        if len(edge_groups) == 2:
-            edges = edge_groups[1] + edge_groups[0]
-        else:
-            edges = edge_groups[0] if edge_groups else []
-
-        if len(edges) == 0:
-            continue
-
-        if len(edges) == 1:
-            road_types.append(road_type_check)
-            continue
-
-        # Check angles at vertices to count distinct road segments
-        coords = list(part.exterior.coords)
-
-        # For multiple edges, check angles to see if they're separate segments
-        segment_count = 1
-        for i in range(1, len(edges)):
-            # Get vertex angle
-            try:
-                angle = get_edge_angle(coords, i)
-                if abs(angle - 180) > 45:
-                    segment_count += 1
-            except Exception:
-                pass
-
-        road_types.extend([road_type_check] * segment_count)
-
-    # Map to block type
-    block_types_dict = {
-        'road_art': 'art',
-        'road_sec': 'sec',
-        'road_ter': 'ter',
-        'road_loc': 'loc'
-    }
-
-    if len(road_types) == 0:
-        return 'off_grid'
-    elif len(road_types) == 1:
-        return block_types_dict.get(road_types[0], 'off_grid')
-    else:
-        # Multiple road types
-        type0 = block_types_dict.get(road_types[0], '')
-        type1 = block_types_dict.get(road_types[1], '')
-        return f"{type0}_{type1}" if type0 and type1 else type0
-
-
 def generate_art_sec_parts_no_offgrid(
         output_path: Path,
         blocks_layer_name: str,
@@ -497,9 +366,7 @@ def generate_art_sec_parts_no_offgrid(
     roads_layer = gpd.read_file(
         output_path, layer=roads_layer_name
     )
-    block_edges_gdf = extract_block_edges(
-        blocks_layer, roads_layer, 20
-    )
+    block_edges_gdf = extract_block_edges(blocks_layer, roads_layer)
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])
@@ -515,15 +382,9 @@ def generate_art_sec_parts_no_offgrid(
         'cold': 0
     }
 
-    areas_dict = {
-        'art_art': part_art_d * part_art_d,
-        'art_sec': part_art_d * part_sec_d,
-        'art_loc': part_art_d * part_loc_d,
-        'sec_sec': part_sec_d * part_sec_d,
-        'sec_loc': part_sec_d * part_loc_d,
-    }
-
     all_parts = []
+    edges_for_blocks = []
+    edges_for_parts = []
 
     for idx, block_row in blocks_layer.iterrows():
         block = block_row.geometry
@@ -539,46 +400,53 @@ def generate_art_sec_parts_no_offgrid(
             block, edges_for_block, depths_dict, ortho_direction
         )
 
+        # TODO:
+        #  Remove: Save it to layer
+        for idx, edge in edges_for_block.iterrows():
+            edges_for_blocks.append(edge)
+
         for part in parts:
-            # Get edges for this part (simplified - in real implementation would need spatial join)
-            part_edges = edges_for_block  # Simplified
+            # Convert part polygon to GeoDataFrame
+            part_gdf = gpd.GeoDataFrame(
+                [{'geometry': part, 'block_id': block_id}],
+                crs=blocks_layer.crs
+            )
+            part_edges = extract_block_edges(part_gdf, roads_layer)
+            part_type = classify_part_type(
+                part, part_edges,
+                part_art_d=part_art_d,
+                part_sec_d=part_sec_d,
+                part_loc_d=part_loc_d
+            )
 
-            # Classify part type
-            part_type = classify_part_type(part, part_edges)
+            # TODO:
+            #  Remove: Save it to layer
+            for idx, edge in part_edges.iterrows():
+                edges_for_parts.append(edge)
 
-            # Check if corner part should be simplified to side part
-            corner_expected_area = areas_dict.get(part_type)
-            if corner_expected_area is not None:
-                if part.area > (corner_expected_area * 3):
-                    # It's too large for a corner, make it a side part
-                    part_type = part_type[:3]
-
-                    # Check for local road length
-            if len(part_type) == 7:  # e.g., 'art_loc'
-                # Check local road edge lengths
-                loc_edges = part_edges[
-                    part_edges.get('road_type') == RoadTypes.Local]
-                if not loc_edges.empty:
-                    max_length = loc_edges.geometry.length.max()
-                    if max_length > (part_loc_d * 2):
-                        part_type = part_type[:3]
-
-                # Check secondary road edge lengths
-                sec_edges = part_edges[
-                    part_edges.get('road_type') == RoadTypes.Secondary]
-                if not sec_edges.empty:
-                    max_length = sec_edges.geometry.length.max()
-                    if max_length > (part_sec_d * 2):
-                        part_type = part_type[:3]
+            try:
+                color = ColorTypes[part_type]
+            except KeyError:
+                color = "rgb(255,255,255)"
 
             all_parts.append({
                 'geometry': part,
                 'class': 'part',
-                'type': part_type,
                 'block_id': block_id,
                 'block_type': block_row.get('block_type', ''),
-                'site': block_row.get('site', '')
+                'site': block_row.get('site', ''),
+                'type': part_type,
+                'color': color,
             })
+    # Create GeoDataFrame
+    gdf_out = gpd.GeoDataFrame(edges_for_blocks, crs=blocks_layer.crs)
+    gdf_out.to_file(
+        output_path, layer=output_layer_name + "-edges", driver="GPKG"
+    )
+    gdf_out = gpd.GeoDataFrame(edges_for_parts, crs=blocks_layer.crs)
+    gdf_out.to_file(
+        output_path, layer=output_layer_name + "-edges-parts", driver="GPKG"
+    )
 
     # Create GeoDataFrame
     gdf_out = gpd.GeoDataFrame(all_parts, crs=blocks_layer.crs)

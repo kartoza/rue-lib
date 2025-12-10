@@ -12,7 +12,8 @@ from rue_lib.core.definitions import RoadTypes
 def extract_block_edges(
         blocks_gdf: gpd.GeoDataFrame,
         roads_gdf: gpd.GeoDataFrame,
-        tolerance, default_type: Optional[RoadTypes] = RoadTypes.Local
+        tolerance=1,
+        default_type: Optional[RoadTypes] = RoadTypes.Local
 ) -> gpd.GeoDataFrame:
     """
     Extract edges (boundary segments) from blocks and assign road types.
@@ -55,9 +56,7 @@ def extract_block_edges(
             edge_geom = LineString([coords[i], coords[i + 1]])
 
             # Find the nearest road to this edge
-            road_type = find_closest_road_type(
-                edge_geom, roads_gdf, tolerance
-            )
+            road_type = find_closest_road_type(edge_geom, roads_gdf)
             if default_type and road_type is None:
                 road_type = default_type
 

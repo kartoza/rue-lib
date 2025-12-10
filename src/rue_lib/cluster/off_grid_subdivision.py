@@ -7,6 +7,7 @@ import geopandas as gpd
 import numpy as np
 from shapely.geometry import Polygon
 
+from rue_lib.cluster.classification import classify_plot_by_area
 from rue_lib.cluster.helpers import convert_to_quadrilateral
 
 
@@ -244,36 +245,6 @@ def subdivide_off_grid(
     return (valid_plots + small_plots)
 
 
-def classify_plot_by_area(
-        plot: Polygon,
-        part_og_w: float,
-        part_og_d: float,
-        threshold: float = 0.3,
-) -> str:
-    """
-    Classify a plot as 'plot' or 'park' based on area comparison.
-
-    Determines whether a plot is large enough to be a buildable plot or
-    should be classified as park/open space based on a percentage of the
-    target plot area.
-
-    Args:
-        plot: Plot polygon to classify
-        part_og_w: Target plot width (meters)
-        part_og_d: Target plot depth (meters)
-        threshold: Area threshold as fraction of target (0.3 = 30% of target)
-
-    Returns:
-        'plot' if area >= threshold * target_area, otherwise 'park'
-    """
-    target_area = part_og_w * part_og_d
-
-    if plot.area >= target_area * threshold:
-        return "plot"
-    else:
-        return "park"
-
-
 def extract_off_grid_cluster(
         output_path: Path,
         off_grids_layer_name: str,
@@ -281,7 +252,7 @@ def extract_off_grid_cluster(
         part_og_d: float,
         output_layer_name: str,
         off_grid_plot_threshold: float,
-        min_plot_area:float
+        min_plot_area: float
 ):
     """
     Extract and subdivide off-grid areas into plot clusters.
@@ -311,9 +282,9 @@ def extract_off_grid_cluster(
         block_id = off_grid_part.get("block_id")
         parent_index = off_grid_part.get("part_index")
 
-        # print(f"  ---------------------------")
-        # print(f"  Block {block_id}:")
-        # print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
+        print(f"  ---------------------------")
+        print(f"  Block {block_id}:")
+        print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
 
         try:
             # Subdivide the off-grid area using oriented approach
@@ -329,19 +300,23 @@ def extract_off_grid_cluster(
 
             # Collect plots
             for i, plot in enumerate(plots):
-                all_plots.append(
-                    {
-                        "geometry": plot,
-                        "block_id": block_id,
-                        "plot_type": classify_plot_by_area(
-                            plot, part_og_w, part_og_d
-                        ),
-                        "plot_index": i,
-                        "area": plot.area,
-                        "parent_part": "off_grid",
-                        "parent_index": parent_index,
-                    }
-                )
+                feature = {
+                    "geometry": plot,
+                    "block_id": block_id,
+                    "plot_type": classify_plot_by_area(
+                        plot, part_og_w, part_og_d
+                    ),
+                    "plot_index": i,
+                    "area": plot.area,
+                    "parent_part": "off_grid",
+                    "parent_index": parent_index,
+                }
+                try:
+                    feature["color"] = off_grid_part["color"]
+                    feature["type"] = off_grid_part["type"]
+                except KeyError:
+                    pass
+                all_plots.append(feature)
         except Exception as e:
             print(f"    ✗ Error subdividing off-grid: {e}")
 

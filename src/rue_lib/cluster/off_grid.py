@@ -176,7 +176,7 @@ def create_off_grid_inner_layer(
     current_polygon = block
 
     for i, edge in enumerate(edges):
-        road_type = find_closest_road_type(edge, roads, max_distance=20.0)
+        road_type = find_closest_road_type(edge, roads)
 
         if road_type == RoadTypes.Artery:
             buffer_dist = part_art_d

@@ -23,7 +23,7 @@ from rue_lib.streets.operations import (
 def generate_warm(
         cfg: ClusterConfig, output_gpkg: Path, input_blocks_layer_name: str,
         roads_layer_name: str
-):
+) -> str:
     """
     Generate warm blocks with off-grid subdivision and partitioning.
 
@@ -52,11 +52,25 @@ def generate_warm(
         output_path,
         warm_grid_layer_name
     )
+    warm_grid_off_grid_layer_name = "100_warm_grid_off_grid"
+    extract_by_expression(
+        output_path, warm_grid_layer_name,
+        f"type = 'off_grid'",
+        output_path,
+        warm_grid_off_grid_layer_name
+    )
+    warm_grid_on_grid_layer_name = "100_warm_grid_on_grid"
+    extract_by_expression(
+        output_path, warm_grid_layer_name,
+        f"type != 'off_grid'",
+        output_path,
+        warm_grid_on_grid_layer_name
+    )
     off_grids_inner_layer_name = "101_off_grids_inner_layer"
     extract_off_grid_inner_layer(
         output_path=output_gpkg,
         roads_layer_name=roads_layer_name,
-        off_grid_layer_name=warm_grid_layer_name,
+        off_grid_layer_name=warm_grid_off_grid_layer_name,
         output_layer_name=off_grids_inner_layer_name,
         part_art_d=cfg.part_art_d,
         part_sec_d=cfg.part_sec_d,
@@ -74,18 +88,20 @@ def generate_warm(
     off_grid_corners_layer_name = "103_corners"
     off_grid_sides_layer_name = "104_sides"
     off_grid_off_grid_layer_name = "105_off_grid"
-    output_not_generated_block_layer_name = "106_not_generated_block"
     extract_block_parts_from_off_grid(
         output_path=output_gpkg,
+        roads_layer_name=roads_layer_name,
         warm_grid_layer_name=warm_grid_layer_name,
         off_grids_inner_layer_name=off_grids_inner_layer_name,
         off_grid_frame_layer_name=off_grid_frame_layer_name,
-        output_not_generated_block_layer_name=output_not_generated_block_layer_name,
         angle_threshold=155.0,
         corner_distance=50.0,
         output_corner_layer_name=off_grid_corners_layer_name,
         output_sides_layer_name=off_grid_sides_layer_name,
-        output_off_grid_layer_name=off_grid_off_grid_layer_name
+        output_off_grid_layer_name=off_grid_off_grid_layer_name,
+        part_art_d=cfg.part_art_d,
+        part_sec_d=cfg.part_sec_d,
+        part_loc_d=cfg.part_loc_d
     )
     print(
         "Step 4: Get blocks that is not in off grid and merge them with off grid blocks...")
@@ -93,7 +109,7 @@ def generate_warm(
         gpkg_path=output_gpkg,
         layer_names=[
             off_grid_corners_layer_name, off_grid_sides_layer_name,
-            off_grid_off_grid_layer_name, output_not_generated_block_layer_name
+            off_grid_off_grid_layer_name, warm_grid_on_grid_layer_name
         ],
         output_layer_name="107_generated_part_with_off_grid_checkpoint",
     )
@@ -119,24 +135,26 @@ def generate_warm(
         off_grid_plot_threshold=cfg.off_grid_plot_threshold,
         min_plot_area=cfg.part_loc_d * cfg.plot_loc_w * cfg.off_grid_plot_threshold,
     )
-    print("Step 7: Merge subdiv grids")
-    merge_gpkg_layers(
-        gpkg_path=output_gpkg,
-        layer_names=[
-            off_grid_inner_cluster_layer_name,
-            off_grid_side_cluster_layer_name,
-            off_grid_corners_layer_name
-        ],
-        output_layer_name="110_subdiv_into_parts_checkpoint",
-    )
 
     print("Step 8: generate art sec parts no offgrid ")
-    generate_art_sec_parts_no_offgrid(
+    generate_art_sec_parts_no_offgrid_layer_name = generate_art_sec_parts_no_offgrid(
         output_path=output_path,
-        blocks_layer_name=output_not_generated_block_layer_name,
+        blocks_layer_name=warm_grid_on_grid_layer_name,
         roads_layer_name=roads_layer_name,
         part_art_d=cfg.part_art_d,
         part_sec_d=cfg.part_sec_d,
         part_loc_d=cfg.part_loc_d,
-        output_layer_name="111_generate_art_sec_parts_no_offgrid",
+        output_layer_name="110_generate_art_sec_parts_no_offgrid",
+    )
+
+    print("Step 7: Merge subdiv grids")
+    return merge_gpkg_layers(
+        gpkg_path=output_gpkg,
+        layer_names=[
+            off_grid_inner_cluster_layer_name,
+            off_grid_side_cluster_layer_name,
+            off_grid_corners_layer_name,
+            generate_art_sec_parts_no_offgrid_layer_name
+        ],
+        output_layer_name="111_warm_block_final",
     )
