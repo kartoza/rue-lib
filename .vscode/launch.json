@@ -32,6 +32,15 @@
             "cwd": "${workspaceFolder}",
             "justMyCode": true,
             "preLaunchTask": "Run Viewer Server"
+        },
+        {
+            "name": "Python: Cluster Example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/test_cluster.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
         }
     ]
 }

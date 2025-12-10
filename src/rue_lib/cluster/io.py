@@ -7,12 +7,28 @@ import geopandas as gpd
 
 
 def read_site(path: str) -> gpd.GeoDataFrame:
-    """Read site boundary from file."""
+    """
+    Read site boundary from file.
+
+    Args:
+        path: Path to GeoJSON or GeoPackage file containing site boundary
+
+    Returns:
+        GeoDataFrame containing site boundary geometry
+    """
     return gpd.read_file(path)
 
 
 def read_roads(path: str) -> gpd.GeoDataFrame:
-    """Read roads from file."""
+    """
+    Read roads from file.
+
+    Args:
+        path: Path to GeoJSON or GeoPackage file containing road network
+
+    Returns:
+        GeoDataFrame containing road geometries with road_type attributes
+    """
     return gpd.read_file(path)
 
 
@@ -33,10 +49,23 @@ def read_blocks(path: str, layer: str = None) -> gpd.GeoDataFrame:
 
 
 def save_geojson(gdf: gpd.GeoDataFrame, path: Path) -> None:
-    """Save GeoDataFrame to GeoJSON file."""
+    """
+    Save GeoDataFrame to GeoJSON file.
+
+    Args:
+        gdf: GeoDataFrame to save
+        path: Output path for GeoJSON file
+    """
     gdf.to_file(path, driver="GeoJSON")
 
 
 def save_geopackage(gdf: gpd.GeoDataFrame, path: Path, layer: str) -> None:
-    """Save GeoDataFrame to GeoPackage file."""
+    """
+    Save GeoDataFrame to GeoPackage file.
+
+    Args:
+        gdf: GeoDataFrame to save
+        path: Output path for GeoPackage file
+        layer: Name of layer to create/update in GeoPackage
+    """
     gdf.to_file(path, layer=layer, driver="GPKG")

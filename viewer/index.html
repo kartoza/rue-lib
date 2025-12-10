@@ -1374,8 +1374,10 @@
                         type: 'fill',
                         source: sourceId,
                         paint: {
-                            'fill-color': color,
-                            'fill-opacity': 0.3
+                            'fill-color':
+                                ['case', ['has', 'color'], ['get', 'color'], color],
+                            'fill-opacity':
+                                ['case', ['has', 'color'], 0.8, 0.3],
                         }
                     });
                     map.addLayer({
@@ -1383,9 +1385,12 @@
                         type: 'line',
                         source: sourceId,
                         paint: {
-                            'line-color': color,
-                            'line-width': 2,
-                            'line-opacity': 0.8
+                            'line-color':
+                                ['case', ['has', 'color'], '#000000', color],
+                            'line-width':
+                                ['case', ['has', 'color'], 1, 2],
+                            'line-opacity':
+                                ['case', ['has', 'color'], 1, 0.8],
                         }
                     });
 

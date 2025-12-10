@@ -3,11 +3,19 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
+from osgeo import ogr
+
 from rue_lib.cluster.config import ClusterConfig
-from rue_lib.cluster.io import read_blocks, read_roads, read_site
-from rue_lib.geo import to_metric_crs
+from rue_lib.core.geometry import get_utm_zone_from_layer, reproject_layer
+from rue_lib.streets.operations import extract_by_geometry_type
+
+from ..core import merge_gpkg_layers
+from ..core.roads import extract_roads_buffer
+from .runner_cold import generate_cold
+from .runner_warm import generate_warm
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -26,44 +34,78 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
 
     Returns:
         Path to output directory containing cluster GeoJSON and summary
-
-    Example:
-        >>> config = ClusterConfig(
-        ...     site_path="site.geojson",
-        ...     roads_path="roads.geojson",
-        ...     blocks_path="outputs/streets/all_grids_merged.geojson",
-        ...     part_art_d=40.0,
-        ...     part_sec_d=30.0,
-        ...     part_loc_d=20.0,
-        ... )
-        >>> output = generate_clusters(config)
     """
-    print("=" * 60)
+    print("==============================================================")
     print("CLUSTER/PARTITION GENERATION")
-    print("=" * 60)
+    print("==============================================================")
 
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    output_gpkg = out_dir / "outputs.gpkg"
+    output_path = str(output_gpkg)
+    if os.path.exists(output_path):
+        os.remove(output_path)
+
     # Step 1: Read input data
-    print("\nStep 1: Reading input data...")
-    site = read_site(cfg.site_path)
-    roads = read_roads(cfg.roads_path)
-    blocks = read_blocks(cfg.blocks_path)
+    print("Step 1: Determining UTM zone...")
+    site_ds = ogr.Open(cfg.input_path)
+    site_layer = site_ds.GetLayer()
+    utm_epsg = get_utm_zone_from_layer(site_layer)
+    print(f"  Using UTM EPSG: {utm_epsg}")
 
-    print(f"  Site features: {len(site)}")
-    print(f"  Road features: {len(roads)}")
-    print(f"  Block features: {len(blocks)}")
+    print("Step 2: Reprojecting layers to UTM...")
+    input_layer_name = reproject_layer(
+        cfg.input_path, output_path, utm_epsg, layer_name="000_input"
+    )
+    reproject_layer(cfg.roads_path, output_path, utm_epsg, layer_name="001_roads")
+    input_blocks_layer_name = "002_input_blocks"
+    extract_by_geometry_type(
+        output_path,
+        input_layer_name,
+        ["POLYGON", "MULTIPOLYGON"],
+        output_path,
+        input_blocks_layer_name,
+    )
 
-    # Step 2: Project to metric CRS
-    print("\nStep 2: Projecting to UTM CRS...")
-    _site_m = to_metric_crs(site)
-    _roads_m = to_metric_crs(roads)
-    blocks_m = to_metric_crs(blocks)
-    target_crs = blocks_m.crs
-    print(f"  Using CRS: {target_crs}")
+    input_roads_layer_name = "002_input_roads"
+    extract_by_geometry_type(
+        output_path,
+        input_layer_name,
+        ["LINESTRING", "MULTILINESTRING"],
+        output_path,
+        input_roads_layer_name,
+    )
 
-    print("\n" + "=" * 60)
+    input_roads_buffer_layer_name = "002_input_roads_buffer"
+    extract_roads_buffer(
+        input_path=output_path,
+        input_layer_name=input_roads_layer_name,
+        output_path=output_path,
+        output_layer_name=input_roads_buffer_layer_name,
+        # TODO:
+        #  We add half of local as currently it contains locals
+        road_arterial_width_m=(cfg.road_arterial_width_m + cfg.road_local_width_m),
+        road_secondary_width_m=(cfg.road_secondary_width_m + cfg.road_local_width_m),
+        road_local_width_m=cfg.road_local_width_m,
+    )
+
+    # # Warm block generation
+    warm_final_layer_name = generate_warm(
+        cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
+    )
+
+    # Cold block generation
+    cold_final_layer_name = generate_cold(
+        cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
+    )
+    print("Final step: Merge all")
+    merge_gpkg_layers(
+        gpkg_path=output_gpkg,
+        layer_names=[warm_final_layer_name, cold_final_layer_name],
+        output_layer_name="300_final",
+    )
+    print("" + "=" * 60)
     print("CLUSTER GENERATION COMPLETE")
     print("=" * 60)
 

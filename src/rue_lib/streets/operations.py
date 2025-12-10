@@ -4,6 +4,7 @@ import os
 
 from osgeo import ogr
 from shapely import geometry, wkb, wkt
+from shapely.errors import GEOSException, WKTReadingError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE
 from shapely.ops import split, unary_union
 
@@ -22,11 +23,19 @@ def _ogr_to_shapely(ogr_geom):
             wkb_data = bytes(wkb_data)
         if isinstance(wkb_data, (bytes, bytearray)):
             return wkb.loads(wkb_data)
-    except (TypeError, Exception):
+    except (TypeError, GEOSException, AttributeError, RuntimeError):
+        # TypeError: Invalid WKB data type
+        # GEOSException: GEOS topology errors
+        # AttributeError: Invalid OGR geometry object
+        # RuntimeError: GDAL/OGR errors
         pass
     try:
         return wkt.loads(ogr_geom.ExportToWkt())
-    except Exception:
+    except (WKTReadingError, GEOSException, AttributeError, RuntimeError):
+        # WKTReadingError: Invalid WKT string
+        # GEOSException: GEOS topology errors
+        # AttributeError: Invalid OGR geometry object
+        # RuntimeError: GDAL/OGR errors
         return None
 
 
@@ -98,6 +107,76 @@ def extract_by_expression(input_path, layer_name, expression, output_path, outpu
         out_feature = None
 
     output_ds = None
+
+
+def extract_by_geometry_type(input_path, layer_name, geom_types, output_path, output_layer_name):
+    """Extract features by attribute expression and geometry type, write to a GeoPackage layer.
+
+    Args:
+        input_path (str): Path to the input dataset (e.g., .gpkg, .geojson).
+        layer_name (str): Name of the layer within `input_path` to filter.
+        geom_types (list): List of geometry type names to include
+            (e.g., ['POLYGON', 'MULTIPOLYGON']).
+        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
+        output_layer_name (str): Name of the output layer to create.
+
+    Returns:
+        None
+
+    Raises:
+        Exception: Propagated GDAL/OGR errors (dataset access, layer creation,
+            or feature writes).
+    """
+    source_ds = ogr.Open(input_path)
+    source_layer = source_ds.GetLayerByName(layer_name)
+
+    source_layer_defn = source_layer.GetLayerDefn()
+    srs = source_layer.GetSpatialRef()
+    geom_type = source_layer.GetGeomType()
+
+    field_defs = []
+    for i in range(source_layer_defn.GetFieldCount()):
+        field_defs.append(source_layer_defn.GetFieldDefn(i))
+
+    features_data = []
+    for feature in source_layer:
+        geom = feature.GetGeometryRef().Clone()
+
+        # Filter by geometry type
+        geom_type_name = geom.GetGeometryName()
+        if geom_type_name not in geom_types:
+            continue
+
+        field_values = {}
+        for i in range(source_layer_defn.GetFieldCount()):
+            field_name = source_layer_defn.GetFieldDefn(i).GetNameRef()
+            field_values[field_name] = feature.GetField(i)
+        features_data.append((geom, field_values))
+
+    driver = ogr.GetDriverByName("GPKG")
+    if os.path.exists(output_path):
+        output_ds = driver.Open(output_path, 1)
+    else:
+        output_ds = driver.CreateDataSource(output_path)
+
+    for i in range(output_ds.GetLayerCount()):
+        if output_ds.GetLayerByIndex(i).GetName() == output_layer_name:
+            output_ds.DeleteLayer(i)
+            break
+
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type)
+
+    for field_def in field_defs:
+        output_layer.CreateField(field_def)
+
+    for geom, field_values in features_data:
+        out_feature = ogr.Feature(output_layer.GetLayerDefn())
+        out_feature.SetGeometry(geom)
+
+        for field_name, value in field_values.items():
+            out_feature.SetField(field_name, value)
+
+        output_layer.CreateFeature(out_feature)
 
 
 def clip_layer(
