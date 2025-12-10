@@ -12,7 +12,10 @@ from typing import Optional
 import geopandas as gpd
 import numpy as np
 from shapely.geometry import LineString, Polygon
+from shapely.validation import explain_validity
 
+from rue_lib.cluster.block_edges import extract_block_edges
+from rue_lib.core import clean_edges
 from rue_lib.core.definitions import RoadTypes
 from rue_lib.core.geometry import remove_vertices_by_angle
 
@@ -314,11 +317,12 @@ def make_subdivision(
 def subdivide_block_at_concave_corners(
         block: Polygon,
         roads: gpd.GeoDataFrame,
+        crs: int,
         plot_loc_w: float = 20.0,
         part_loc_d: float = 20.0,
         angle_threshold: float = 250.0,
         max_cut_distance: float = 300.0
-) -> list[Polygon]:
+) -> gpd.GeoDataFrame:
     """
     Subdivide a block at concave corners.
 
@@ -334,17 +338,40 @@ def subdivide_block_at_concave_corners(
 
     Returns:
         List of subdivision polygons
-
-    Example:
-        >>> block = Polygon([(0, 0), (100, 0), (100, 100), (50, 50), (0, 100)])
-        >>> edge_types = ["road_loc", "road_loc", None, None, "road_loc"]
-        >>> subdivs = subdivide_block_at_concave_corners(block)
     """
     coords = list(block.exterior.coords)
-    block_coords = coords[:-1]  # Exclude duplicate last point
+    block_coords = coords[:-1]
+    blocks_gdf = gpd.GeoDataFrame([{'geometry': block}], crs=crs)
+    edges = extract_block_edges(
+        blocks_gdf=blocks_gdf,
+        roads_gdf=roads,
+        default_type=None
+    )
 
-    # Get edges on roads
-    road_edges, other_edges = get_edges_on_roads(block, roads=roads)
+    # Find the index of the coordinates of the road edges and other edges
+    road_edges = []
+    other_edges = []
+    for _idx, edge in edges.iterrows():
+        edge_geom = edge.geometry
+        edge_coords = list(edge_geom.coords)
+        if len(edge_coords) < 2:
+            continue
+
+        for edge_coord in edge_coords:
+            vertex_idx = block_coords.index(edge_coord)
+            if edge.road_type in [
+                RoadTypes.Artery, RoadTypes.Secondary, RoadTypes.Local
+            ]:
+                if vertex_idx not in road_edges:
+                    road_edges.append(vertex_idx)
+                if vertex_idx in other_edges:
+                    other_edges.remove(vertex_idx)
+            else:
+                if vertex_idx not in other_edges:
+                    other_edges.append(vertex_idx)
+                if vertex_idx in road_edges:
+                    road_edges.remove(vertex_idx)
+
     if len(road_edges) == 0:
         return []
 
@@ -479,6 +506,9 @@ def subdivide_block_at_concave_corners(
 
             subdiv = make_subdivision(coords, cut0, cut1, posis0, posis1)
             if subdiv is not None:
+                # Fix self-intersections
+                if not subdiv.is_valid:
+                    subdiv = subdiv.buffer(0)
                 subdivisions.append(subdiv)
 
         elif isect_a is None and isect_b is not None:
@@ -489,6 +519,9 @@ def subdivide_block_at_concave_corners(
 
             subdiv = make_subdivision(coords, cut0, cut1, posis0, posis1)
             if subdiv is not None:
+                # Fix self-intersections
+                if not subdiv.is_valid:
+                    subdiv = subdiv.buffer(0)
                 subdivisions.append(subdiv)
 
         else:
@@ -500,6 +533,9 @@ def subdivide_block_at_concave_corners(
 
             subdiv = make_subdivision(coords, cut0, cut1, posis0, posis1)
             if subdiv is not None:
+                # Fix self-intersections
+                if not subdiv.is_valid:
+                    subdiv = subdiv.buffer(0)
                 subdivisions.append(subdiv)
 
             # Update for corner
@@ -513,6 +549,9 @@ def subdivide_block_at_concave_corners(
 
             subdiv = make_subdivision(coords, cut0, cut1, posis0, posis1)
             if subdiv is not None:
+                # Fix self-intersections
+                if not subdiv.is_valid:
+                    subdiv = subdiv.buffer(0)
                 subdivisions.append(subdiv)
 
     # Create final subdivision
@@ -522,6 +561,8 @@ def subdivide_block_at_concave_corners(
 
     subdiv = make_subdivision(coords, cut0, cut1, posis0, posis1)
     if subdiv is not None:
+        subdiv = remove_vertices_by_angle(subdiv, min_angle_threshold=10)
+        subdiv = clean_edges(subdiv)
         subdivisions.append(subdiv)
 
     return subdivisions
@@ -560,40 +601,47 @@ def subdivide_blocks_at_concave_corners(
     road_layer = gpd.read_file(output_path, layer=roads_layer_name)
 
     all_subdivisions = []
-    count = 0
 
     for idx, block_row in blocks_layer.iterrows():
-        # Convert PolygonZ to Polygon (remove Z dimension)
+        block_id = idx
         geom = block_row.geometry
-        if geom.has_z:
-            coords_2d = [(x, y) for x, y, *_ in geom.exterior.coords]
-            geom = Polygon(coords_2d)
-
         block = remove_vertices_by_angle(
             geom, min_angle_threshold=5
         )
-        block_id = idx
 
         # Subdivide block
         subdivs = subdivide_block_at_concave_corners(
             block,
+            crs=road_layer.crs,
             roads=road_layer,
             plot_loc_w=plot_loc_w,
             part_loc_d=part_loc_d
         )
-
         # Add subdivisions to results
         for i, subdiv in enumerate(subdivs):
+
+            # TODO:
+            #  There is intersect error
+            if not subdiv.is_valid:
+                print(subdiv)
+                print(f"Invalid polygon: {explain_validity(subdiv)}")
+            _type = "block"
+            if len(subdivs) > 2:
+                if len(subdivs) % 2 == 0:
+                    if i % 2 == 0:
+                        _type = "block_corner"
+                elif len(subdivs) % 2 == 1:
+                    if i % 2 == 1:
+                        _type = "block_corner"
+
             all_subdivisions.append({
                 'geometry': subdiv,
                 'block_id': f"{block_id}_{i}",
                 'original_block_id': block_id,
                 'subdivision_index': i,
                 'area': subdiv.area,
-                'type': 'block_corner' if i > 0 and i < len(
-                    subdivs) - 1 else 'block'
+                'type': _type
             })
-            count += 1
 
         print(f"  Block {block_id}: Created {len(subdivs)} subdivisions")
 

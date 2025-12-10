@@ -5,7 +5,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
 from rue_lib.core.definitions import PropertyKeys, RoadTypes
 
@@ -216,3 +216,33 @@ def get_edge_angle(coords: list, vertex_idx: int) -> float:
     angle_deg = np.degrees(angle_rad)
 
     return angle_deg
+
+
+def convert_polygonz_to_polygon(gpkg_path: str, layer_name: str):
+    """
+    Convert PolygonZ geometries to Polygon (remove Z coordinate).
+
+    Args:
+        gpkg_path: Path to GeoPackage file
+        layer_name: Name of layer to convert
+    """
+    # Read the layer
+    gdf = gpd.read_file(gpkg_path, layer=layer_name)
+
+    # Convert geometries from PolygonZ to Polygon (drop Z coordinate)
+    def drop_z(geom):
+        if geom.has_z:
+            # Extract 2D coordinates only
+            if geom.geom_type == 'Polygon':
+                return Polygon([(x, y) for x, y, *_ in geom.exterior.coords])
+            elif geom.geom_type == 'MultiPolygon':
+                return MultiPolygon([
+                    Polygon([(x, y) for x, y, *_ in poly.exterior.coords])
+                    for poly in geom.geoms
+                ])
+        return geom
+
+    gdf['geometry'] = gdf['geometry'].apply(drop_z)
+
+    # Save back to the same layer (overwrite)
+    gdf.to_file(gpkg_path, layer=layer_name, driver="GPKG")
