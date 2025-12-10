@@ -7,10 +7,10 @@ import geopandas as gpd
 
 
 def extract_frame(
-        output_path: Path,
-        off_grid_layer_name: str,
-        off_grids_inside_layer_name: str,
-        output_layer_name: str
+    output_path: Path,
+    off_grid_layer_name: str,
+    off_grids_inside_layer_name: str,
+    output_layer_name: str,
 ):
     """Extract frame geometries by subtracting off-grid areas from blocks.
 
@@ -36,12 +36,8 @@ def extract_frame(
         - Empty frames (where off-grid equals entire block) are skipped.
         - Errors during frame creation are caught and logged.
     """
-    off_grid_layer = gpd.read_file(
-        output_path, layer=off_grid_layer_name
-    )
-    off_grids_inside_layer = gpd.read_file(
-        output_path, layer=off_grids_inside_layer_name
-    )
+    off_grid_layer = gpd.read_file(output_path, layer=off_grid_layer_name)
+    off_grids_inside_layer = gpd.read_file(output_path, layer=off_grids_inside_layer_name)
     frames = []
     for idx, block_row in off_grid_layer.iterrows():
         block = block_row.geometry
@@ -50,7 +46,8 @@ def extract_frame(
         # Find corresponding off-grid
         try:
             off_grid_row = off_grids_inside_layer[
-                off_grids_inside_layer["block_id"] == block_id].iloc[0]
+                off_grids_inside_layer["block_id"] == block_id
+            ].iloc[0]
         except IndexError:
             continue
 
@@ -62,8 +59,7 @@ def extract_frame(
 
             if not frame.is_empty:
                 frame_area = frame.area
-                print(
-                    f"    Block {block_id}: Frame area = {frame_area:.2f} m²")
+                print(f"    Block {block_id}: Frame area = {frame_area:.2f} m²")
                 frames.append(
                     {
                         "geometry": frame,
@@ -74,8 +70,7 @@ def extract_frame(
                     }
                 )
             else:
-                print(
-                    f"    {block_id}: ✗ Empty frame (off-grid = entire block)")
+                print(f"    {block_id}: ✗ Empty frame (off-grid = entire block)")
         except Exception as e:
             print(f"    Block {block_id}: ✗ Error creating frame: {e}")
 

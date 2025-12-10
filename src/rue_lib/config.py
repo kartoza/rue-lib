@@ -32,6 +32,7 @@ class MainConfig:
         - Cluster counts are integers representing the number of clusters
         - These values can be adjusted based on local planning standards and regulations
     """
+
     # Neighborhood / public roads
     road_arterial_width_m: float = 20.0
     road_secondary_width_m: float = 15.0

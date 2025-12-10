@@ -20,6 +20,7 @@ class ClusterConfig:
         road_local_width_m: Width of local roads (meters)
         off_grid_plot_threshold: Off-grid plot threshold (0.5 = 50% of target)
     """
+
     # Input paths
     roads_path: str  # Path to roads network
     input_path: str  # Path to streets output, or previous step output

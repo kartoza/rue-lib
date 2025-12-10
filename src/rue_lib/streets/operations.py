@@ -4,6 +4,7 @@ import os
 
 from osgeo import ogr
 from shapely import geometry, wkb, wkt
+from shapely.errors import GEOSException, WKTReadingError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE
 from shapely.ops import split, unary_union
 
@@ -22,11 +23,19 @@ def _ogr_to_shapely(ogr_geom):
             wkb_data = bytes(wkb_data)
         if isinstance(wkb_data, (bytes, bytearray)):
             return wkb.loads(wkb_data)
-    except (TypeError, Exception):
+    except (TypeError, GEOSException, AttributeError, RuntimeError):
+        # TypeError: Invalid WKB data type
+        # GEOSException: GEOS topology errors
+        # AttributeError: Invalid OGR geometry object
+        # RuntimeError: GDAL/OGR errors
         pass
     try:
         return wkt.loads(ogr_geom.ExportToWkt())
-    except Exception:
+    except (WKTReadingError, GEOSException, AttributeError, RuntimeError):
+        # WKTReadingError: Invalid WKT string
+        # GEOSException: GEOS topology errors
+        # AttributeError: Invalid OGR geometry object
+        # RuntimeError: GDAL/OGR errors
         return None
 
 

@@ -58,23 +58,23 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     input_layer_name = reproject_layer(
         cfg.input_path, output_path, utm_epsg, layer_name="000_input"
     )
-    reproject_layer(
-        cfg.roads_path, output_path, utm_epsg, layer_name="001_roads"
-    )
+    reproject_layer(cfg.roads_path, output_path, utm_epsg, layer_name="001_roads")
     input_blocks_layer_name = "002_input_blocks"
     extract_by_geometry_type(
-        output_path, input_layer_name,
+        output_path,
+        input_layer_name,
         ["POLYGON", "MULTIPOLYGON"],
         output_path,
-        input_blocks_layer_name
+        input_blocks_layer_name,
     )
 
     input_roads_layer_name = "002_input_roads"
     extract_by_geometry_type(
-        output_path, input_layer_name,
+        output_path,
+        input_layer_name,
         ["LINESTRING", "MULTILINESTRING"],
         output_path,
-        input_roads_layer_name
+        input_roads_layer_name,
     )
 
     input_roads_buffer_layer_name = "002_input_roads_buffer"
@@ -85,33 +85,24 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_layer_name=input_roads_buffer_layer_name,
         # TODO:
         #  We add half of local as currently it contains locals
-        road_arterial_width_m=(
-                cfg.road_arterial_width_m + cfg.road_local_width_m
-        ),
-        road_secondary_width_m=(
-                cfg.road_secondary_width_m + cfg.road_local_width_m
-        ),
-        road_local_width_m=cfg.road_local_width_m
+        road_arterial_width_m=(cfg.road_arterial_width_m + cfg.road_local_width_m),
+        road_secondary_width_m=(cfg.road_secondary_width_m + cfg.road_local_width_m),
+        road_local_width_m=cfg.road_local_width_m,
     )
 
     # # Warm block generation
     warm_final_layer_name = generate_warm(
-        cfg, output_gpkg, input_blocks_layer_name,
-        input_roads_buffer_layer_name
+        cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
     )
 
     # Cold block generation
     cold_final_layer_name = generate_cold(
-        cfg, output_gpkg, input_blocks_layer_name,
-        input_roads_buffer_layer_name
+        cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
     )
     print("Final step: Merge all")
     merge_gpkg_layers(
         gpkg_path=output_gpkg,
-        layer_names=[
-            warm_final_layer_name,
-            cold_final_layer_name
-        ],
+        layer_names=[warm_final_layer_name, cold_final_layer_name],
         output_layer_name="300_final",
     )
     print("" + "=" * 60)

@@ -6,6 +6,7 @@ import math
 import os
 
 from osgeo import ogr, osr
+from shapely.errors import GEOSException
 from shapely.geometry import Polygon
 
 from rue_lib.core.exceptions import GeometryError
@@ -338,9 +339,8 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
 
     output_ds = None
 
-def remove_vertices_by_angle(
-        polygon: Polygon, min_angle_threshold: float = 175.0
-) -> Polygon:
+
+def remove_vertices_by_angle(polygon: Polygon, min_angle_threshold: float = 175.0) -> Polygon:
     """
     Remove vertices where the interior angle is too close to 180 degrees (nearly straight).
     This helps remove spike vertices that don't contribute to the polygon shape.
@@ -421,6 +421,9 @@ def remove_vertices_by_angle(
         # Close the polygon
         filtered_coords.append(filtered_coords[0])
         return Polygon(filtered_coords)
-    except Exception:
+    except (GEOSException, ValueError, TypeError):
+        # GEOSException: GEOS topology errors (invalid polygon structure)
+        # ValueError: Invalid coordinate sequence
+        # TypeError: Wrong input type
         # If creation fails, return original
         return polygon

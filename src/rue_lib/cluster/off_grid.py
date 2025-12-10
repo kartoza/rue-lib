@@ -38,7 +38,7 @@ def extend_line(line: LineString, extension: float) -> LineString:
     second = coords[1]
     dx = start[0] - second[0]
     dy = start[1] - second[1]
-    length = (dx ** 2 + dy ** 2) ** 0.5
+    length = (dx**2 + dy**2) ** 0.5
     if length > 0:
         dx /= length
         dy /= length
@@ -51,7 +51,7 @@ def extend_line(line: LineString, extension: float) -> LineString:
     second_last = coords[-2]
     dx = end[0] - second_last[0]
     dy = end[1] - second_last[1]
-    length = (dx ** 2 + dy ** 2) ** 0.5
+    length = (dx**2 + dy**2) ** 0.5
     if length > 0:
         dx /= length
         dy /= length
@@ -65,8 +65,7 @@ def extend_line(line: LineString, extension: float) -> LineString:
 
 
 def create_extended_roads(
-        block: Polygon, roads: gpd.GeoDataFrame, extension: float = 100.0,
-        max_distance: float = 10.0
+    block: Polygon, roads: gpd.GeoDataFrame, extension: float = 100.0, max_distance: float = 10.0
 ) -> tuple[list[LineString], list[LineString], list[LineString]]:
     """
     Get roads near the block for each road type.
@@ -88,8 +87,7 @@ def create_extended_roads(
     return roads_art, roads_sec, roads_loc
 
 
-def clean_small_polygons(polygons: list[Polygon], min_area: float = 1.0) -> \
-        list[Polygon]:
+def clean_small_polygons(polygons: list[Polygon], min_area: float = 1.0) -> list[Polygon]:
     """
     Remove very small polygons that are likely geometric artifacts.
 
@@ -104,6 +102,7 @@ def clean_small_polygons(polygons: list[Polygon], min_area: float = 1.0) -> \
         Filtered list containing only polygons >= min_area
     """
     return [p for p in polygons if p.area >= min_area]
+
 
 def get_block_edges(block: Polygon) -> list[LineString]:
     """
@@ -133,12 +132,12 @@ def get_block_edges(block: Polygon) -> list[LineString]:
 
 
 def create_off_grid_inner_layer(
-        block: Polygon,
-        roads: gpd.GeoDataFrame,
-        part_art_d: float = 40.0,
-        part_sec_d: float = 30.0,
-        part_loc_d: float = 20.0,
-        extension: float = 100.0,
+    block: Polygon,
+    roads: gpd.GeoDataFrame,
+    part_art_d: float = 40.0,
+    part_sec_d: float = 30.0,
+    part_loc_d: float = 20.0,
+    extension: float = 100.0,
 ) -> Optional[Polygon]:
     """
     Create the off-grid polygon by buffering each edge of the block inward.
@@ -191,9 +190,7 @@ def create_off_grid_inner_layer(
             new_polygon = current_polygon.difference(edge_buffer)
 
             if new_polygon.is_empty:
-                print(
-                    f"  Edge {i} ({road_type}): Buffer consumed entire polygon"
-                )
+                print(f"  Edge {i} ({road_type}): Buffer consumed entire polygon")
                 return None
 
             if new_polygon.geom_type == "MultiPolygon":
@@ -203,9 +200,7 @@ def create_off_grid_inner_layer(
                     return None
                 new_polygon = max(polygons, key=lambda p: p.area)
             elif new_polygon.geom_type != "Polygon":
-                print(
-                    f"  Edge {i} ({road_type}): Invalid geometry type {new_polygon.geom_type}"
-                )
+                print(f"  Edge {i} ({road_type}): Invalid geometry type {new_polygon.geom_type}")
                 return None
 
             current_polygon = new_polygon
@@ -224,12 +219,12 @@ def create_off_grid_inner_layer(
 
 
 def create_off_grid_inner_layers(
-        blocks: gpd.GeoDataFrame,
-        roads: gpd.GeoDataFrame,
-        part_art_d: float = 40.0,
-        part_sec_d: float = 30.0,
-        part_loc_d: float = 20.0,
-        extension: float = 100.0,
+    blocks: gpd.GeoDataFrame,
+    roads: gpd.GeoDataFrame,
+    part_art_d: float = 40.0,
+    part_sec_d: float = 30.0,
+    part_loc_d: float = 20.0,
+    extension: float = 100.0,
 ) -> list[dict]:
     """
     Create off-grid areas for multiple blocks by buffering edges inward.
@@ -300,20 +295,20 @@ def create_off_grid_inner_layers(
                     "original_area": block.area,
                     "off_grid_area": off_grid.area,
                     "reduction_pct": reduction,
-                    "vertices": len(off_grid.exterior.coords) - 1
+                    "vertices": len(off_grid.exterior.coords) - 1,
                 }
             )
     return off_grids
 
 
 def extract_off_grid_inner_layer(
-        output_path: Path,
-        roads_layer_name: str,
-        off_grid_layer_name: str,
-        output_layer_name: str,
-        part_art_d: float = 40.0,
-        part_sec_d: float = 30.0,
-        part_loc_d: float = 20.0,
+    output_path: Path,
+    roads_layer_name: str,
+    off_grid_layer_name: str,
+    output_layer_name: str,
+    part_art_d: float = 40.0,
+    part_sec_d: float = 30.0,
+    part_loc_d: float = 20.0,
 ) -> str:
     """
     Extract off-grid areas from a GeoPackage and save the results to a new layer.
@@ -354,12 +349,8 @@ def extract_off_grid_inner_layer(
     ... )
     >>> print(f"Created layer: {output_layer}")
     """
-    off_grid_layer = gpd.read_file(
-        output_path, layer=off_grid_layer_name
-    )
-    roads_layer = gpd.read_file(
-        output_path, layer=roads_layer_name
-    )
+    off_grid_layer = gpd.read_file(output_path, layer=off_grid_layer_name)
+    roads_layer = gpd.read_file(output_path, layer=roads_layer_name)
     off_grid_cluster_layer = create_off_grid_inner_layers(
         off_grid_layer, roads_layer, part_art_d, part_sec_d, part_loc_d
     )
@@ -367,10 +358,7 @@ def extract_off_grid_inner_layer(
     gdf_out = gpd.GeoDataFrame(off_grid_cluster_layer, crs=off_grid_layer.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
-    print(
-        f"  Created {len(off_grid_cluster_layer)} "
-        f"perpendicular lines from guide points"
-    )
+    print(f"  Created {len(off_grid_cluster_layer)} perpendicular lines from guide points")
     print(f"  Saved to layer: {output_layer_name}")
 
     return output_layer_name

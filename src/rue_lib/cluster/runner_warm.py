@@ -17,8 +17,7 @@ from rue_lib.streets.operations import extract_by_expression
 
 
 def generate_warm(
-        cfg: ClusterConfig, output_gpkg: Path, input_blocks_layer_name: str,
-        roads_layer_name: str
+    cfg: ClusterConfig, output_gpkg: Path, input_blocks_layer_name: str, roads_layer_name: str
 ) -> str:
     """
     Generate warm blocks with off-grid subdivision and partitioning.
@@ -50,28 +49,31 @@ def generate_warm(
     print("Step 1: Generate inner part of off grid blocks...")
     warm_grid_layer_name = "100_warm_grid"
     extract_by_expression(
-        output_path, input_blocks_layer_name,
+        output_path,
+        input_blocks_layer_name,
         (
             f"type = '{BlockTypes.ON_GRID_ART}' OR "
             f"type = '{BlockTypes.ON_GRID_SEC}' OR "
             f"type = '{BlockTypes.OFF_GRID}'"
         ),
         output_path,
-        warm_grid_layer_name
+        warm_grid_layer_name,
     )
     warm_grid_off_grid_layer_name = "100_warm_grid_off_grid"
     extract_by_expression(
-        output_path, warm_grid_layer_name,
+        output_path,
+        warm_grid_layer_name,
         "type = 'off_grid'",
         output_path,
-        warm_grid_off_grid_layer_name
+        warm_grid_off_grid_layer_name,
     )
     warm_grid_on_grid_layer_name = "100_warm_grid_on_grid"
     extract_by_expression(
-        output_path, warm_grid_layer_name,
+        output_path,
+        warm_grid_layer_name,
         "type != 'off_grid'",
         output_path,
-        warm_grid_on_grid_layer_name
+        warm_grid_on_grid_layer_name,
     )
     off_grids_inner_layer_name = "101_off_grids_inner_layer"
     extract_off_grid_inner_layer(
@@ -81,7 +83,7 @@ def generate_warm(
         output_layer_name=off_grids_inner_layer_name,
         part_art_d=part_art_d,
         part_sec_d=part_sec_d,
-        part_loc_d=part_loc_d
+        part_loc_d=part_loc_d,
     )
     print("Step 2: Generate frame parts of off grid blocks...")
     off_grid_frame_layer_name = "102_off_grid_frame"
@@ -89,7 +91,7 @@ def generate_warm(
         output_path=output_gpkg,
         off_grid_layer_name=warm_grid_layer_name,
         off_grids_inside_layer_name=off_grids_inner_layer_name,
-        output_layer_name=off_grid_frame_layer_name
+        output_layer_name=off_grid_frame_layer_name,
     )
     print("Step 3: Extract all parts of blocks...")
     off_grid_corners_layer_name = "103_corners"
@@ -108,15 +110,16 @@ def generate_warm(
         output_off_grid_layer_name=off_grid_off_grid_layer_name,
         part_art_d=part_art_d,
         part_sec_d=part_sec_d,
-        part_loc_d=part_loc_d
+        part_loc_d=part_loc_d,
     )
-    print(
-        "Step 4: Get blocks that is not in off grid and merge them with off grid blocks...")
+    print("Step 4: Get blocks that is not in off grid and merge them with off grid blocks...")
     merge_gpkg_layers(
         gpkg_path=output_gpkg,
         layer_names=[
-            off_grid_corners_layer_name, off_grid_sides_layer_name,
-            off_grid_off_grid_layer_name, warm_grid_on_grid_layer_name
+            off_grid_corners_layer_name,
+            off_grid_sides_layer_name,
+            off_grid_off_grid_layer_name,
+            warm_grid_on_grid_layer_name,
         ],
         output_layer_name="107_generated_part_with_off_grid_checkpoint",
     )
@@ -159,7 +162,7 @@ def generate_warm(
             off_grid_inner_cluster_layer_name,
             off_grid_side_cluster_layer_name,
             off_grid_corners_layer_name,
-            generate_art_sec_parts_no_offgrid_layer_name
+            generate_art_sec_parts_no_offgrid_layer_name,
         ],
         output_layer_name="111_warm_block_final",
     )

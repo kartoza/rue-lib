@@ -7,6 +7,8 @@ Or use the Nix development environment: nix develop
 
 import math
 
+from shapely import GEOSException
+
 try:
     import geopandas as gpd
     from osgeo import gdal, ogr
@@ -89,7 +91,7 @@ def to_metric_crs(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
 
     try:
         centroid = gdf.union_all().centroid
-    except Exception:
+    except (GEOSException, ValueError, TypeError):
         centroid = gdf.geometry.iloc[0].centroid
 
     lon = centroid.x

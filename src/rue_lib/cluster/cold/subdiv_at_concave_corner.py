@@ -56,10 +56,7 @@ def get_vertex_angle(coords: list, vertex_idx: int) -> float:
     angle_rad = np.arccos(dot)
 
     # Use cross product to determine sign
-    cross = np.cross(
-        np.append(vec0_rev, 0),
-        np.append(vec1_norm, 0)
-    )
+    cross = np.cross(np.append(vec0_rev, 0), np.append(vec1_norm, 0))
 
     # Convert to degrees
     angle_deg = np.degrees(angle_rad)
@@ -71,10 +68,7 @@ def get_vertex_angle(coords: list, vertex_idx: int) -> float:
     return angle_deg
 
 
-def get_edges_on_roads(
-        block: Polygon,
-        roads: gpd.GeoDataFrame
-) -> tuple[list[int], list[int]]:
+def get_edges_on_roads(block: Polygon, roads: gpd.GeoDataFrame) -> tuple[list[int], list[int]]:
     """
     Separate block edges into road edges and other edges.
 
@@ -119,10 +113,10 @@ def get_edges_on_roads(
 
 
 def ray_intersect_edges(
-        ray_origin: np.ndarray,
-        ray_direction: np.ndarray,
-        edges: list[LineString],
-        exclude_edges: list[LineString] = None
+    ray_origin: np.ndarray,
+    ray_direction: np.ndarray,
+    edges: list[LineString],
+    exclude_edges: list[LineString] = None,
 ) -> tuple[Optional[np.ndarray], Optional[int]]:
     """
     Find the nearest intersection between a ray and a list of edges.
@@ -197,11 +191,7 @@ def ray_intersect_edges(
     return isect_min, edge_min_idx
 
 
-def get_positions_from_ring(
-        positions: list,
-        idx_start: int,
-        idx_end: int
-) -> list:
+def get_positions_from_ring(positions: list, idx_start: int, idx_end: int) -> list:
     """
     Get positions along a ring between two indices.
 
@@ -233,11 +223,11 @@ def get_positions_from_ring(
 
 
 def make_subdivision(
-        block_coords: list,
-        cut0: Optional[tuple[int, int]],
-        cut1: Optional[tuple[int, int]],
-        posis0: Optional[list],
-        posis1: Optional[list]
+    block_coords: list,
+    cut0: Optional[tuple[int, int]],
+    cut1: Optional[tuple[int, int]],
+    posis0: Optional[list],
+    posis1: Optional[list],
 ) -> Optional[Polygon]:
     """
     Create a subdivision polygon from block coordinates and cut positions.
@@ -266,7 +256,7 @@ def make_subdivision(
         posis_list = get_positions_from_ring(
             block_coords[:-1],  # Exclude duplicate last point
             cut1[1],
-            cut1[0]
+            cut1[0],
         )
         ring.extend(posis_list)
 
@@ -275,11 +265,7 @@ def make_subdivision(
         ring = list(reversed(posis0))
 
         # Get positions from ring
-        posis_list = get_positions_from_ring(
-            block_coords[:-1],
-            cut0[0],
-            cut0[1]
-        )
+        posis_list = get_positions_from_ring(block_coords[:-1], cut0[0], cut0[1])
         ring.extend(posis_list)
 
     else:
@@ -287,22 +273,14 @@ def make_subdivision(
         ring = list(posis1)
 
         # Get positions between cuts
-        posis_list = get_positions_from_ring(
-            block_coords[:-1],
-            cut1[1],
-            cut0[1]
-        )
+        posis_list = get_positions_from_ring(block_coords[:-1], cut1[1], cut0[1])
         ring.extend(posis_list)
 
         # Add reversed posis0
         ring.extend(reversed(posis0))
 
         # Get remaining positions
-        posis_list = get_positions_from_ring(
-            block_coords[:-1],
-            cut0[0],
-            cut1[0]
-        )
+        posis_list = get_positions_from_ring(block_coords[:-1], cut0[0], cut1[0])
         ring.extend(posis_list)
 
     if len(ring) < 3:
@@ -315,13 +293,13 @@ def make_subdivision(
 
 
 def subdivide_block_at_concave_corners(
-        block: Polygon,
-        roads: gpd.GeoDataFrame,
-        crs: int,
-        plot_loc_w: float = 20.0,
-        part_loc_d: float = 20.0,
-        angle_threshold: float = 250.0,
-        max_cut_distance: float = 300.0
+    block: Polygon,
+    roads: gpd.GeoDataFrame,
+    crs: int,
+    plot_loc_w: float = 20.0,
+    part_loc_d: float = 20.0,
+    angle_threshold: float = 250.0,
+    max_cut_distance: float = 300.0,
 ) -> gpd.GeoDataFrame:
     """
     Subdivide a block at concave corners.
@@ -341,12 +319,8 @@ def subdivide_block_at_concave_corners(
     """
     coords = list(block.exterior.coords)
     block_coords = coords[:-1]
-    blocks_gdf = gpd.GeoDataFrame([{'geometry': block}], crs=crs)
-    edges = extract_block_edges(
-        blocks_gdf=blocks_gdf,
-        roads_gdf=roads,
-        default_type=None
-    )
+    blocks_gdf = gpd.GeoDataFrame([{"geometry": block}], crs=crs)
+    edges = extract_block_edges(blocks_gdf=blocks_gdf, roads_gdf=roads, default_type=None)
 
     # Find the index of the coordinates of the road edges and other edges
     road_edges = []
@@ -359,9 +333,7 @@ def subdivide_block_at_concave_corners(
 
         for edge_coord in edge_coords:
             vertex_idx = block_coords.index(edge_coord)
-            if edge.road_type in [
-                RoadTypes.Artery, RoadTypes.Secondary, RoadTypes.Local
-            ]:
+            if edge.road_type in [RoadTypes.Artery, RoadTypes.Secondary, RoadTypes.Local]:
                 if vertex_idx not in road_edges:
                     road_edges.append(vertex_idx)
                 if vertex_idx in other_edges:
@@ -452,13 +424,10 @@ def subdivide_block_at_concave_corners(
             -perp_vec0 * 1000
             xyz_a = xyz - vec0 * (plot_loc_w / 2)
 
-            isect_a, edge_a_idx = ray_intersect_edges(
-                xyz_a, -perp_vec0, other_edge_lines
-            )
+            isect_a, edge_a_idx = ray_intersect_edges(xyz_a, -perp_vec0, other_edge_lines)
 
             # Check distance
-            if isect_a is not None and np.linalg.norm(
-                    isect_a - xyz_a) > max_cut_distance:
+            if isect_a is not None and np.linalg.norm(isect_a - xyz_a) > max_cut_distance:
                 isect_a = None
                 edge_a_idx = None
 
@@ -471,28 +440,21 @@ def subdivide_block_at_concave_corners(
             -perp_vec1 * 1000
             xyz_b = xyz + vec1 * (plot_loc_w / 2)
 
-            isect_b, edge_b_idx = ray_intersect_edges(
-                xyz_b, -perp_vec1, other_edge_lines
-            )
+            isect_b, edge_b_idx = ray_intersect_edges(xyz_b, -perp_vec1, other_edge_lines)
 
             # Check distance
-            if isect_b is not None and np.linalg.norm(
-                    isect_b - xyz_b) > max_cut_distance:
+            if isect_b is not None and np.linalg.norm(isect_b - xyz_b) > max_cut_distance:
                 isect_b = None
                 edge_b_idx = None
 
         # Adjust cuts if only one side worked
         if isect_a is not None and isect_b is None:
             xyz_a = xyz
-            isect_a, edge_a_idx = ray_intersect_edges(
-                xyz_a, -perp_vec0, other_edge_lines
-            )
+            isect_a, edge_a_idx = ray_intersect_edges(xyz_a, -perp_vec0, other_edge_lines)
 
         if isect_a is None and isect_b is not None:
             xyz_b = xyz
-            isect_b, edge_b_idx = ray_intersect_edges(
-                xyz_b, -perp_vec1, other_edge_lines
-            )
+            isect_b, edge_b_idx = ray_intersect_edges(xyz_b, -perp_vec1, other_edge_lines)
 
         # Create subdivisions based on intersections
         if isect_a is None and isect_b is None:
@@ -569,14 +531,14 @@ def subdivide_block_at_concave_corners(
 
 
 def subdivide_blocks_at_concave_corners(
-        output_path: Path,
-        input_layer_name: str,
-        roads_layer_name: str,
-        output_layer_name: str,
-        plot_loc_w: float = 20.0,
-        part_loc_d: float = 20.0,
-        angle_threshold: float = 250.0,
-        max_cut_distance: float = 300.0
+    output_path: Path,
+    input_layer_name: str,
+    roads_layer_name: str,
+    output_layer_name: str,
+    plot_loc_w: float = 20.0,
+    part_loc_d: float = 20.0,
+    angle_threshold: float = 250.0,
+    max_cut_distance: float = 300.0,
 ) -> str:
     """
     Subdivide blocks at concave corners and save to GeoPackage.
@@ -605,9 +567,7 @@ def subdivide_blocks_at_concave_corners(
     for idx, block_row in blocks_layer.iterrows():
         block_id = idx
         geom = block_row.geometry
-        block = remove_vertices_by_angle(
-            geom, min_angle_threshold=5
-        )
+        block = remove_vertices_by_angle(geom, min_angle_threshold=5)
 
         # Subdivide block
         subdivs = subdivide_block_at_concave_corners(
@@ -615,11 +575,10 @@ def subdivide_blocks_at_concave_corners(
             crs=road_layer.crs,
             roads=road_layer,
             plot_loc_w=plot_loc_w,
-            part_loc_d=part_loc_d
+            part_loc_d=part_loc_d,
         )
         # Add subdivisions to results
         for i, subdiv in enumerate(subdivs):
-
             # TODO:
             #  There is intersect error
             if not subdiv.is_valid:
@@ -634,14 +593,16 @@ def subdivide_blocks_at_concave_corners(
                     if i % 2 == 1:
                         _type = "block_corner"
 
-            all_subdivisions.append({
-                'geometry': subdiv,
-                'block_id': f"{block_id}_{i}",
-                'original_block_id': block_id,
-                'subdivision_index': i,
-                'area': subdiv.area,
-                'type': _type
-            })
+            all_subdivisions.append(
+                {
+                    "geometry": subdiv,
+                    "block_id": f"{block_id}_{i}",
+                    "original_block_id": block_id,
+                    "subdivision_index": i,
+                    "area": subdiv.area,
+                    "type": _type,
+                }
+            )
 
         print(f"  Block {block_id}: Created {len(subdivs)} subdivisions")
 

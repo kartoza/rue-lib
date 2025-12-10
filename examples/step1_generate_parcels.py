@@ -33,7 +33,7 @@ def main():
         output_dir="outputs/step1_parcels",
         geopackage_path="outputs/output.gpkg",
         road_arterial_width_m=MainConfig.road_arterial_width_m,
-        road_secondary_width_m=MainConfig.road_secondary_width_m
+        road_secondary_width_m=MainConfig.road_secondary_width_m,
     )
 
     # Generate parcels

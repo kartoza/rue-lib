@@ -12,10 +12,10 @@ from rue_lib.cluster.helpers import convert_to_quadrilateral
 
 
 def create_grid_positions(
-        quad: Polygon,
-        part_og_w: float,
-        part_og_d: float,
-        swap_orientation: bool = False,
+    quad: Polygon,
+    part_og_w: float,
+    part_og_d: float,
+    swap_orientation: bool = False,
 ) -> list[list[tuple[float, float]]]:
     """
     Create a grid of positions within a quadrilateral for plot subdivision.
@@ -46,8 +46,7 @@ def create_grid_positions(
 
     x_dots = []
     for i in range(4):
-        edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else \
-            edges[i][1]
+        edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else edges[i][1]
         dot = np.dot([1, 0], edge_vec_norm[:2])
         x_dots.append(dot)
 
@@ -104,8 +103,7 @@ def create_grid_positions(
             x1 = x1 + vec_right_exp
 
         vec_up = (x1 - x0) / (num_y - 1)
-        vec_up_exp = vec_up / np.linalg.norm(vec_up) * 100 if np.linalg.norm(
-            vec_up) > 0 else vec_up
+        vec_up_exp = vec_up / np.linalg.norm(vec_up) * 100 if np.linalg.norm(vec_up) > 0 else vec_up
 
         for j in range(num_y):
             xyz = x0 + vec_up * j
@@ -123,8 +121,8 @@ def create_grid_positions(
 
 
 def create_plot_grid_from_positions(
-        positions: list[list[tuple[float, float]]],
-        off_grid_boundary: Polygon,
+    positions: list[list[tuple[float, float]]],
+    off_grid_boundary: Polygon,
 ) -> list[Polygon]:
     """
     Create individual plot polygons from grid positions.
@@ -173,12 +171,12 @@ def create_plot_grid_from_positions(
 
 
 def subdivide_off_grid(
-        block_id: int,
-        off_grid: Polygon,
-        part_og_w: float = 140.0,
-        part_og_d: float = 140.0,
-        swap_orientation: bool = False,
-        min_plot_area: float = None,
+    block_id: int,
+    off_grid: Polygon,
+    part_og_w: float = 140.0,
+    part_og_d: float = 140.0,
+    swap_orientation: bool = False,
+    min_plot_area: float = None,
 ) -> list[Polygon]:
     """
     Subdivide an off-grid polygon into a grid of smaller plots.
@@ -242,16 +240,16 @@ def subdivide_off_grid(
     if not valid_plots:
         return [off_grid]
 
-    return (valid_plots + small_plots)
+    return valid_plots + small_plots
 
 
 def extract_off_grid_cluster(
-        output_path: Path,
-        off_grids_layer_name: str,
-        part_og_w: float,
-        part_og_d: float,
-        output_layer_name: str,
-        min_plot_area: float
+    output_path: Path,
+    off_grids_layer_name: str,
+    part_og_w: float,
+    part_og_d: float,
+    output_layer_name: str,
+    min_plot_area: float,
 ):
     """
     Extract and subdivide off-grid areas into plot clusters.
@@ -270,9 +268,7 @@ def extract_off_grid_cluster(
     Returns:
         None (currently collects plots but doesn't return them)
     """
-    off_grids_layer = gpd.read_file(
-        output_path, layer=off_grids_layer_name
-    )
+    off_grids_layer = gpd.read_file(output_path, layer=off_grids_layer_name)
 
     all_plots = []
 
@@ -292,7 +288,7 @@ def extract_off_grid_cluster(
                 off_grid_geom,
                 part_og_w=part_og_w,
                 part_og_d=part_og_d,
-                min_plot_area=min_plot_area
+                min_plot_area=min_plot_area,
             )
 
             print(f"    ✓ Created {len(plots)} plots")
@@ -302,9 +298,7 @@ def extract_off_grid_cluster(
                 feature = {
                     "geometry": plot,
                     "block_id": block_id,
-                    "plot_type": classify_plot_by_area(
-                        plot, part_og_w, part_og_d
-                    ),
+                    "plot_type": classify_plot_by_area(plot, part_og_w, part_og_d),
                     "plot_index": i,
                     "area": plot.area,
                     "parent_part": "off_grid",

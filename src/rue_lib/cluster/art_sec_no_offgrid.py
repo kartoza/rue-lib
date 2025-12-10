@@ -12,6 +12,7 @@ from typing import Optional
 import geopandas as gpd
 import numpy as np
 import pyogrio.errors
+from shapely.errors import GEOSException
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from rue_lib.cluster.block_edges import extract_block_edges
@@ -21,9 +22,7 @@ from rue_lib.core.definitions import ColorTypes, RoadTypes
 
 
 def get_perimeter_lines_by_road_type(
-        block: Polygon,
-        block_edges_gdf: gpd.GeoDataFrame,
-        road_type: str
+    block: Polygon, block_edges_gdf: gpd.GeoDataFrame, road_type: str
 ) -> list[LineString]:
     """
     Get perimeter lines from block edges matching a specific road type.
@@ -37,9 +36,7 @@ def get_perimeter_lines_by_road_type(
         List of LineStrings representing continuous road segments
     """
     # Filter edges by road type
-    matching_edges = block_edges_gdf[
-        block_edges_gdf.get('road_type', '') == road_type
-        ]
+    matching_edges = block_edges_gdf[block_edges_gdf.get("road_type", "") == road_type]
     if matching_edges.empty:
         return []
 
@@ -55,10 +52,7 @@ def get_perimeter_lines_by_road_type(
 
 
 def get_perpendicular_local_lines(
-        block: Polygon,
-        block_edges_gdf: gpd.GeoDataFrame,
-        block_type: str,
-        ortho_direction: np.ndarray
+    block: Polygon, block_edges_gdf: gpd.GeoDataFrame, block_type: str, ortho_direction: np.ndarray
 ) -> list[LineString]:
     """
     Get local road edges that are perpendicular to the primary direction.
@@ -77,7 +71,7 @@ def get_perpendicular_local_lines(
     loc_perp_edges = []
 
     for _, edge in block_edges_gdf.iterrows():
-        if edge.get('road_type') != 'road_loc':
+        if edge.get("road_type") != "road_loc":
             continue
 
         # Get edge direction vector
@@ -85,11 +79,7 @@ def get_perpendicular_local_lines(
         if len(coords) < 2:
             continue
 
-        edge_vec = np.array([
-            coords[-1][0] - coords[0][0],
-            coords[-1][1] - coords[0][1],
-            0.0
-        ])
+        edge_vec = np.array([coords[-1][0] - coords[0][0], coords[-1][1] - coords[0][1], 0.0])
 
         edge_vec_norm = edge_vec / (np.linalg.norm(edge_vec) + 1e-10)
 
@@ -104,11 +94,11 @@ def get_perpendicular_local_lines(
 
 
 def trim_parts_with_local_roads(
-        block: Polygon,
-        parts: list[Polygon],
-        local_depth: float,
-        block_edges_gdf: gpd.GeoDataFrame,
-        ortho_direction: np.ndarray
+    block: Polygon,
+    parts: list[Polygon],
+    local_depth: float,
+    block_edges_gdf: gpd.GeoDataFrame,
+    ortho_direction: np.ndarray,
 ) -> list[Polygon]:
     """
     Trim parts using local roads offset.
@@ -124,17 +114,14 @@ def trim_parts_with_local_roads(
         Trimmed list of part polygons
     """
     # Get perpendicular local road lines
-    plines_loc = get_perpendicular_local_lines(
-        block, block_edges_gdf, '', ortho_direction
-    )
+    plines_loc = get_perpendicular_local_lines(block, block_edges_gdf, "", ortho_direction)
 
     if not plines_loc:
         return parts
 
     # Create offset buffer around local roads
-    loc_lines = MultiLineString(plines_loc) if len(plines_loc) > 1 else \
-        plines_loc[0]
-    loc_off = loc_lines.buffer(local_depth, cap_style='flat')
+    loc_lines = MultiLineString(plines_loc) if len(plines_loc) > 1 else plines_loc[0]
+    loc_off = loc_lines.buffer(local_depth, cap_style="flat")
 
     # Trim parts by subtracting local road buffer
     parts_trim = []
@@ -147,7 +134,10 @@ def trim_parts_with_local_roads(
                 parts_trim.append(trimmed)
             elif isinstance(trimmed, MultiPolygon):
                 parts_trim.extend(list(trimmed.geoms))
-        except Exception:
+        except (GEOSException, AttributeError, ValueError):
+            # GEOSException: GEOS topology errors (invalid geometries)
+            # AttributeError: geometry objects missing expected methods
+            # ValueError: invalid geometric operations
             parts_trim.append(part)
 
         # Also create intersection parts (local road parts)
@@ -158,17 +148,18 @@ def trim_parts_with_local_roads(
                 parts_trim.append(loc_part)
             elif isinstance(loc_part, MultiPolygon):
                 parts_trim.extend([p for p in loc_part.geoms if p.area > 1.0])
-        except Exception:
+        except (GEOSException, AttributeError, ValueError):
+            # Silently skip if intersection fails
             pass
 
     return parts_trim
 
 
 def create_parts_from_block(
-        block: Polygon,
-        block_edges_gdf: gpd.GeoDataFrame,
-        depths_dict: dict[str, float],
-        ortho_direction: np.ndarray
+    block: Polygon,
+    block_edges_gdf: gpd.GeoDataFrame,
+    depths_dict: dict[str, float],
+    ortho_direction: np.ndarray,
 ) -> list[Polygon]:
     """
     Create parts from a block based on arterial and secondary roads.
@@ -183,12 +174,8 @@ def create_parts_from_block(
         List of part polygons
     """
     # Get perimeter lines for arterial and secondary roads
-    plines_art = get_perimeter_lines_by_road_type(
-        block, block_edges_gdf, RoadTypes.Artery
-    )
-    plines_sec = get_perimeter_lines_by_road_type(
-        block, block_edges_gdf, RoadTypes.Secondary
-    )
+    plines_art = get_perimeter_lines_by_road_type(block, block_edges_gdf, RoadTypes.Artery)
+    plines_sec = get_perimeter_lines_by_road_type(block, block_edges_gdf, RoadTypes.Secondary)
 
     part_art_d = depths_dict.get(RoadTypes.Artery, 40)
     part_sec_d = depths_dict.get(RoadTypes.Secondary, 30)
@@ -200,9 +187,8 @@ def create_parts_from_block(
             return []
 
         # Create offset buffer
-        art_lines = MultiLineString(plines_art) if len(plines_art) > 1 else \
-            plines_art[0]
-        art_off = art_lines.buffer(part_art_d, cap_style='flat')
+        art_lines = MultiLineString(plines_art) if len(plines_art) > 1 else plines_art[0]
+        art_off = art_lines.buffer(part_art_d, cap_style="flat")
 
         # Boolean operations
         try:
@@ -227,7 +213,8 @@ def create_parts_from_block(
 
             return [p for p in result if p.area > 1.0]
 
-        except Exception:
+        except (GEOSException, AttributeError, ValueError):
+            # Geometric operations failed, return empty list
             return []
 
     # Case 2: Only secondary roads
@@ -236,9 +223,8 @@ def create_parts_from_block(
             return []
 
         # Create offset buffer
-        sec_lines = MultiLineString(plines_sec) if len(plines_sec) > 1 else \
-            plines_sec[0]
-        sec_off = sec_lines.buffer(part_sec_d, cap_style='flat')
+        sec_lines = MultiLineString(plines_sec) if len(plines_sec) > 1 else plines_sec[0]
+        sec_off = sec_lines.buffer(part_sec_d, cap_style="flat")
 
         # Boolean operations
         try:
@@ -263,47 +249,46 @@ def create_parts_from_block(
 
             return [p for p in result if p.area > 1.0]
 
-        except Exception:
+        except (GEOSException, AttributeError, ValueError):
+            # Geometric operations failed, return empty list
             return []
 
     # Case 3: Both arterial and secondary roads
     elif len(plines_art) > 0 and len(plines_sec) > 0:
         try:
             # Create offset buffers
-            art_lines = MultiLineString(plines_art) if len(plines_art) > 1 else \
-                plines_art[0]
-            art_off = art_lines.buffer(part_art_d, cap_style='flat')
+            art_lines = MultiLineString(plines_art) if len(plines_art) > 1 else plines_art[0]
+            art_off = art_lines.buffer(part_art_d, cap_style="flat")
 
-            sec_lines = MultiLineString(plines_sec) if len(plines_sec) > 1 else \
-                plines_sec[0]
-            sec_off = sec_lines.buffer(part_sec_d, cap_style='flat')
+            sec_lines = MultiLineString(plines_sec) if len(plines_sec) > 1 else plines_sec[0]
+            sec_off = sec_lines.buffer(part_sec_d, cap_style="flat")
 
             # Boolean operations
             art_bool1 = art_off.intersection(block)
             art_bool2 = block.difference(art_off)
 
             # Create corner and other parts
-            art_corners = art_bool1.intersection(sec_off) if hasattr(
-                art_bool1, 'intersection') else Polygon()
-            other_corners = art_bool2.intersection(sec_off) if hasattr(
-                art_bool2, 'intersection') else Polygon()
+            art_corners = (
+                art_bool1.intersection(sec_off) if hasattr(art_bool1, "intersection") else Polygon()
+            )
+            other_corners = (
+                art_bool2.intersection(sec_off) if hasattr(art_bool2, "intersection") else Polygon()
+            )
 
-            art_bool1_trim = art_bool1.difference(sec_off) if hasattr(
-                art_bool1, 'difference') else art_bool1
-            art_bool2_trim = art_bool2.difference(sec_off) if hasattr(
-                art_bool2, 'difference') else art_bool2
+            art_bool1_trim = (
+                art_bool1.difference(sec_off) if hasattr(art_bool1, "difference") else art_bool1
+            )
+            art_bool2_trim = (
+                art_bool2.difference(sec_off) if hasattr(art_bool2, "difference") else art_bool2
+            )
 
             # Check if art_bool2_trim area is significant
-            art_bool2_trim_area = art_bool2_trim.area if hasattr(
-                art_bool2_trim, 'area') else 0
+            art_bool2_trim_area = art_bool2_trim.area if hasattr(art_bool2_trim, "area") else 0
 
             # Collect all parts
             all_parts = []
 
-            for geom in [
-                art_corners, other_corners, art_bool1_trim,
-                art_bool2_trim
-            ]:
+            for geom in [art_corners, other_corners, art_bool1_trim, art_bool2_trim]:
                 if isinstance(geom, Polygon) and geom.area > 1.0:
                     all_parts.append(geom)
                 elif isinstance(geom, MultiPolygon):
@@ -312,26 +297,26 @@ def create_parts_from_block(
             # Only trim with local roads if art_bool2_trim area is large enough
             if art_bool2_trim_area > (part_loc_d * part_loc_d * 4):
                 result = trim_parts_with_local_roads(
-                    block, all_parts, part_loc_d, block_edges_gdf,
-                    ortho_direction
+                    block, all_parts, part_loc_d, block_edges_gdf, ortho_direction
                 )
                 return [p for p in result if p.area > 1.0]
             else:
                 return all_parts
-        except Exception:
+        except (GEOSException, AttributeError, ValueError):
+            # Geometric operations failed, return empty list
             return []
     return []
 
 
 def generate_art_sec_parts_no_offgrid(
-        output_path: Path,
-        blocks_layer_name: str,
-        roads_layer_name: str,
-        part_art_d: float,
-        part_sec_d: float,
-        part_loc_d: float,
-        output_layer_name,
-        ortho_direction: Optional[np.ndarray] = None,
+    output_path: Path,
+    blocks_layer_name: str,
+    roads_layer_name: str,
+    part_art_d: float,
+    part_sec_d: float,
+    part_loc_d: float,
+    output_layer_name,
+    ortho_direction: Optional[np.ndarray] = None,
 ):
     """
     Generate arterial and secondary block parts without off-grid subdivision.
@@ -356,30 +341,25 @@ def generate_art_sec_parts_no_offgrid(
             checks. Defaults to [0, 1, 0] if not provided.
     """
     try:
-        blocks_layer = gpd.read_file(
-            output_path, layer=blocks_layer_name
-        )
+        blocks_layer = gpd.read_file(output_path, layer=blocks_layer_name)
     except pyogrio.errors.DataLayerError:
         print("No off grid on on grid.")
         return
 
-    roads_layer = gpd.read_file(
-        output_path, layer=roads_layer_name
-    )
+    roads_layer = gpd.read_file(output_path, layer=roads_layer_name)
     block_edges_gdf = extract_block_edges(blocks_layer, roads_layer)
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])
 
     if blocks_layer.empty:
-        return gpd.GeoDataFrame(
-            columns=['geometry', 'class', 'type', 'block_id'])
+        return gpd.GeoDataFrame(columns=["geometry", "class", "type", "block_id"])
 
     depths_dict = {
         RoadTypes.Artery: part_art_d,
         RoadTypes.Secondary: part_sec_d,
         RoadTypes.Local: part_loc_d,
-        'cold': 0
+        "cold": 0,
     }
 
     all_parts = []
@@ -390,15 +370,11 @@ def generate_art_sec_parts_no_offgrid(
         block = block_row.geometry
 
         # Get edges for this block
-        block_id = block_row.get('block_id', idx)
-        edges_for_block = block_edges_gdf[
-            block_edges_gdf.get('block_id', -1) == block_id
-            ]
+        block_id = block_row.get("block_id", idx)
+        edges_for_block = block_edges_gdf[block_edges_gdf.get("block_id", -1) == block_id]
 
         # Create parts
-        parts = create_parts_from_block(
-            block, edges_for_block, depths_dict, ortho_direction
-        )
+        parts = create_parts_from_block(block, edges_for_block, depths_dict, ortho_direction)
 
         # TODO:
         #  Remove: Save it to layer
@@ -408,15 +384,15 @@ def generate_art_sec_parts_no_offgrid(
         for part in parts:
             # Convert part polygon to GeoDataFrame
             part_gdf = gpd.GeoDataFrame(
-                [{'geometry': part, 'block_id': block_id}],
-                crs=blocks_layer.crs
+                [{"geometry": part, "block_id": block_id}], crs=blocks_layer.crs
             )
             part_edges = extract_block_edges(part_gdf, roads_layer)
             part_type = classify_part_type(
-                part, part_edges,
+                part,
+                part_edges,
                 part_art_d=part_art_d,
                 part_sec_d=part_sec_d,
-                part_loc_d=part_loc_d
+                part_loc_d=part_loc_d,
             )
 
             # TODO:
@@ -429,24 +405,22 @@ def generate_art_sec_parts_no_offgrid(
             except KeyError:
                 color = "rgb(255,255,255)"
 
-            all_parts.append({
-                'geometry': part,
-                'class': 'part',
-                'block_id': block_id,
-                'block_type': block_row.get('block_type', ''),
-                'site': block_row.get('site', ''),
-                'type': part_type,
-                'color': color,
-            })
+            all_parts.append(
+                {
+                    "geometry": part,
+                    "class": "part",
+                    "block_id": block_id,
+                    "block_type": block_row.get("block_type", ""),
+                    "site": block_row.get("site", ""),
+                    "type": part_type,
+                    "color": color,
+                }
+            )
     # Create GeoDataFrame
     gdf_out = gpd.GeoDataFrame(edges_for_blocks, crs=blocks_layer.crs)
-    gdf_out.to_file(
-        output_path, layer=output_layer_name + "-edges", driver="GPKG"
-    )
+    gdf_out.to_file(output_path, layer=output_layer_name + "-edges", driver="GPKG")
     gdf_out = gpd.GeoDataFrame(edges_for_parts, crs=blocks_layer.crs)
-    gdf_out.to_file(
-        output_path, layer=output_layer_name + "-edges-parts", driver="GPKG"
-    )
+    gdf_out.to_file(output_path, layer=output_layer_name + "-edges-parts", driver="GPKG")
 
     # Create GeoDataFrame
     gdf_out = gpd.GeoDataFrame(all_parts, crs=blocks_layer.crs)

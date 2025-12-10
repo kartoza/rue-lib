@@ -33,17 +33,13 @@ def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
     vec0 = p_curr - p_prev
     vec1 = p_next - p_curr
 
-    vec0_norm = vec0 / np.linalg.norm(vec0) if np.linalg.norm(
-        vec0) > 0 else vec0
-    vec1_norm = vec1 / np.linalg.norm(vec1) if np.linalg.norm(
-        vec1) > 0 else vec1
+    vec0_norm = vec0 / np.linalg.norm(vec0) if np.linalg.norm(vec0) > 0 else vec0
+    vec1_norm = vec1 / np.linalg.norm(vec1) if np.linalg.norm(vec1) > 0 else vec1
 
     return np.dot(vec0_norm, vec1_norm)
 
 
-def convert_to_quadrilateral(
-        polygon: Polygon, min_area: float = 100.0
-) -> Optional[Polygon]:
+def convert_to_quadrilateral(polygon: Polygon, min_area: float = 100.0) -> Optional[Polygon]:
     """
     Convert an off-grid polygon to a quadrilateral by removing vertices with sharpest angles.
 
@@ -88,8 +84,7 @@ def convert_to_quadrilateral(
 
 
 def get_roads_near_block(
-        block: Polygon, roads: gpd.GeoDataFrame, road_type: str,
-        max_distance: float = 10.0
+    block: Polygon, roads: gpd.GeoDataFrame, road_type: str, max_distance: float = 10.0
 ) -> list[LineString]:
     """
     Get roads of a specific type that are near (within max_distance) of the block.
@@ -128,9 +123,10 @@ def get_roads_near_block(
 
 
 def find_closest_road_type(
-        edge: LineString | Point, roads: gpd.GeoDataFrame,
-        max_distance: float = 1,
-        default_type: Optional[RoadTypes] = RoadTypes.Local
+    edge: LineString | Point,
+    roads: gpd.GeoDataFrame,
+    max_distance: float = 1,
+    default_type: Optional[RoadTypes] = RoadTypes.Local,
 ) -> Optional[str]:
     """
     Find the road type that is closest to the center point of a given edge.
@@ -161,10 +157,10 @@ def find_closest_road_type(
             min_distance = dist
             new_type = road[PropertyKeys.RoadType]
             if (
-                    new_type != RoadTypes.Local or
-                    new_type == RoadTypes.Local and closest_type not in [
-                RoadTypes.Artery, RoadTypes.Secondary
-            ]):
+                new_type != RoadTypes.Local
+                or new_type == RoadTypes.Local
+                and closest_type not in [RoadTypes.Artery, RoadTypes.Secondary]
+            ):
                 closest_type = road[PropertyKeys.RoadType]
 
     # Return None if the closest road is too far
@@ -233,16 +229,15 @@ def convert_polygonz_to_polygon(gpkg_path: str, layer_name: str):
     def drop_z(geom):
         if geom.has_z:
             # Extract 2D coordinates only
-            if geom.geom_type == 'Polygon':
+            if geom.geom_type == "Polygon":
                 return Polygon([(x, y) for x, y, *_ in geom.exterior.coords])
-            elif geom.geom_type == 'MultiPolygon':
-                return MultiPolygon([
-                    Polygon([(x, y) for x, y, *_ in poly.exterior.coords])
-                    for poly in geom.geoms
-                ])
+            elif geom.geom_type == "MultiPolygon":
+                return MultiPolygon(
+                    [Polygon([(x, y) for x, y, *_ in poly.exterior.coords]) for poly in geom.geoms]
+                )
         return geom
 
-    gdf['geometry'] = gdf['geometry'].apply(drop_z)
+    gdf["geometry"] = gdf["geometry"].apply(drop_z)
 
     # Save back to the same layer (overwrite)
     gdf.to_file(gpkg_path, layer=layer_name, driver="GPKG")

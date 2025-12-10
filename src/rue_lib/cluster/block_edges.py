@@ -1,5 +1,6 @@
 # src/rue_lib/cluster/block_edges.py
 """Extract edges from block polygons and assign road types."""
+
 from typing import Optional
 
 import geopandas as gpd
@@ -10,10 +11,10 @@ from rue_lib.core.definitions import RoadTypes
 
 
 def extract_block_edges(
-        blocks_gdf: gpd.GeoDataFrame,
-        roads_gdf: gpd.GeoDataFrame,
-        tolerance=1,
-        default_type: Optional[RoadTypes] = RoadTypes.Local
+    blocks_gdf: gpd.GeoDataFrame,
+    roads_gdf: gpd.GeoDataFrame,
+    tolerance=1,
+    default_type: Optional[RoadTypes] = RoadTypes.Local,
 ) -> gpd.GeoDataFrame:
     """
     Extract edges (boundary segments) from blocks and assign road types.
@@ -43,7 +44,7 @@ def extract_block_edges(
 
     for idx, block_row in blocks_gdf.iterrows():
         block = block_row.geometry
-        block_id = block_row.get('block_id', idx)
+        block_id = block_row.get("block_id", idx)
 
         if not isinstance(block, Polygon):
             continue
@@ -61,17 +62,15 @@ def extract_block_edges(
                 road_type = default_type
 
             edge_data = {
-                'geometry': edge_geom,
-                'block_id': block_id,
-                'road_type': road_type,
-                'edge_index': i
+                "geometry": edge_geom,
+                "block_id": block_id,
+                "road_type": road_type,
+                "edge_index": i,
             }
 
             # Copy over other block attributes
             for col in blocks_gdf.columns:
-                if col not in [
-                    'geometry', 'block_id', 'edge_index', 'road_type'
-                ]:
+                if col not in ["geometry", "block_id", "edge_index", "road_type"]:
                     edge_data[col] = block_row.get(col)
 
             all_edges.append(edge_data)
@@ -82,6 +81,5 @@ def extract_block_edges(
         return edges_gdf
     else:
         return gpd.GeoDataFrame(
-            columns=['geometry', 'block_id', 'road_type', 'edge_index'],
-            crs=blocks_gdf.crs
+            columns=["geometry", "block_id", "road_type", "edge_index"], crs=blocks_gdf.crs
         )

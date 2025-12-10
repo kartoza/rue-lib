@@ -6,11 +6,11 @@ from rue_lib.core.definitions import RoadTypes
 
 
 def classify_part_type(
-        part: Polygon,
-        part_edges_gdf: gpd.GeoDataFrame,
-        part_art_d: float,
-        part_sec_d: float,
-        part_loc_d: float,
+    part: Polygon,
+    part_edges_gdf: gpd.GeoDataFrame,
+    part_art_d: float,
+    part_sec_d: float,
+    part_loc_d: float,
 ) -> str:
     """
     Classify part type based on adjacent road types and geometry.
@@ -46,22 +46,18 @@ def classify_part_type(
         >>> print(part_type)  # e.g., 'art_sec' for arterial-secondary corner
     """
     areas_dict = {
-        'art_art': part_art_d * part_art_d,
-        'art_sec': part_art_d * part_sec_d,
-        'art_loc': part_art_d * part_loc_d,
-        'sec_sec': part_sec_d * part_sec_d,
-        'sec_loc': part_sec_d * part_loc_d,
+        "art_art": part_art_d * part_art_d,
+        "art_sec": part_art_d * part_sec_d,
+        "art_loc": part_art_d * part_loc_d,
+        "sec_sec": part_sec_d * part_sec_d,
+        "sec_loc": part_sec_d * part_loc_d,
     }
     road_types = []
 
     # Check each road type
-    for road_type_check in [
-        RoadTypes.Artery, RoadTypes.Secondary, RoadTypes.Local
-    ]:
+    for road_type_check in [RoadTypes.Artery, RoadTypes.Secondary, RoadTypes.Local]:
         # Get edges matching this road type
-        matching_edges = part_edges_gdf[
-            part_edges_gdf.get('road_type', '') == road_type_check
-            ]
+        matching_edges = part_edges_gdf[part_edges_gdf.get("road_type", "") == road_type_check]
         if matching_edges.empty:
             continue
 
@@ -70,7 +66,7 @@ def classify_part_type(
         prev_found = False
 
         for _, edge in part_edges_gdf.iterrows():
-            if edge.get('road_type') == road_type_check:
+            if edge.get("road_type") == road_type_check:
                 edge_groups[-1].append(edge)
                 prev_found = True
             else:
@@ -108,7 +104,10 @@ def classify_part_type(
                 angle = get_edge_angle(coords, i)
                 if abs(angle - 180) > 45:
                     segment_count += 1
-            except Exception:
+            except (IndexError, ValueError, TypeError):
+                # IndexError: vertex index out of bounds
+                # ValueError: invalid numpy array operations
+                # TypeError: invalid coordinate types
                 pass
 
         road_types.extend([road_type_check] * segment_count)
@@ -117,19 +116,19 @@ def classify_part_type(
 
     # Map to block type
     block_types_dict = {
-        RoadTypes.Artery: 'art',
-        RoadTypes.Secondary: 'sec',
-        RoadTypes.Tertiary: 'ter',
-        RoadTypes.Local: 'loc'
+        RoadTypes.Artery: "art",
+        RoadTypes.Secondary: "sec",
+        RoadTypes.Tertiary: "ter",
+        RoadTypes.Local: "loc",
     }
     if len(road_types) == 0:
-        road_type = 'off_grid'
+        road_type = "off_grid"
     elif len(road_types) == 1:
-        road_type = block_types_dict.get(road_types[0], 'off_grid')
+        road_type = block_types_dict.get(road_types[0], "off_grid")
     else:
         # Multiple road types
-        type0 = block_types_dict.get(road_types[0], '')
-        type1 = block_types_dict.get(road_types[1], '')
+        type0 = block_types_dict.get(road_types[0], "")
+        type1 = block_types_dict.get(road_types[1], "")
         road_type = f"{type0}_{type1}" if type0 and type1 else type0
 
     part_type = road_type
@@ -144,16 +143,14 @@ def classify_part_type(
         # Check for local road length
     if len(road_type) == 7:  # e.g., 'art_loc'
         # Check local road edge lengths
-        loc_edges = part_edges_gdf[
-            part_edges_gdf.get('road_type') == RoadTypes.Local]
+        loc_edges = part_edges_gdf[part_edges_gdf.get("road_type") == RoadTypes.Local]
         if not loc_edges.empty:
             max_length = loc_edges.geometry.length.max()
             if max_length > (part_loc_d * 2):
                 part_type = road_type[:3]
 
         # Check secondary road edge lengths
-        sec_edges = part_edges_gdf[
-            part_edges_gdf.get('road_type') == RoadTypes.Secondary]
+        sec_edges = part_edges_gdf[part_edges_gdf.get("road_type") == RoadTypes.Secondary]
         if not sec_edges.empty:
             max_length = sec_edges.geometry.length.max()
             if max_length > (part_sec_d * 2):
@@ -163,10 +160,10 @@ def classify_part_type(
 
 
 def classify_plot_by_area(
-        plot: Polygon,
-        part_og_w: float,
-        part_og_d: float,
-        threshold: float = 0.3,
+    plot: Polygon,
+    part_og_w: float,
+    part_og_d: float,
+    threshold: float = 0.3,
 ) -> str:
     """
     Classify a plot as 'plot' or 'park' based on area comparison.

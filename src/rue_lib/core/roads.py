@@ -7,13 +7,13 @@ from rue_lib.core.definitions import RoadTypes
 
 
 def extract_roads_buffer(
-        input_path: str,
-        input_layer_name: str,
-        output_path: str,
-        output_layer_name: str,
-        road_arterial_width_m: float,
-        road_secondary_width_m: float,
-        road_local_width_m: float
+    input_path: str,
+    input_layer_name: str,
+    output_path: str,
+    output_layer_name: str,
+    road_arterial_width_m: float,
+    road_secondary_width_m: float,
+    road_local_width_m: float,
 ):
     """
     Create polygon buffers from road lines based on road type.
@@ -40,14 +40,14 @@ def extract_roads_buffer(
     width_mapping = {
         RoadTypes.Artery: road_arterial_width_m,
         RoadTypes.Secondary: road_secondary_width_m,
-        RoadTypes.Local: road_local_width_m
+        RoadTypes.Local: road_local_width_m,
     }
 
     output = []
 
     # Process each road feature
     for _idx, row in gdf_roads.iterrows():
-        road_type = row.get('type', None)
+        road_type = row.get("type", None)
         geometry = row.geometry
 
         if road_type is None or geometry is None:
@@ -61,9 +61,9 @@ def extract_roads_buffer(
 
         # Keep all properties and update geometry
         row_dict = row.to_dict()
-        row_dict['geometry'] = buffered_geom
-        row_dict['type'] = road_type
-        row_dict['buffer_width'] = buffer_width
+        row_dict["geometry"] = buffered_geom
+        row_dict["type"] = road_type
+        row_dict["buffer_width"] = buffer_width
 
         output.append(row_dict)
 

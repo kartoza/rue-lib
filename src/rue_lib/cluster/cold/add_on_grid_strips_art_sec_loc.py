@@ -22,10 +22,7 @@ from rue_lib.cluster.helpers import compute_angle_dot
 from rue_lib.core.definitions import RoadTypes
 
 
-def get_site_plines(
-        block_edges_gdf: gpd.GeoDataFrame,
-        road_type: str
-) -> list[LineString]:
+def get_site_plines(block_edges_gdf: gpd.GeoDataFrame, road_type: str) -> list[LineString]:
     """
     Extract continuous polylines from block edges by road type.
 
@@ -39,9 +36,7 @@ def get_site_plines(
         List of LineStrings representing continuous road segments
     """
     # Filter edges by road type
-    matching_edges = block_edges_gdf[
-        block_edges_gdf.get('road_type', '') == road_type
-    ]
+    matching_edges = block_edges_gdf[block_edges_gdf.get("road_type", "") == road_type]
 
     if matching_edges.empty:
         return []
@@ -102,9 +97,7 @@ def clean_polygon_edges(polygon: Polygon, min_length: float = 0.0001) -> Polygon
         next_pt = coords[next_idx]
 
         # Calculate edge length
-        length = np.sqrt(
-            (next_pt[0] - curr[0])**2 + (next_pt[1] - curr[1])**2
-        )
+        length = np.sqrt((next_pt[0] - curr[0]) ** 2 + (next_pt[1] - curr[1]) ** 2)
 
         if length >= min_length:
             new_coords.append(curr)
@@ -115,10 +108,7 @@ def clean_polygon_edges(polygon: Polygon, min_length: float = 0.0001) -> Polygon
     return polygon
 
 
-def clean_polygon_angles(
-        polygon: Polygon,
-        ang_threshold: float = 0.9999
-) -> Polygon:
+def clean_polygon_angles(polygon: Polygon, ang_threshold: float = 0.9999) -> Polygon:
     """
     Remove vertices where edges are nearly collinear (angle close to 180�).
 
@@ -183,9 +173,7 @@ def clean_polygons(polygons: list[Polygon]) -> list[Polygon]:
 
 
 def find_touching_edge(
-        edges_gdf: gpd.GeoDataFrame,
-        point: Point,
-        tolerance: float = 0.01
+    edges_gdf: gpd.GeoDataFrame, point: Point, tolerance: float = 0.01
 ) -> Optional[int]:
     """
     Find an edge that touches or is very close to a given point.
@@ -210,8 +198,7 @@ def find_touching_edge(
 
 
 def transfer_edge_attributes_touching(
-        from_edges_gdf: gpd.GeoDataFrame,
-        to_edges_gdf: gpd.GeoDataFrame
+    from_edges_gdf: gpd.GeoDataFrame, to_edges_gdf: gpd.GeoDataFrame
 ) -> gpd.GeoDataFrame:
     """
     Transfer road_type attribute from touching edges.
@@ -224,7 +211,7 @@ def transfer_edge_attributes_touching(
         Updated to_edges_gdf with transferred attributes
     """
     for idx, to_edge in to_edges_gdf.iterrows():
-        if to_edge.get('road_type') is not None:
+        if to_edge.get("road_type") is not None:
             continue
 
         # Get centroid of target edge
@@ -235,14 +222,12 @@ def transfer_edge_attributes_touching(
 
         if touching_idx is not None:
             from_edge = from_edges_gdf.loc[touching_idx]
-            to_edges_gdf.at[idx, 'road_type'] = from_edge.get('road_type')
+            to_edges_gdf.at[idx, "road_type"] = from_edge.get("road_type")
 
     return to_edges_gdf
 
 
-def transfer_edge_attributes_between_parts(
-        parts_gdf: gpd.GeoDataFrame
-) -> gpd.GeoDataFrame:
+def transfer_edge_attributes_between_parts(parts_gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
     """
     Transfer road_type attributes between touching parts.
 
@@ -257,8 +242,7 @@ def transfer_edge_attributes_between_parts(
 
 
 def copy_block_attributes(
-        block_row: gpd.GeoSeries,
-        parts_gdf: gpd.GeoDataFrame
+    block_row: gpd.GeoSeries, parts_gdf: gpd.GeoDataFrame
 ) -> gpd.GeoDataFrame:
     """
     Copy block attributes to all parts.
@@ -270,7 +254,7 @@ def copy_block_attributes(
     Returns:
         Updated parts_gdf with copied attributes
     """
-    for attr in ['block_id', 'block_type', 'site']:
+    for attr in ["block_id", "block_type", "site"]:
         if attr in block_row:
             parts_gdf[attr] = block_row[attr]
 
@@ -278,11 +262,11 @@ def copy_block_attributes(
 
 
 def create_on_grid_strips(
-        block: Polygon,
-        block_edges_gdf: gpd.GeoDataFrame,
-        part_art_d: float,
-        part_sec_d: float,
-        part_loc_d: float
+    block: Polygon,
+    block_edges_gdf: gpd.GeoDataFrame,
+    part_art_d: float,
+    part_sec_d: float,
+    part_loc_d: float,
 ) -> list[dict]:
     """
     Create on-grid strip parts from block by offsetting roads.
@@ -376,18 +360,27 @@ def create_on_grid_strips(
     # Union multi-parts into single geometries
     on_arts3 = None
     if on_arts2 is not None and not on_arts2.is_empty:
-        on_arts3 = (unary_union([on_arts2]) if not isinstance(
-            on_arts2, MultiPolygon) else unary_union(on_arts2.geoms))
+        on_arts3 = (
+            unary_union([on_arts2])
+            if not isinstance(on_arts2, MultiPolygon)
+            else unary_union(on_arts2.geoms)
+        )
 
     on_secs3 = None
     if on_secs2 is not None and not on_secs2.is_empty:
-        on_secs3 = (unary_union([on_secs2]) if not isinstance(
-            on_secs2, MultiPolygon) else unary_union(on_secs2.geoms))
+        on_secs3 = (
+            unary_union([on_secs2])
+            if not isinstance(on_secs2, MultiPolygon)
+            else unary_union(on_secs2.geoms)
+        )
 
     on_locs3 = None
     if on_locs2 is not None and not on_locs2.is_empty:
-        on_locs3 = (unary_union([on_locs2]) if not isinstance(
-            on_locs2, MultiPolygon) else unary_union(on_locs2.geoms))
+        on_locs3 = (
+            unary_union([on_locs2])
+            if not isinstance(on_locs2, MultiPolygon)
+            else unary_union(on_locs2.geoms)
+        )
 
     # Create intersection parts (corners)
     art_sec = None
@@ -418,42 +411,39 @@ def create_on_grid_strips(
 
         if isinstance(geom, Polygon):
             if geom.area > 1.0:
-                parts.append({'geometry': geom, 'type': part_type})
+                parts.append({"geometry": geom, "type": part_type})
         elif isinstance(geom, MultiPolygon):
             for poly in geom.geoms:
                 if poly.area > 1.0:
-                    parts.append({'geometry': poly, 'type': part_type})
+                    parts.append({"geometry": poly, "type": part_type})
 
     # Add all part types
-    add_parts(art_sec, 'art_sec')
-    add_parts(art_loc, 'art_loc')
-    add_parts(sec_loc, 'sec_loc')
-    add_parts(on_arts3, 'art')
-    add_parts(on_secs3, 'sec')
-    add_parts(on_locs3, 'loc')
-    add_parts(off_grids, 'off_grid')
+    add_parts(art_sec, "art_sec")
+    add_parts(art_loc, "art_loc")
+    add_parts(sec_loc, "sec_loc")
+    add_parts(on_arts3, "art")
+    add_parts(on_secs3, "sec")
+    add_parts(on_locs3, "loc")
+    add_parts(off_grids, "off_grid")
 
     # Clean polygons
     cleaned_parts = []
     for part in parts:
-        cleaned_geom = clean_polygon_edges(part['geometry'])
+        cleaned_geom = clean_polygon_edges(part["geometry"])
         cleaned_geom = clean_polygon_angles(cleaned_geom)
 
         if cleaned_geom.is_valid and cleaned_geom.area > 1.0:
-            cleaned_parts.append({
-                'geometry': cleaned_geom,
-                'type': part['type']
-            })
+            cleaned_parts.append({"geometry": cleaned_geom, "type": part["type"]})
 
     return cleaned_parts
 
 
 def process_block(
-        block_row: gpd.GeoSeries,
-        roads_gdf: gpd.GeoDataFrame,
-        part_art_d: float,
-        part_sec_d: float,
-        part_loc_d: float
+    block_row: gpd.GeoSeries,
+    roads_gdf: gpd.GeoDataFrame,
+    part_art_d: float,
+    part_sec_d: float,
+    part_loc_d: float,
 ) -> list[dict]:
     """
     Process a single block to create on-grid strip parts.
@@ -471,21 +461,15 @@ def process_block(
     block = block_row.geometry
 
     # Extract block edges
-    block_gdf = gpd.GeoDataFrame([block_row], geometry='geometry', crs=roads_gdf.crs)
+    block_gdf = gpd.GeoDataFrame([block_row], geometry="geometry", crs=roads_gdf.crs)
     block_edges_gdf = extract_block_edges(block_gdf, roads_gdf)
 
     # Create on-grid strips
-    parts = create_on_grid_strips(
-        block,
-        block_edges_gdf,
-        part_art_d,
-        part_sec_d,
-        part_loc_d
-    )
+    parts = create_on_grid_strips(block, block_edges_gdf, part_art_d, part_sec_d, part_loc_d)
 
     # Add block attributes to parts
     for part in parts:
-        for attr in ['block_id', 'block_type', 'site']:
+        for attr in ["block_id", "block_type", "site"]:
             if attr in block_row.index:
                 part[attr] = block_row[attr]
 
@@ -493,13 +477,13 @@ def process_block(
 
 
 def generate_on_grid_strips_art_sec_loc(
-        output_path: Path,
-        blocks_layer_name: str,
-        roads_layer_name: str,
-        part_art_d: float,
-        part_sec_d: float,
-        part_loc_d: float,
-        output_layer_name: str
+    output_path: Path,
+    blocks_layer_name: str,
+    roads_layer_name: str,
+    part_art_d: float,
+    part_sec_d: float,
+    part_loc_d: float,
+    output_layer_name: str,
 ):
     """
     Generate on-grid strip parts for arterial, secondary, and local roads.
@@ -531,13 +515,7 @@ def generate_on_grid_strips_art_sec_loc(
     all_parts = []
 
     for _idx, block_row in blocks_layer.iterrows():
-        parts = process_block(
-            block_row,
-            roads_layer,
-            part_art_d,
-            part_sec_d,
-            part_loc_d
-        )
+        parts = process_block(block_row, roads_layer, part_art_d, part_sec_d, part_loc_d)
         all_parts.extend(parts)
 
     # Create output GeoDataFrame

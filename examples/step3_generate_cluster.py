@@ -12,20 +12,16 @@ def main():
         roads_path="data/roads.geojson",
         input_path="outputs/step2_streets/all_grids_merged.geojson",
         output_dir="outputs/step3_clusters",
-
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,
         road_local_width_m=MainConfig.road_local_width_m,
-
         # Neighbourhood / on-grid partitions
         on_grid_partition_depth_arterial_roads=MainConfig.on_grid_partition_depth_arterial_roads,
         on_grid_partition_depth_secondary_roads=MainConfig.on_grid_partition_depth_secondary_roads,
-
         # Neighbourhood / off-grid partitions
         off_grid_cluster_depth=MainConfig.off_grid_cluster_depth,
         off_grid_cluster_width=MainConfig.off_grid_cluster_width,
-
         # Neighborhood / public spaces
         sidewalk_width_m=MainConfig.sidewalk_width_m,
     )

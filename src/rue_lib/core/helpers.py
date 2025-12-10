@@ -11,8 +11,7 @@ def feature_geom_to_shapely(feat):
     """
     if hasattr(feat, "geometry"):
         geom = feat.geometry()
-        wkt_str = geom.asWkt() if hasattr(
-            geom, "asWkt") else geom.ExportToWkt()
+        wkt_str = geom.asWkt() if hasattr(geom, "asWkt") else geom.ExportToWkt()
     else:
         geom = feat.GetGeometryRef()
         wkt_str = geom.ExportToWkt()
@@ -23,10 +22,7 @@ def remove_layer_from_gpkg(gpkg_path: Path, layer_name: str) -> None:
     """Delete a layer from a GeoPackage using OGR, if it exists."""
     ds = ogr.Open(str(gpkg_path), update=1)
     if ds is None:
-        print(
-            f"Warning: could not open {gpkg_path} "
-            f"to remove layer '{layer_name}'"
-        )
+        print(f"Warning: could not open {gpkg_path} to remove layer '{layer_name}'")
         return
 
     try:
@@ -42,20 +38,17 @@ def remove_layer_from_gpkg(gpkg_path: Path, layer_name: str) -> None:
         if layer_index_to_delete is not None:
             res = ds.DeleteLayer(layer_index_to_delete)
             if res != 0:
-                print(
-                    f"Warning: failed to delete layer "
-                    f"'{layer_name}' from {gpkg_path}"
-                )
+                print(f"Warning: failed to delete layer '{layer_name}' from {gpkg_path}")
     finally:
         ds = None
 
 
 def merge_gpkg_layers(
-        gpkg_path: Path,
-        layer_names: list[str],
-        output_layer_name: str,
-        add_source_column: bool = False,
-        remove_source_layers: bool = False
+    gpkg_path: Path,
+    layer_names: list[str],
+    output_layer_name: str,
+    add_source_column: bool = False,
+    remove_source_layers: bool = False,
 ) -> str:
     """
     Merge multiple layers from a GeoPackage into a single layer.
@@ -90,7 +83,7 @@ def merge_gpkg_layers(
 
             # Add source column if requested
             if add_source_column:
-                gdf['source_layer'] = layer_name
+                gdf["source_layer"] = layer_name
 
             gdfs.append(gdf)
             print(f"  Read layer '{layer_name}': {len(gdf)} features")
@@ -103,14 +96,10 @@ def merge_gpkg_layers(
         return output_layer_name
 
     # Merge all GeoDataFrames
-    merged_gdf = gpd.GeoDataFrame(
-        gpd.pd.concat(gdfs, ignore_index=True),
-        crs=gdfs[0].crs
-    )
+    merged_gdf = gpd.GeoDataFrame(gpd.pd.concat(gdfs, ignore_index=True), crs=gdfs[0].crs)
 
     print(
-        f"  Merged {len(gdfs)} layers into '{output_layer_name}': "
-        f"{len(merged_gdf)} total features"
+        f"  Merged {len(gdfs)} layers into '{output_layer_name}': {len(merged_gdf)} total features"
     )
 
     # Write merged layer to GeoPackage
