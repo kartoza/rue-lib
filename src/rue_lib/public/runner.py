@@ -7,7 +7,6 @@ from .config import PublicConfig
 from .operations import (
     allocate_amenities,
     allocate_open_spaces,
-    classify_cluster_blocks,
 )
 
 gdal.UseExceptions()
@@ -35,7 +34,7 @@ def generate_public(cfg: PublicConfig) -> Path:
         ds = None
 
     print("Step 1: Copying input blocks layer...")
-    clusters_layer = "13_subdiv_into_parts_checkpoint"
+    clusters_layer = "111_warm_block_final"
 
     # Copy input blocks to output geopackage
     input_ds = ogr.Open(cfg.input_path, 0)
@@ -61,20 +60,11 @@ def generate_public(cfg: PublicConfig) -> Path:
     input_ds = None
     output_ds = None
 
-    # Classify blocks
-    classify_cluster_blocks(
-        input_gpkg=cfg.input_path,
-        blocks_layer_name=clusters_layer,
-        parcels_path=cfg.site_path,
-        output_gpkg=output_path,
-        output_layer_name="00_classified_blocks",
-    )
-
     print("\nStep 2: Allocating open spaces...")
 
     open_spaces_layer = allocate_open_spaces(
-        input_gpkg=output_path,
-        blocks_layer_name="00_classified_blocks",
+        input_gpkg=cfg.input_path,
+        blocks_layer_name="111_warm_block_final",
         parcels_path=cfg.site_path,
         output_gpkg=output_path,
         output_layer_name="02_open_spaces",
@@ -84,8 +74,8 @@ def generate_public(cfg: PublicConfig) -> Path:
     print("\nStep 3: Allocating amenities...")
 
     _amenities_layer = allocate_amenities(
-        input_gpkg=output_path,
-        blocks_layer_name="00_classified_blocks",
+        input_gpkg=cfg.input_path,
+        blocks_layer_name="111_warm_block_final",
         open_spaces_layer_name=open_spaces_layer,
         parcels_path=cfg.site_path,
         output_gpkg=output_path,
