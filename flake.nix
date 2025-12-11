@@ -33,6 +33,7 @@
             # Core dependencies
             gdal
             geopandas
+            scipy
             rich
             shapely
             # Development dependencies
