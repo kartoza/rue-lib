@@ -1,0 +1,44 @@
+# examples/step3_generate_clusters.py
+from rue_lib.cluster.runner import ClusterConfig, generate_clusters
+from rue_lib.config import MainConfig
+
+
+def main():
+    """
+    Step 3: Generate clusters/partitions from street blocks and roads.
+    """
+
+    config = ClusterConfig(
+        roads_path="data/roads.geojson",
+        input_path="outputs/step2_streets/all_grids_merged.geojson",
+        output_dir="outputs/step3_clusters",
+        # Neighborhood / public roads
+        road_arterial_width_m=MainConfig.road_arterial_width_m,
+        road_secondary_width_m=MainConfig.road_secondary_width_m,
+        road_local_width_m=MainConfig.road_local_width_m,
+        # Neighbourhood / on-grid partitions
+        on_grid_partition_depth_arterial_roads=MainConfig.on_grid_partition_depth_arterial_roads,
+        on_grid_partition_depth_secondary_roads=MainConfig.on_grid_partition_depth_secondary_roads,
+        # Neighbourhood / off-grid partitions
+        off_grid_cluster_depth=MainConfig.off_grid_cluster_depth,
+        off_grid_cluster_width=MainConfig.off_grid_cluster_width,
+        # Neighborhood / public spaces
+        sidewalk_width_m=MainConfig.sidewalk_width_m,
+    )
+
+    print("=" * 60)
+    print("STEP 3: Generating Clusters/Partitions")
+    print("=" * 60)
+    print(f"Input: {config.input_path}")
+    print(f"Output: {config.output_dir}")
+    print()
+
+    output_path = generate_clusters(config)
+
+    print()
+    print("✔ Step 3 completed successfully!")
+    print(f"  Output: {output_path}")
+
+
+if __name__ == "__main__":
+    main()

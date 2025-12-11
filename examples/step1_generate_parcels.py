@@ -11,6 +11,7 @@ Usage:
     python examples/step1_generate_parcels.py
 """
 
+from rue_lib.config import MainConfig
 from rue_lib.site.runner import SiteConfig, generate_parcels
 
 
@@ -31,8 +32,8 @@ def main():
         roads_path="data/roads.geojson",
         output_dir="outputs/step1_parcels",
         geopackage_path="outputs/output.gpkg",
-        road_arterial_width_m=40.0,
-        road_secondary_width_m=30.0,
+        road_arterial_width_m=MainConfig.road_arterial_width_m,
+        road_secondary_width_m=MainConfig.road_secondary_width_m,
     )
 
     # Generate parcels
