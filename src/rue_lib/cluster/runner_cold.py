@@ -7,13 +7,13 @@ from pathlib import Path
 
 from osgeo import ogr
 
-from rue_lib.cluster.cold.concave_corner import (
-    find_concave_points,
-    subdivide_blocks_by_concave_points,
-)
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
+)
+from rue_lib.cluster.cold.subdiv_block import (
+    find_concave_points,
+    subdivide_blocks_by_concave_points,
 )
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.helpers import convert_polygonz_to_polygon
