@@ -214,3 +214,4 @@ result-*
 
 # Pre-commit
 .pre-commit-config.yaml.backup
+outputs
