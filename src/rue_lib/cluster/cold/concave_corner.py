@@ -16,7 +16,7 @@ def line_end_intersects_buffer(line: ogr.Geometry, buffer_geom: ogr.Geometry) ->
     return end_pt.Intersects(buffer_geom)
 
 
-def split_polygon_by_line(poly: ogr.Geometry, line: ogr.Geometry, buffer_width: float = 0.05):
+def split_polygon_by_line(poly: ogr.Geometry, line: ogr.Geometry, buffer_width: float = 0.00000001):
     """
     Split a polygon using a buffered line.
 
@@ -544,8 +544,8 @@ def subdivide_blocks_by_concave_points(
                 "orig_block_id": orig_block_id,
                 "geometry": poly.Clone(),
                 "is_concave": is_concave,
-                "concave_x": None,
-                "concave_y": None,
+                "concave_x": is_concave and concave_x or None,
+                "concave_y": is_concave and concave_y or None,
                 "type": is_concave and "corner" or "block",
                 "block_type": "cold",
             }
@@ -593,11 +593,14 @@ def subdivide_blocks_by_concave_points(
     blocks_layer = out_ds.CreateLayer(blocks_layer_name, srs, ogr.wkbPolygon)
 
     blocks_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
+    blocks_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
     blocks_layer.CreateField(ogr.FieldDefn("is_concave", ogr.OFTInteger))
     blocks_layer.CreateField(ogr.FieldDefn("concave_x", ogr.OFTReal))
     blocks_layer.CreateField(ogr.FieldDefn("concave_y", ogr.OFTReal))
     blocks_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
     blocks_layer.CreateField(ogr.FieldDefn("block_type", ogr.OFTString))
+
+    block_id = 0
 
     for blk in subdivided_blocks:
         feat = ogr.Feature(blocks_layer.GetLayerDefn())
@@ -606,6 +609,7 @@ def subdivide_blocks_by_concave_points(
         feat.SetField("is_concave", blk["is_concave"])
         feat.SetField("type", blk["type"])
         feat.SetField("block_type", blk["block_type"])
+        feat.SetField("id", block_id)
 
         if blk["concave_x"] is not None:
             feat.SetField("concave_x", blk["concave_x"])
@@ -614,6 +618,17 @@ def subdivide_blocks_by_concave_points(
 
         blocks_layer.CreateFeature(feat)
         feat = None
+
+        if blk["is_concave"]:
+            on_grid_strips_concave_corner(
+                blk,
+                srs,
+                out_ds,
+                block_id,
+                grid_depth=10,
+            )
+
+        block_id += 1
 
     # Clean up
     lines_layer = None
@@ -625,3 +640,113 @@ def subdivide_blocks_by_concave_points(
     print(f"  Created layer: {output_layer_name}")
     print(f"  Created subdivided blocks layer: {blocks_layer_name}")
     return output_layer_name
+
+
+def on_grid_strips_concave_corner(block, srs, out_ds, block_id, grid_depth) -> list[dict]:
+    # grid_depth = cfg.on_grid_partition_depth_local_roads
+    concave_point = ogr.Geometry(ogr.wkbPoint)
+    concave_point.AddPoint(block.get("concave_x"), block.get("concave_y"))
+
+    # Get all points of the block
+    block_geom = block.get("geometry")
+    boundary = block_geom.GetBoundary()
+
+    lines = []
+    if boundary.GetGeometryType() == ogr.wkbLineString:
+        lines = [boundary]
+    elif boundary.GetGeometryType() == ogr.wkbMultiLineString:
+        lines = [boundary.GetGeometryRef(i) for i in range(boundary.GetGeometryCount())]
+
+    points_layer_name = f"205_subdivided_points_{block_id}"
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == points_layer_name:
+            out_ds.DeleteLayer(i)
+            break
+    out_layer = out_ds.CreateLayer(points_layer_name, srs, ogr.wkbPoint)
+
+    out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("concave_dist", ogr.OFTReal))
+    out_layer.CreateField(ogr.FieldDefn("x", ogr.OFTReal))
+    out_layer.CreateField(ogr.FieldDefn("y", ogr.OFTReal))
+
+    concave_closest_points = []
+
+    for line in lines:
+        for line in lines:
+            point_count = line.GetPointCount()
+            for i in range(point_count):
+                x = line.GetX(i)
+                y = line.GetY(i)
+                point = ogr.Geometry(ogr.wkbPoint)
+                point.AddPoint(x, y)
+                if point.Intersects(concave_point.Buffer(10)):
+                    continue
+
+                # Distance from concave point
+                distance = concave_point.Distance(point)
+                concave_closest_points.append(
+                    {
+                        "vertex_id": i,
+                        "point": point,
+                        "distance": distance,
+                        "x": x,
+                        "y": y,
+                    }
+                )
+
+    # Sort points by distance
+    concave_closest_points.sort(key=lambda p: p["distance"])
+
+    # Get 2 concave points closest to the concave corner
+    for point in concave_closest_points[:2]:
+        out_feat = ogr.Feature(out_layer.GetLayerDefn())
+        out_feat.SetGeometry(point["point"])
+        out_feat.SetField("block_id", block_id)
+        out_feat.SetField("vertex_id", point["vertex_id"])
+        out_feat.SetField("x", point["x"])
+        out_feat.SetField("y", point["y"])
+        out_feat.SetField("concave_dist", point["distance"])
+
+        # Add new point perpendicular to this point and concave point with grid depth
+        vec_x = point["x"] - block.get("concave_x")
+        vec_y = point["y"] - block.get("concave_y")
+        vec_length = math.sqrt(vec_x**2 + vec_y**2)
+        if vec_length > 0.001:
+            vec_x /= vec_length
+            vec_y /= vec_length
+
+            perp_x = -vec_y
+            perp_y = vec_x
+
+            new_x = point["x"] + perp_x * grid_depth
+            new_y = point["y"] + perp_y * grid_depth
+
+            new_point = ogr.Geometry(ogr.wkbPoint)
+            new_point.AddPoint(new_x, new_y)
+
+            # Check if the new point is inside the block, if not use different direction
+            if not block_geom.Contains(new_point):
+                new_x = point["x"] - perp_x * grid_depth
+                new_y = point["y"] - perp_y * grid_depth
+
+                new_point = ogr.Geometry(ogr.wkbPoint)
+                new_point.AddPoint(new_x, new_y)
+
+            out_feat_perp = ogr.Feature(out_layer.GetLayerDefn())
+            out_feat_perp.SetGeometry(new_point)
+            out_feat_perp.SetField("block_id", block_id)
+            out_feat_perp.SetField("vertex_id", point["vertex_id"])
+            out_feat_perp.SetField("x", new_x)
+            out_feat_perp.SetField("y", new_y)
+            out_feat_perp.SetField("concave_dist", point["distance"] + grid_depth)
+
+            out_layer.CreateFeature(out_feat_perp)
+            out_feat_perp = None
+
+        out_layer.CreateFeature(out_feat)
+        out_feat = None
+
+    # Clean up
+    out_layer = None
