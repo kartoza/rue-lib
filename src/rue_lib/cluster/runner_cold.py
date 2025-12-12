@@ -125,6 +125,7 @@ def generate_cold(
         output_path,
         cutting_lines_layer_name,
         cfg.road_local_width_m,
+        clipped_lines_layer_name,
     )
 
     return cold_grid_layer_name
