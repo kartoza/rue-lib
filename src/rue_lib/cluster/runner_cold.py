@@ -7,6 +7,10 @@ from pathlib import Path
 
 from osgeo import ogr
 
+from rue_lib.cluster.cold.cluster_on_grid import (
+    extract_off_grid_adjacent_lines,
+    extract_vertices_from_lines,
+)
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
@@ -126,6 +130,27 @@ def generate_cold(
         cutting_lines_layer_name,
         cfg.road_local_width_m,
         clipped_lines_layer_name,
+    )
+
+    print("\nStep 6: Create cluster on on-grid parts...")
+    off_grid_block = "204_subdivided_blocks_off_grid"
+    on_grid_block = "204_subdivided_blocks_on_grid"
+
+    print("  Extracting off-grid boundaries adjacent to on-grid blocks...")
+    adjacent_off_grid_lines = "205_off_grid_adjacent_lines"
+    extract_off_grid_adjacent_lines(
+        output_path,
+        off_grid_block,
+        on_grid_block,
+        output_path,
+        adjacent_off_grid_lines,
+    )
+
+    extract_vertices_layer_name = "208_off_grid_adjacent_vertices"
+    extract_vertices_from_lines(
+        output_path,
+        adjacent_off_grid_lines,
+        extract_vertices_layer_name,
     )
 
     return cold_grid_layer_name

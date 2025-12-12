@@ -740,7 +740,9 @@ def subdivide_blocks_by_concave_points(
                 continue
 
             remaining_geom = block_geom.Clone()
-            remaining_geom = remaining_geom.Buffer(0).Difference(intersecting_buffer.Buffer(0))
+            remaining_geom = remaining_geom.Buffer(0).Difference(
+                intersecting_buffer.Buffer(0.00001)
+            )
 
             if remaining_geom and not remaining_geom.IsEmpty():
                 remaining_features.append(
