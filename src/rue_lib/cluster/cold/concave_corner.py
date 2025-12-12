@@ -355,9 +355,6 @@ def subdivide_blocks_by_concave_points(
 
             concave_point_geom = ogr.Geometry(ogr.wkbPoint)
             concave_point_geom.AddPoint(point_x, point_y)
-            buffer_circle = concave_point_geom.Buffer(offset_distance * 2)
-
-            buffer_clipped = buffer_circle.Intersection(block_geom)
 
             dir1_x = prev_x - point_x
             dir1_y = prev_y - point_y
@@ -395,9 +392,9 @@ def subdivide_blocks_by_concave_points(
             test_line1_neg.AddPoint(offset1_x - perp1_x * 5.0, offset1_y - perp1_y * 5.0)
 
             direction1_x, direction1_y = None, None
-            if buffer_clipped and line_end_intersects_buffer(test_line1_pos, buffer_clipped):
+            if block_geom and line_end_intersects_buffer(test_line1_pos, block_geom):
                 direction1_x, direction1_y = perp1_x, perp1_y
-            elif buffer_clipped and line_end_intersects_buffer(test_line1_neg, buffer_clipped):
+            elif block_geom and line_end_intersects_buffer(test_line1_neg, block_geom):
                 direction1_x, direction1_y = -perp1_x, -perp1_y
 
             if direction1_x is not None:
@@ -447,9 +444,9 @@ def subdivide_blocks_by_concave_points(
             test_line2_neg.AddPoint(offset2_x - perp2_x * 5.0, offset2_y - perp2_y * 5.0)
 
             direction2_x, direction2_y = None, None
-            if buffer_clipped and line_end_intersects_buffer(test_line2_pos, buffer_clipped):
+            if block_geom and line_end_intersects_buffer(test_line2_pos, block_geom):
                 direction2_x, direction2_y = perp2_x, perp2_y
-            elif buffer_clipped and line_end_intersects_buffer(test_line2_neg, buffer_clipped):
+            elif block_geom and line_end_intersects_buffer(test_line2_neg, block_geom):
                 direction2_x, direction2_y = -perp2_x, -perp2_y
 
             if direction2_x is not None:
