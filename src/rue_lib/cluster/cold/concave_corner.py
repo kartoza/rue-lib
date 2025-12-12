@@ -754,7 +754,7 @@ def subdivide_blocks_by_concave_points(
             buffered_line_features, subdivided_blocks
         )
 
-        split_buffered_layer_name = f"{buffered_lines_layer_name}_split"
+        split_buffered_layer_name = f"{blocks_layer_name}_on_grid"
         split_buffered_layer = create_or_replace_layer(
             out_ds, split_buffered_layer_name, srs, ogr.wkbPolygon
         )
@@ -762,6 +762,7 @@ def subdivide_blocks_by_concave_points(
         split_buffered_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
         split_buffered_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
         split_buffered_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
+        split_buffered_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
 
         for buff_data in split_buffered_lines:
             feat = ogr.Feature(split_buffered_layer.GetLayerDefn())
@@ -769,17 +770,18 @@ def subdivide_blocks_by_concave_points(
             feat.SetField("id", buff_data["id"])
             feat.SetField("block_id", buff_data["block_id"])
             feat.SetField("road_type", buff_data["road_type"])
+            feat.SetField("type", "on_grid")
             split_buffered_layer.CreateFeature(feat)
             feat = None
 
         split_buffered_layer = None
         print(f"  Split buffered lines layer: {split_buffered_layer_name}")
 
-        remaining_layer_name = f"{blocks_layer_name}_remaining"
+        off_grid_layer_name = f"{blocks_layer_name}_off_grid"
 
         for i in range(out_ds.GetLayerCount()):
             layer = out_ds.GetLayerByIndex(i)
-            if layer.GetName() == remaining_layer_name:
+            if layer.GetName() == off_grid_layer_name:
                 out_ds.DeleteLayer(i)
                 break
 
@@ -816,7 +818,7 @@ def subdivide_blocks_by_concave_points(
 
         buffered_lines_layer = None
 
-        remaining_layer = out_ds.CreateLayer(remaining_layer_name, srs, ogr.wkbPolygon)
+        remaining_layer = out_ds.CreateLayer(off_grid_layer_name, srs, ogr.wkbPolygon)
         remaining_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
         remaining_layer.CreateField(ogr.FieldDefn("is_concave", ogr.OFTInteger))
         remaining_layer.CreateField(ogr.FieldDefn("concave_x", ogr.OFTReal))
@@ -829,7 +831,7 @@ def subdivide_blocks_by_concave_points(
             feat.SetGeometry(rem_data["geometry"])
             feat.SetField("orig_id", rem_data["orig_id"])
             feat.SetField("is_concave", rem_data["is_concave"])
-            feat.SetField("type", rem_data["type"])
+            feat.SetField("type", "off_grid")
             feat.SetField("block_type", rem_data["block_type"])
 
             if rem_data["concave_x"] is not None:
@@ -841,7 +843,7 @@ def subdivide_blocks_by_concave_points(
             feat = None
 
         remaining_layer = None
-        print(f"  Created remaining layer: {remaining_layer_name}")
+        print(f"  Created off-grid cold boundary layer: {off_grid_layer_name}")
 
     # Clean up
     lines_layer = None
