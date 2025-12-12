@@ -698,6 +698,8 @@ def on_grid_strips_concave_corner(block, srs, out_ds, block_id, grid_depth) -> l
 
     # Sort points by distance
     concave_closest_points.sort(key=lambda p: p["distance"])
+    concave_lines = []
+    perp_points = []
 
     # Get 2 concave points closest to the concave corner
     for point in concave_closest_points[:2]:
@@ -727,7 +729,7 @@ def on_grid_strips_concave_corner(block, srs, out_ds, block_id, grid_depth) -> l
             new_point.AddPoint(new_x, new_y)
 
             # Check if the new point is inside the block, if not use different direction
-            if not block_geom.Contains(new_point):
+            if not new_point.Buffer(10).Intersects(block_geom):
                 new_x = point["x"] - perp_x * grid_depth
                 new_y = point["y"] - perp_y * grid_depth
 
@@ -741,12 +743,80 @@ def on_grid_strips_concave_corner(block, srs, out_ds, block_id, grid_depth) -> l
             out_feat_perp.SetField("x", new_x)
             out_feat_perp.SetField("y", new_y)
             out_feat_perp.SetField("concave_dist", point["distance"] + grid_depth)
+            perp_points.append(new_point)
 
             out_layer.CreateFeature(out_feat_perp)
             out_feat_perp = None
 
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
+            line = ogr.Geometry(ogr.wkbLineString)
+            line.AddPoint(new_x, new_y)
+            vec_x = new_x - point["x"]
+            vec_y = new_y - point["y"]
+            vec_length = math.sqrt(vec_x**2 + vec_y**2)
+
+            vec_x /= vec_length
+            vec_y /= vec_length
+
+            perp_x = -vec_y
+            perp_y = vec_x
+
+            new_pos_x = new_x + perp_x * (grid_depth * 3)
+            new_pos_y = new_y + perp_y * (grid_depth * 3)
+            pos_point = ogr.Geometry(ogr.wkbPoint)
+            pos_point.AddPoint(new_pos_x, new_pos_y)
+            pos_point_distance = concave_point.Distance(pos_point)
+
+            new_neg_x = new_x - perp_x * (grid_depth * 3)
+            new_neg_y = new_y - perp_y * (grid_depth * 3)
+            neg_point = ogr.Geometry(ogr.wkbPoint)
+            neg_point.AddPoint(new_neg_x, new_neg_y)
+            neg_point_distance = concave_point.Distance(neg_point)
+
+            if pos_point_distance > neg_point_distance:
+                new_pos_x = new_neg_x
+                new_pos_y = new_neg_y
+
+            line.AddPoint(new_pos_x, new_pos_y)
+            concave_lines.append(line)
+
+    inter = concave_lines[0].Intersection(concave_lines[1])
+    if inter.GetGeometryType() == ogr.wkbPoint or inter.GetGeometryType() == ogr.wkbPoint25D:
+        out_feat = ogr.Feature(out_layer.GetLayerDefn())
+        out_feat.SetGeometry(inter)
+        out_feat.SetField("block_id", block_id)
+        out_feat.SetField("vertex_id", -1)
+        out_feat.SetField("x", inter.GetX())
+        out_feat.SetField("y", inter.GetY())
+        out_feat.SetField("concave_dist", inter.Distance(concave_point))
+
+    concave_corner_points = []
+    concave_corner_points.append(concave_closest_points[0]["point"])
+    concave_corner_points.append(perp_points[0])
+    concave_corner_points.append(inter)
+    concave_corner_points.append(perp_points[1])
+    concave_corner_points.append(concave_closest_points[1]["point"])
+    concave_corner_points.append(concave_point)
+    concave_corner_points.append(concave_closest_points[0]["point"])
+
+    out_layer = None
+    layer_name = f"205_subdivided_corner_{block_id}"
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == layer_name:
+            out_ds.DeleteLayer(i)
+            break
+    out_layer = out_ds.CreateLayer(layer_name, srs, ogr.wkbPolygon)
+
+    concave_corner_ring = ogr.Geometry(ogr.wkbLinearRing)
+    for pt in concave_corner_points:
+        concave_corner_ring.AddPoint(pt.GetX(), pt.GetY())
+    concave_corner_polygon = ogr.Geometry(ogr.wkbPolygon)
+    concave_corner_polygon.AddGeometry(concave_corner_ring)
+    out_feat = ogr.Feature(out_layer.GetLayerDefn())
+    out_feat.SetGeometry(concave_corner_polygon)
+
+    out_layer.CreateFeature(out_feat)
+    out_feat = None
 
     # Clean up
     out_layer = None
