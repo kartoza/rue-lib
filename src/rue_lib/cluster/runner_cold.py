@@ -5,9 +5,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from rue_lib.cluster.cold.add_on_grid_strips_art_sec_loc import generate_on_grid_strips_art_sec_loc
-from rue_lib.cluster.cold.sub_div_on_grid_corners_convex import subdivide_on_grid_corners_convex
-from rue_lib.cluster.cold.subdiv_at_concave_corner import subdivide_blocks_at_concave_corners
+from osgeo import ogr
+
+from rue_lib.cluster.cold.concave_corner import (
+    find_concave_points,
+    subdivide_blocks_by_concave_points,
+)
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.helpers import convert_polygonz_to_polygon
 from rue_lib.core.definitions import BlockTypes
@@ -33,13 +36,13 @@ def generate_cold(
         input_blocks_layer_name: Name of input blocks layer
         roads_layer_name: Name of roads layer
     """
-    part_art_d = cfg.on_grid_partition_depth_arterial_roads
-    part_sec_d = cfg.on_grid_partition_depth_secondary_roads
-    part_loc_d = cfg.on_grid_partition_depth_local_roads
+    _part_art_d = cfg.on_grid_partition_depth_arterial_roads
+    _part_sec_d = cfg.on_grid_partition_depth_secondary_roads
+    _part_loc_d = cfg.on_grid_partition_depth_local_roads
 
     # TODO:
     #  We use the same width for off-grid and on-grid plots for now.
-    part_og_w = cfg.off_grid_cluster_width
+    _part_og_w = cfg.off_grid_cluster_width
 
     output_path = str(output_gpkg)
     print("==============================================================")
@@ -57,51 +60,309 @@ def generate_cold(
     # Convert from PolygonZ to Polygon
     convert_polygonz_to_polygon(output_path, cold_grid_layer_name)
 
-    cold_grid_subdive_at_concave_layer_name = "201_cold_grid_subdive_at_concave"
-    subdivide_blocks_at_concave_corners(
-        output_path=output_path,
-        input_layer_name=cold_grid_layer_name,
-        output_layer_name=cold_grid_subdive_at_concave_layer_name,
-        roads_layer_name=roads_layer_name,
-    )
-    cold_grid_block_layer_name = "202_cold_block"
-    extract_by_expression(
+    print("\nStep 2: Erase roads buffer from cold grid...")
+    erased_layer_name = "201_cold_grid_erased"
+    erase_roads_from_cold_grid(
         output_path,
-        cold_grid_subdive_at_concave_layer_name,
-        "type = 'block'",
+        cold_grid_layer_name,
+        roads_layer_name,
         output_path,
-        cold_grid_block_layer_name,
-    )
-    cold_grid_block_corner_layer_name = "202_cold_corner"
-    extract_by_expression(
-        output_path,
-        cold_grid_subdive_at_concave_layer_name,
-        "type = 'block_corner'",
-        output_path,
-        cold_grid_block_corner_layer_name,
+        erased_layer_name,
     )
 
-    cold_grid_block_strip_layer_name = "203_cold_block_strip"
-    generate_on_grid_strips_art_sec_loc(
-        output_path=output_path,
-        blocks_layer_name=cold_grid_block_layer_name,
-        roads_layer_name=roads_layer_name,
-        part_art_d=part_art_d,
-        part_sec_d=part_sec_d,
-        part_loc_d=part_loc_d,
-        output_layer_name=cold_grid_block_strip_layer_name,
+    print("\nStep 3: Extract boundary lines adjacent to roads...")
+    boundary_points_layer_name = "202_cold_boundary_points"
+    extract_road_adjacent_vertices(
+        output_path,
+        erased_layer_name,
+        roads_layer_name,
+        output_path,
+        boundary_points_layer_name,
     )
 
-    subdivide_on_grid_corners_convex_layer_name = "204_subdivide_on_grid_corners_convex_layer_name"
-    subdivide_on_grid_corners_convex(
-        output_path=output_path,
-        parts_layer_name=cold_grid_block_strip_layer_name,
-        roads_layer_name=roads_layer_name,
-        part_sec_d=part_sec_d,
-        part_loc_d=part_loc_d,
-        plot_sec_w=part_og_w,
-        plot_loc_w=part_og_w,
-        output_layer_name=subdivide_on_grid_corners_convex_layer_name,
+    print("\nStep 4: Find concave points from boundary...")
+    concave_points_layer_name = "203_concave_points"
+    find_concave_points(
+        output_path,
+        erased_layer_name,
+        boundary_points_layer_name,
+        output_path,
+        concave_points_layer_name,
     )
 
-    return subdivide_on_grid_corners_convex_layer_name
+    print("\nStep 5: Subdivide blocks at concave corners...")
+    cutting_lines_layer_name = "204_subdivided"
+    subdivide_blocks_by_concave_points(
+        output_path,
+        erased_layer_name,
+        concave_points_layer_name,
+        boundary_points_layer_name,
+        output_path,
+        cutting_lines_layer_name,
+        cfg.road_local_width_m,
+    )
+
+    return cold_grid_layer_name
+
+
+def erase_roads_from_cold_grid(
+    input_gpkg: str,
+    cold_grid_layer_name: str,
+    roads_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+) -> str:
+    """
+    Erase roads buffer from cold grid blocks.
+
+    Args:
+        input_gpkg: Path to input GeoPackage
+        cold_grid_layer_name: Name of cold grid layer
+        roads_layer_name: Name of roads buffer layer
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for output erased layer
+
+    Returns:
+        Name of the output layer
+    """
+    # Step 1: Read input data and collect geometries
+    ds = ogr.Open(input_gpkg, 0)
+    if ds is None:
+        raise ValueError(f"Could not open {input_gpkg}")
+
+    cold_layer = ds.GetLayerByName(cold_grid_layer_name)
+    if cold_layer is None:
+        raise ValueError(f"Layer {cold_grid_layer_name} not found")
+
+    roads_layer = ds.GetLayerByName(roads_layer_name)
+    if roads_layer is None:
+        raise ValueError(f"Layer {roads_layer_name} not found")
+
+    # Get SRS and layer definition
+    srs = cold_layer.GetSpatialRef()
+    cold_defn = cold_layer.GetLayerDefn()
+
+    # Collect all road geometries into one union
+    road_union = None
+    for road_feat in roads_layer:
+        road_geom = road_feat.GetGeometryRef()
+        if road_geom:
+            # Fix invalid geometries using Buffer(0)
+            road_geom_fixed = road_geom.Buffer(0)
+            if road_union is None:
+                road_union = road_geom_fixed
+            else:
+                road_union = road_union.Union(road_geom_fixed)
+
+    print(f"  Processing {cold_layer.GetFeatureCount()} cold grid blocks...")
+
+    # Collect cold grid features with geometries
+    cold_features = []
+    for cold_feat in cold_layer:
+        cold_geom = cold_feat.GetGeometryRef()
+        if cold_geom is None:
+            continue
+
+        # Clone geometry and attributes
+        cold_features.append(
+            {
+                "geometry": cold_geom.Clone(),
+                "attributes": {i: cold_feat.GetField(i) for i in range(cold_defn.GetFieldCount())},
+            }
+        )
+
+    # Close the input dataset
+    cold_layer = None
+    roads_layer = None
+    ds = None
+
+    # Step 2: Open for writing and create output
+    out_ds = ogr.Open(output_gpkg, 1)
+    if out_ds is None:
+        raise ValueError(f"Could not open {output_gpkg} for writing")
+
+    # Delete existing layer if it exists
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == output_layer_name:
+            out_ds.DeleteLayer(i)
+            break
+
+    # Create output layer
+    out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
+
+    # Copy fields
+    for i in range(cold_defn.GetFieldCount()):
+        field_defn = cold_defn.GetFieldDefn(i)
+        out_layer.CreateField(field_defn)
+
+    # Process and write features
+    for feat_data in cold_features:
+        cold_geom = feat_data["geometry"]
+
+        # Fix invalid geometry using Buffer(0)
+        cold_geom_fixed = cold_geom.Buffer(0)
+
+        # Erase roads from cold grid block
+        if road_union:
+            try:
+                erased_geom = cold_geom_fixed.Difference(road_union)
+            except RuntimeError as e:
+                print(f"    Warning: Failed to erase roads from block, keeping original: {e}")
+                erased_geom = cold_geom_fixed
+        else:
+            erased_geom = cold_geom_fixed
+
+        if erased_geom and not erased_geom.IsEmpty():
+            # Create output feature
+            out_feat = ogr.Feature(out_layer.GetLayerDefn())
+            out_feat.SetGeometry(erased_geom)
+
+            # Copy attributes
+            for i, value in feat_data["attributes"].items():
+                out_feat.SetField(i, value)
+
+            out_layer.CreateFeature(out_feat)
+            out_feat = None
+
+    # Clean up
+    out_layer = None
+    out_ds = None
+
+    print(f"  Created layer: {output_layer_name}")
+    return output_layer_name
+
+
+def extract_road_adjacent_vertices(
+    input_gpkg: str,
+    erased_grid_layer_name: str,
+    roads_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+) -> str:
+    """
+    Extract vertices from erased cold grid boundary that intersect with roads buffer.
+
+    This function extracts vertices from the ERASED cold grid boundaries,
+    but only keeps vertices that intersect with the roads buffer.
+
+    Args:
+        input_gpkg: Path to input GeoPackage
+        erased_grid_layer_name: Name of erased cold grid layer (after roads removed)
+        roads_layer_name: Name of roads buffer layer
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for output points layer
+
+    Returns:
+        Name of the output layer
+    """
+    # Step 1: Read input data
+    ds = ogr.Open(input_gpkg, 0)
+    if ds is None:
+        raise ValueError(f"Could not open {input_gpkg}")
+
+    grid_layer = ds.GetLayerByName(erased_grid_layer_name)
+    if grid_layer is None:
+        raise ValueError(f"Layer {erased_grid_layer_name} not found")
+
+    roads_layer = ds.GetLayerByName(roads_layer_name)
+    if roads_layer is None:
+        raise ValueError(f"Layer {roads_layer_name} not found")
+
+    # Get SRS
+    srs = grid_layer.GetSpatialRef()
+
+    # Collect all road geometries
+    road_union = None
+    for road_feat in roads_layer:
+        road_geom = road_feat.GetGeometryRef()
+        if road_geom:
+            if road_union is None:
+                road_union = road_geom.Clone()
+            else:
+                road_union = road_union.Union(road_geom)
+
+    print(f"  Processing {grid_layer.GetFeatureCount()} blocks...")
+
+    # Collect vertices to write
+    vertices_to_write = []
+    block_id = 0
+    for grid_feat in grid_layer:
+        block_id += 1
+        grid_geom = grid_feat.GetGeometryRef()
+        if grid_geom is None:
+            continue
+
+        # Get boundary of the polygon
+        boundary = grid_geom.GetBoundary()
+        if boundary is None:
+            continue
+
+        # Extract line segments
+        if boundary.GetGeometryType() == ogr.wkbLineString:
+            lines = [boundary]
+        elif boundary.GetGeometryType() == ogr.wkbMultiLineString:
+            lines = [boundary.GetGeometryRef(i) for i in range(boundary.GetGeometryCount())]
+        else:
+            continue
+
+        # Process each line segment and extract all vertices
+        for line in lines:
+            point_count = line.GetPointCount()
+            for i in range(point_count):
+                x = line.GetX(i)
+                y = line.GetY(i)
+
+                # Create point geometry for this vertex
+                point = ogr.Geometry(ogr.wkbPoint)
+                point.AddPoint(x, y)
+
+                # Check if this vertex intersects with roads buffer
+                if road_union and point.Intersects(road_union):
+                    vertices_to_write.append({"x": x, "y": y, "block_id": block_id, "vertex_id": i})
+
+    # Close input dataset
+    grid_layer = None
+    roads_layer = None
+    ds = None
+
+    # Step 2: Write output
+    out_ds = ogr.Open(output_gpkg, 1)
+    if out_ds is None:
+        raise ValueError(f"Could not open {output_gpkg} for writing")
+
+    # Delete existing layer if it exists
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == output_layer_name:
+            out_ds.DeleteLayer(i)
+            break
+
+    # Create output layer for points
+    out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint)
+
+    # Add fields
+    out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
+
+    # Write vertices
+    for vertex in vertices_to_write:
+        point = ogr.Geometry(ogr.wkbPoint)
+        point.AddPoint(vertex["x"], vertex["y"])
+
+        out_feat = ogr.Feature(out_layer.GetLayerDefn())
+        out_feat.SetGeometry(point)
+        out_feat.SetField("block_id", vertex["block_id"])
+        out_feat.SetField("vertex_id", vertex["vertex_id"])
+
+        out_layer.CreateFeature(out_feat)
+        out_feat = None
+
+    # Clean up
+    out_layer = None
+    out_ds = None
+
+    total_vertices = len(vertices_to_write)
+    print(f"  Extracted {total_vertices} vertices from road-adjacent boundaries")
+    print(f"  Created layer: {output_layer_name}")
+    return output_layer_name
