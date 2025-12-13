@@ -390,3 +390,207 @@ def extract_vertices_from_lines(
 
     print(f"  Created vertices layer: {output_layer_name} ({len(points)} points)")
     return output_layer_name
+
+
+def merge_vertices_into_lines_by_angle(
+    input_gpkg: str,
+    vertices_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    angle_threshold_deg: float = 100.0,
+) -> str:
+    """Build line segments between consecutive vertices and merge them by group.
+
+    Reads a point layer produced by `extract_vertices_from_lines` (must include:
+    `orig_id`, `line_id`, `vertex_idx`, `angle_deg`, and point geometry).
+
+    For each (orig_id, line_id) sequence (sorted by vertex_idx), this function:
+      - Creates a line segment between every consecutive pair of vertices.
+      - Assigns a `group_id` to each segment. The group continues until a "break"
+        happens; a break is when the vertex angle <= angle_threshold_deg.
+      - Merges all segments with the same group_id into a single LineString.
+      - Calculates the total length of each merged line.
+
+    Args:
+        input_gpkg: Path to the GeoPackage containing the vertices layer.
+        vertices_layer_name: Name of the point layer created by `extract_vertices_from_lines`.
+        output_gpkg: Path to the GeoPackage to write the output layer to.
+        output_layer_name: Name of the output line layer to create/replace.
+        angle_threshold_deg: Break threshold; break occurs when vertex angle <= this value.
+
+    Returns:
+        The name of the created output layer.
+
+    Raises:
+        ValueError: If the datasets/layers cannot be opened.
+    """
+    ds = ogr.Open(input_gpkg, 0)
+    if ds is None:
+        raise ValueError(f"Could not open {input_gpkg}")
+
+    v_layer = ds.GetLayerByName(vertices_layer_name)
+    if v_layer is None:
+        raise ValueError(f"Layer {vertices_layer_name} not found")
+
+    srs = v_layer.GetSpatialRef()
+
+    # Field indices
+    defn = v_layer.GetLayerDefn()
+    idx_orig = defn.GetFieldIndex("orig_id")
+    idx_line = defn.GetFieldIndex("line_id")
+    idx_vidx = defn.GetFieldIndex("vertex_idx")
+    idx_ang = defn.GetFieldIndex("angle_deg")
+
+    if idx_orig == -1 or idx_line == -1 or idx_vidx == -1:
+        raise ValueError("Vertices layer must contain fields: orig_id, line_id, vertex_idx")
+
+    # Group vertices by (orig_id, line_id)
+    groups: dict[tuple[int, int], list[dict]] = {}
+
+    for feat in v_layer:
+        geom = feat.GetGeometryRef()
+        if geom is None or geom.IsEmpty():
+            continue
+
+        orig_id = feat.GetField(idx_orig)
+        line_id = feat.GetField(idx_line)
+        vertex_idx = feat.GetField(idx_vidx)
+
+        if orig_id is None or line_id is None or vertex_idx is None:
+            continue
+
+        ang = 0.0
+        if idx_ang != -1:
+            val = feat.GetField(idx_ang)
+            if val is not None:
+                ang = float(val)
+
+        groups.setdefault((int(orig_id), int(line_id)), []).append(
+            {
+                "vertex_idx": int(vertex_idx),
+                "x": float(geom.GetX()),
+                "y": float(geom.GetY()),
+                "angle_deg": float(ang),
+            }
+        )
+
+    ds = None
+
+    # Create segments and assign group IDs
+    segments: list[dict] = []
+    global_group_id = 1
+
+    for (orig_id, line_id), pts in groups.items():
+        pts.sort(key=lambda p: p["vertex_idx"])
+        if len(pts) < 2:
+            continue
+
+        current_group_id = global_group_id
+        last_break = False
+
+        for i in range(len(pts) - 1):
+            a = pts[i]
+            b = pts[i + 1]
+
+            angle_sum = a["angle_deg"] + b["angle_deg"]
+            target_angle = b["angle_deg"]
+            is_break = 1 if target_angle <= angle_threshold_deg else 0
+
+            line = ogr.Geometry(ogr.wkbLineString)
+            line.AddPoint(a["x"], a["y"])
+            line.AddPoint(b["x"], b["y"])
+
+            segments.append(
+                {
+                    "geometry": line,
+                    "orig_id": orig_id,
+                    "line_id": line_id,
+                    "group_id": current_group_id,
+                    "a_vidx": a["vertex_idx"],
+                    "b_vidx": b["vertex_idx"],
+                    "angle_sum": float(angle_sum),
+                    "is_break": is_break,
+                }
+            )
+
+            if is_break:
+                last_break = True
+            if last_break:
+                global_group_id += 1
+                current_group_id = global_group_id
+                last_break = False
+
+        # Move to next group for next line
+        global_group_id += 1
+
+    # Merge segments by group_id
+    grouped_segments: dict[int, list[dict]] = {}
+    for seg in segments:
+        grouped_segments.setdefault(seg["group_id"], []).append(seg)
+
+    merged_lines: list[dict] = []
+    for group_id, segs in grouped_segments.items():
+        # Sort segments by their vertex indices to maintain order
+        segs.sort(key=lambda s: (s["orig_id"], s["line_id"], s["a_vidx"]))
+
+        # Collect all coordinates in order
+        coords = []
+        for seg in segs:
+            geom = seg["geometry"]
+            if not coords:
+                # Add first point of first segment
+                coords.append((geom.GetX(0), geom.GetY(0)))
+            # Add second point of each segment
+            coords.append((geom.GetX(1), geom.GetY(1)))
+
+        # Create merged LineString
+        merged_line = ogr.Geometry(ogr.wkbLineString)
+        for x, y in coords:
+            merged_line.AddPoint(x, y)
+
+        # Calculate total length
+        total_length = merged_line.Length()
+
+        # Get representative values from first segment
+        first_seg = segs[0]
+        merged_lines.append(
+            {
+                "geometry": merged_line,
+                "orig_id": first_seg["orig_id"],
+                "line_id": first_seg["line_id"],
+                "group_id": group_id,
+                "length": total_length,
+                "num_segments": len(segs),
+            }
+        )
+
+    out_ds = ogr.Open(output_gpkg, 1)
+    if out_ds is None:
+        raise ValueError(f"Could not open {output_gpkg} for writing")
+
+    out_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
+    out_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("line_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("group_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("length", ogr.OFTReal))
+    out_layer.CreateField(ogr.FieldDefn("num_segments", ogr.OFTInteger))
+
+    for row in merged_lines:
+        feat = ogr.Feature(out_layer.GetLayerDefn())
+        feat.SetGeometry(row["geometry"])
+        feat.SetField("orig_id", row["orig_id"])
+        feat.SetField("line_id", row["line_id"])
+        feat.SetField("group_id", row["group_id"])
+        feat.SetField("length", row["length"])
+        feat.SetField("num_segments", row["num_segments"])
+        out_layer.CreateFeature(feat)
+        feat = None
+
+    out_layer = None
+    out_ds = None
+
+    print(
+        f"  Created lines layer: {output_layer_name} ({len(segments)} segments merged "
+        f"into {len(merged_lines)} lines)"
+    )
+    return output_layer_name

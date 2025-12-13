@@ -10,6 +10,7 @@ from osgeo import ogr
 from rue_lib.cluster.cold.cluster_on_grid import (
     extract_off_grid_adjacent_lines,
     extract_vertices_from_lines,
+    merge_vertices_into_lines_by_angle,
 )
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
@@ -151,6 +152,14 @@ def generate_cold(
         output_path,
         adjacent_off_grid_lines,
         extract_vertices_layer_name,
+    )
+
+    lines_from_vertices_layer = "209_lines_from_vertices"
+    merge_vertices_into_lines_by_angle(
+        output_path,
+        extract_vertices_layer_name,
+        output_path,
+        lines_from_vertices_layer,
     )
 
     return cold_grid_layer_name
