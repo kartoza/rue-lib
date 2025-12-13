@@ -7,7 +7,16 @@ from pathlib import Path
 
 from osgeo import ogr
 
-from rue_lib.cluster.cold.concave_corner import (
+from rue_lib.cluster.cold.cluster_on_grid import (
+    extract_off_grid_adjacent_lines,
+    extract_vertices_from_lines,
+    merge_vertices_into_lines_by_angle,
+)
+from rue_lib.cluster.cold.expand_roads_buffer import (
+    clip_buffered_lines_to_cold_grid,
+    create_buffered_lines_from_boundary_lines,
+)
+from rue_lib.cluster.cold.subdiv_block import (
     find_concave_points,
     subdivide_blocks_by_concave_points,
 )
@@ -72,12 +81,33 @@ def generate_cold(
 
     print("\nStep 3: Extract boundary lines adjacent to roads...")
     boundary_points_layer_name = "202_cold_boundary_points"
-    extract_road_adjacent_vertices(
+    boundary_points_layer_name, boundary_lines_layer_name = extract_road_adjacent_vertices(
         output_path,
         erased_layer_name,
         roads_layer_name,
         output_path,
         boundary_points_layer_name,
+    )
+
+    print("\nStep 6: Create buffered lines from boundary lines...")
+    buffered_lines_layer_name = "206_buffered_lines"
+    create_buffered_lines_from_boundary_lines(
+        output_path,
+        boundary_lines_layer_name,
+        erased_layer_name,
+        output_path,
+        buffered_lines_layer_name,
+        cfg,
+    )
+
+    print("\nStep 7: Clip buffered lines to cold grid...")
+    clipped_lines_layer_name = "207_clipped_buffered_lines"
+    clip_buffered_lines_to_cold_grid(
+        output_path,
+        buffered_lines_layer_name,
+        erased_layer_name,
+        output_path,
+        clipped_lines_layer_name,
     )
 
     print("\nStep 4: Find concave points from boundary...")
@@ -100,6 +130,36 @@ def generate_cold(
         output_path,
         cutting_lines_layer_name,
         cfg.road_local_width_m,
+        clipped_lines_layer_name,
+    )
+
+    print("\nStep 6: Create cluster on on-grid parts...")
+    off_grid_block = "204_subdivided_blocks_off_grid"
+    on_grid_block = "204_subdivided_blocks_on_grid"
+
+    print("  Extracting off-grid boundaries adjacent to on-grid blocks...")
+    adjacent_off_grid_lines = "205_off_grid_adjacent_lines"
+    extract_off_grid_adjacent_lines(
+        output_path,
+        off_grid_block,
+        on_grid_block,
+        output_path,
+        adjacent_off_grid_lines,
+    )
+
+    extract_vertices_layer_name = "208_off_grid_adjacent_vertices"
+    extract_vertices_from_lines(
+        output_path,
+        adjacent_off_grid_lines,
+        extract_vertices_layer_name,
+    )
+
+    lines_from_vertices_layer = "209_lines_from_vertices"
+    merge_vertices_into_lines_by_angle(
+        output_path,
+        extract_vertices_layer_name,
+        output_path,
+        lines_from_vertices_layer,
     )
 
     return cold_grid_layer_name
@@ -239,24 +299,17 @@ def extract_road_adjacent_vertices(
     roads_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
-) -> str:
+) -> tuple[str, str]:
     """
-    Extract vertices from erased cold grid boundary that intersect with roads buffer.
+    Extract vertices from erased cold grid boundary that intersect with the roads buffer.
 
-    This function extracts vertices from the ERASED cold grid boundaries,
-    but only keeps vertices that intersect with the roads buffer.
-
-    Args:
-        input_gpkg: Path to input GeoPackage
-        erased_grid_layer_name: Name of erased cold grid layer (after roads removed)
-        roads_layer_name: Name of roads buffer layer
-        output_gpkg: Path to output GeoPackage
-        output_layer_name: Name for output points layer
+    Writes both:
+    - A points layer containing the road-adjacent vertices
+    - A lines layer containing the boundary lines that touch the roads buffer
 
     Returns:
-        Name of the output layer
+        (points_layer_name, lines_layer_name)
     """
-    # Step 1: Read input data
     ds = ogr.Open(input_gpkg, 0)
     if ds is None:
         raise ValueError(f"Could not open {input_gpkg}")
@@ -269,23 +322,23 @@ def extract_road_adjacent_vertices(
     if roads_layer is None:
         raise ValueError(f"Layer {roads_layer_name} not found")
 
-    # Get SRS
     srs = grid_layer.GetSpatialRef()
 
-    # Collect all road geometries
-    road_union = None
+    roads_data = []
     for road_feat in roads_layer:
         road_geom = road_feat.GetGeometryRef()
+        road_type = road_feat.GetField("type")
         if road_geom:
-            if road_union is None:
-                road_union = road_geom.Clone()
-            else:
-                road_union = road_union.Union(road_geom)
+            roads_data.append({"geometry": road_geom.Clone(), "type": road_type})
 
     print(f"  Processing {grid_layer.GetFeatureCount()} blocks...")
 
-    # Collect vertices to write
     vertices_to_write = []
+    lines_layer_name = (
+        output_layer_name.replace("points", "lines")
+        if "points" in output_layer_name
+        else f"{output_layer_name}_lines"
+    )
     block_id = 0
     for grid_feat in grid_layer:
         block_id += 1
@@ -293,12 +346,10 @@ def extract_road_adjacent_vertices(
         if grid_geom is None:
             continue
 
-        # Get boundary of the polygon
         boundary = grid_geom.GetBoundary()
         if boundary is None:
             continue
 
-        # Extract line segments
         if boundary.GetGeometryType() == ogr.wkbLineString:
             lines = [boundary]
         elif boundary.GetGeometryType() == ogr.wkbMultiLineString:
@@ -306,46 +357,113 @@ def extract_road_adjacent_vertices(
         else:
             continue
 
-        # Process each line segment and extract all vertices
         for line in lines:
             point_count = line.GetPointCount()
             for i in range(point_count):
                 x = line.GetX(i)
                 y = line.GetY(i)
 
-                # Create point geometry for this vertex
                 point = ogr.Geometry(ogr.wkbPoint)
                 point.AddPoint(x, y)
 
-                # Check if this vertex intersects with roads buffer
-                if road_union and point.Intersects(road_union):
-                    vertices_to_write.append({"x": x, "y": y, "block_id": block_id, "vertex_id": i})
+                for road_data in roads_data:
+                    if point.Buffer(0.1).Intersects(road_data["geometry"]):
+                        vertices_to_write.append(
+                            {
+                                "x": x,
+                                "y": y,
+                                "block_id": block_id,
+                                "vertex_id": i,
+                                "road_type": road_data["type"],
+                            }
+                        )
+                        break
 
-    # Close input dataset
     grid_layer = None
     roads_layer = None
     ds = None
 
-    # Step 2: Write output
+    # Build line segments by connecting adjacent road-touching vertices (per block and road type)
+    lines_to_write = []
+    vertices_grouped: dict[tuple[int, str], list[dict]] = {}
+    for vertex in vertices_to_write:
+        key = (vertex["block_id"], vertex["road_type"])
+        vertices_grouped.setdefault(key, []).append(vertex)
+
+    for (block_id, road_type), verts in vertices_grouped.items():
+        verts_sorted = sorted(verts, key=lambda v: v["vertex_id"])
+        current = []
+        prev_id = None
+
+        def flush(seq, b_id=block_id, r_type=road_type):
+            if len(seq) < 2:
+                return
+            line = ogr.Geometry(ogr.wkbLineString)
+            for pt in seq:
+                line.AddPoint(pt["x"], pt["y"])
+            lines_to_write.append(
+                {
+                    "geometry": line,
+                    "block_id": b_id,
+                    "road_type": r_type,
+                }
+            )
+
+        for v in verts_sorted:
+            if prev_id is None or v["vertex_id"] == prev_id + 1:
+                current.append(v)
+            else:
+                flush(current)
+                current = [v]
+            prev_id = v["vertex_id"]
+
+        flush(current)
+
     out_ds = ogr.Open(output_gpkg, 1)
     if out_ds is None:
         raise ValueError(f"Could not open {output_gpkg} for writing")
 
-    # Delete existing layer if it exists
+    # Delete existing layers if present
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == lines_layer_name:
+            out_ds.DeleteLayer(i)
+            break
+
     for i in range(out_ds.GetLayerCount()):
         layer = out_ds.GetLayerByIndex(i)
         if layer.GetName() == output_layer_name:
             out_ds.DeleteLayer(i)
             break
 
-    # Create output layer for points
+    # Write lines layer
+    lines_layer = out_ds.CreateLayer(lines_layer_name, srs, ogr.wkbLineString)
+    lines_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
+    lines_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
+
+    for line in lines_to_write:
+        out_feat = ogr.Feature(lines_layer.GetLayerDefn())
+        out_feat.SetGeometry(line["geometry"])
+        out_feat.SetField("block_id", line["block_id"])
+        out_feat.SetField("road_type", line["road_type"])
+        lines_layer.CreateFeature(out_feat)
+        out_feat = None
+
+    lines_layer = None
+
+    # Write points layer
+    for i in range(out_ds.GetLayerCount()):
+        layer = out_ds.GetLayerByIndex(i)
+        if layer.GetName() == output_layer_name:
+            out_ds.DeleteLayer(i)
+            break
+
     out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint)
 
-    # Add fields
     out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
     out_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
+    out_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
 
-    # Write vertices
     for vertex in vertices_to_write:
         point = ogr.Geometry(ogr.wkbPoint)
         point.AddPoint(vertex["x"], vertex["y"])
@@ -354,15 +472,17 @@ def extract_road_adjacent_vertices(
         out_feat.SetGeometry(point)
         out_feat.SetField("block_id", vertex["block_id"])
         out_feat.SetField("vertex_id", vertex["vertex_id"])
+        out_feat.SetField("road_type", vertex["road_type"])
 
         out_layer.CreateFeature(out_feat)
         out_feat = None
 
-    # Clean up
     out_layer = None
     out_ds = None
 
     total_vertices = len(vertices_to_write)
+    total_lines = len(lines_to_write)
     print(f"  Extracted {total_vertices} vertices from road-adjacent boundaries")
-    print(f"  Created layer: {output_layer_name}")
-    return output_layer_name
+    print(f"  Created lines layer: {lines_layer_name} ({total_lines} features)")
+    print(f"  Created points layer: {output_layer_name}")
+    return output_layer_name, lines_layer_name
