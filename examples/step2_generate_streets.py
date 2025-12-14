@@ -10,7 +10,7 @@ def main():
     """
 
     config = StreetConfig(
-        parcel_path="outputs/step1_parcels/subsites.geojson",
+        parcel_path="outputs/step1_parcels/parcels.geojson",
         roads_path="data/roads.geojson",
         output_dir="outputs/step2_streets",
         # Neighborhood / public roads

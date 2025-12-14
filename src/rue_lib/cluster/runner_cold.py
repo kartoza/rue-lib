@@ -11,6 +11,7 @@ from rue_lib.cluster.cold.cluster_on_grid import (
     extract_off_grid_adjacent_lines,
     extract_vertices_from_lines,
     merge_vertices_into_lines_by_angle,
+    sample_points_along_front_lines,
 )
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
@@ -160,6 +161,17 @@ def generate_cold(
         extract_vertices_layer_name,
         output_path,
         lines_from_vertices_layer,
+    )
+
+    print("\nStep 7: Create off-grid cold cluster levels from front lines...")
+    cold_clusters_points_layer = "210_off_grid_cold_clusters_points"
+
+    sample_points_along_front_lines(
+        output_path,
+        lines_from_vertices_layer,
+        output_path,
+        cold_clusters_points_layer,
+        width_m=float(cfg.off_grid_cluster_width),
     )
 
     return cold_grid_layer_name
