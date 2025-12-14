@@ -115,7 +115,7 @@ def extract_off_grid_adjacent_lines(
         if shared_boundary is None or shared_boundary.IsEmpty():
             continue
 
-        orig_id_idx = feat.GetFieldIndex("orig_id")
+        orig_id_idx = feat.GetFieldIndex("id")
         orig_id_val = feat.GetField(orig_id_idx) if orig_id_idx != -1 else None
         geom_type = shared_boundary.GetGeometryType()
         if geom_type not in (
@@ -630,6 +630,153 @@ def _pick_longest_line(sh_geom):
     return None
 
 
+def create_perpendicular_lines_from_front_points(
+    input_gpkg: str,
+    points_layer_name: str,
+    front_lines_layer_name: str,
+    off_grid_blocks_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+) -> str:
+    """Create perpendicular lines from sampled front line points, clipped by off-grid blocks.
+
+    For each point in the input layer:
+      1. Creates a perpendicular line extending on both sides of the point
+      2. Clips the line to only keep portions inside the corresponding off-grid block
+      3. The perpendicular direction is based on the front line tangent at that point
+
+    Args:
+        input_gpkg: Path to the GeoPackage containing the points layer.
+        points_layer_name: Name of the points layer (output from sample_points_along_front_lines).
+        front_lines_layer_name: Name of the front lines layer for tangent calculation.
+        off_grid_blocks_layer_name: Name of the off-grid blocks layer to clip by.
+        output_gpkg: Path to the GeoPackage to write the output lines layer.
+        output_layer_name: Name of the output perpendicular lines layer.
+
+    Returns:
+        The name of the created output layer.
+
+    Raises:
+        ValueError: If the datasets/layers cannot be opened.
+    """
+    import geopandas as gpd
+    from shapely.geometry import LineString, Point
+    from shapely.ops import unary_union
+
+    print("\nCreating perpendicular lines from front line points...")
+
+    # Load layers
+    gdf_points = gpd.read_file(input_gpkg, layer=points_layer_name)
+    gdf_lines = gpd.read_file(input_gpkg, layer=front_lines_layer_name)
+    gdf_blocks = gpd.read_file(input_gpkg, layer=off_grid_blocks_layer_name)
+
+    print(f"  Loaded {len(gdf_points)} points")
+    print(f"  Loaded {len(gdf_lines)} front lines")
+    print(f"  Loaded {len(gdf_blocks)} off-grid blocks")
+
+    if gdf_points.empty or gdf_lines.empty or gdf_blocks.empty:
+        print("  Warning: one or more input layers are empty")
+        return output_layer_name
+    lines_by_orig = {}
+    for _, row in gdf_lines.iterrows():
+        orig_id = row.get("orig_id")
+        if orig_id is not None:
+            length = row.get("length", 0)
+            if orig_id not in lines_by_orig or length > lines_by_orig[orig_id]["length"]:
+                lines_by_orig[orig_id] = {"geometry": row.geometry, "length": length}
+
+    blocks_by_orig = {}
+    for _, row in gdf_blocks.iterrows():
+        orig_id = row.get("id")
+        if orig_id is not None:
+            if orig_id not in blocks_by_orig:
+                blocks_by_orig[orig_id] = []
+            blocks_by_orig[orig_id].append(row.geometry)
+
+    merged_blocks = {}
+    for orig_id, geoms in blocks_by_orig.items():
+        merged_blocks[orig_id] = unary_union(geoms)
+
+    perp_lines = []
+    perp_records = []
+
+    for idx, row in gdf_points.iterrows():
+        pt = row.geometry
+        if pt is None or pt.is_empty or not isinstance(pt, Point):
+            continue
+
+        group_id = row.get("group_id")
+
+        line_length = row.get("length", 0)
+        half_length = line_length * 2
+
+        if group_id is None:
+            continue
+        if group_id not in merged_blocks:
+            continue
+        if group_id not in lines_by_orig:
+            continue
+
+        block_geom = merged_blocks[group_id]
+        front_line = lines_by_orig[group_id]["geometry"]
+
+        if block_geom is None or block_geom.is_empty:
+            continue
+        if front_line is None or front_line.is_empty:
+            continue
+
+        param = front_line.project(pt)
+        step = min(1.0, front_line.length * 0.01)
+
+        p0_param = max(0, param - step)
+        p1_param = min(front_line.length, param + step)
+
+        p0 = front_line.interpolate(p0_param)
+        p1 = front_line.interpolate(p1_param)
+        tx = p1.x - p0.x
+        ty = p1.y - p0.y
+        t_norm = math.hypot(tx, ty)
+
+        if t_norm == 0:
+            continue
+
+        tx /= t_norm
+        ty /= t_norm
+
+        nx, ny = -ty, tx
+        x0, y0 = pt.x, pt.y
+        end1_x = x0 + nx * half_length
+        end1_y = y0 + ny * half_length
+        end2_x = x0 - nx * half_length
+        end2_y = y0 - ny * half_length
+
+        raw_line = LineString([(end2_x, end2_y), (x0, y0), (end1_x, end1_y)])
+        clipped = raw_line.intersection(block_geom)
+
+        if clipped.is_empty:
+            continue
+        if clipped.geom_type == "LineString":
+            lines_to_add = [clipped]
+        elif clipped.geom_type == "MultiLineString":
+            lines_to_add = list(clipped.geoms)
+        else:
+            continue
+
+        for line in lines_to_add:
+            if line.length > 0:
+                perp_lines.append(line)
+                perp_records.append({"group_id": group_id, "point_id": row.get("id", idx)})
+
+    if not perp_lines:
+        print("  No perpendicular lines created")
+        return output_layer_name
+
+    gdf_perp = gpd.GeoDataFrame(perp_records, geometry=perp_lines, crs=gdf_points.crs)
+    gdf_perp.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    print(f"  Created {len(perp_lines)} perpendicular lines")
+    return output_layer_name
+
+
 def sample_points_along_front_lines(
     input_gpkg: str,
     front_lines_layer_name: str,
@@ -667,7 +814,7 @@ def sample_points_along_front_lines(
 
     srs = lines_layer.GetSpatialRef()
     line_defn = lines_layer.GetLayerDefn()
-    idx_l_orig = line_defn.GetFieldIndex("line_id")
+    idx_l_orig = line_defn.GetFieldIndex("orig_id")
     idx_l_len = line_defn.GetFieldIndex("length")
     idx_l_group = line_defn.GetFieldIndex("group_id")
 
@@ -713,6 +860,7 @@ def sample_points_along_front_lines(
                     "geometry": ogr_point,
                     "group_id": orig_id,
                     "id": id,
+                    "length": line_data["length"],
                 }
             )
             id += 1
@@ -729,6 +877,7 @@ def sample_points_along_front_lines(
         [
             ("id", ogr.OFTInteger),
             ("group_id", ogr.OFTInteger),
+            ("length", ogr.OFTReal),
         ],
     )
 
@@ -739,6 +888,7 @@ def sample_points_along_front_lines(
             feat.SetGeometry(pt["geometry"])
             feat.SetField("id", pt["id"])
             feat.SetField("group_id", pt["group_id"])
+            feat.SetField("length", pt["length"])
             point_layer.CreateFeature(feat)
             feat = None
         point_layer = None

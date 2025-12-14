@@ -760,17 +760,27 @@ def subdivide_blocks_by_concave_points(
 
         buffered_lines_layer = None
 
-        remaining_layer = out_ds.CreateLayer(off_grid_layer_name, srs, ogr.wkbPolygon)
-        remaining_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
-        remaining_layer.CreateField(ogr.FieldDefn("is_concave", ogr.OFTInteger))
-        remaining_layer.CreateField(ogr.FieldDefn("concave_x", ogr.OFTReal))
-        remaining_layer.CreateField(ogr.FieldDefn("concave_y", ogr.OFTReal))
-        remaining_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
-        remaining_layer.CreateField(ogr.FieldDefn("block_type", ogr.OFTString))
-
+        remaining_layer = create_or_replace_layer(
+            out_ds,
+            off_grid_layer_name,
+            srs,
+            ogr.wkbPolygon,
+            [
+                ("id", ogr.OFTInteger),
+                ("orig_id", ogr.OFTInteger),
+                ("is_concave", ogr.OFTInteger),
+                ("concave_x", ogr.OFTReal),
+                ("concave_y", ogr.OFTReal),
+                ("type", ogr.OFTString),
+                ("block_type", ogr.OFTString),
+            ],
+        )
+        id = 0
         for rem_data in remaining_features:
             feat = ogr.Feature(remaining_layer.GetLayerDefn())
             feat.SetGeometry(rem_data["geometry"])
+            feat.SetField("id", id)
+            id += 1
             feat.SetField("orig_id", rem_data["orig_id"])
             feat.SetField("is_concave", rem_data["is_concave"])
             feat.SetField("type", "off_grid")
