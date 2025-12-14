@@ -8,6 +8,7 @@ from pathlib import Path
 from osgeo import ogr
 
 from rue_lib.cluster.cold.cluster_on_grid import (
+    create_perpendicular_lines_from_front_points,
     extract_off_grid_adjacent_lines,
     extract_vertices_from_lines,
     merge_vertices_into_lines_by_angle,
@@ -163,7 +164,7 @@ def generate_cold(
         lines_from_vertices_layer,
     )
 
-    print("\nStep 7: Create off-grid cold cluster levels from front lines...")
+    print("\nStep 7: Sample points along front lines...")
     cold_clusters_points_layer = "210_off_grid_cold_clusters_points"
 
     sample_points_along_front_lines(
@@ -172,6 +173,18 @@ def generate_cold(
         output_path,
         cold_clusters_points_layer,
         width_m=float(cfg.off_grid_cluster_width),
+    )
+
+    print("\nStep 8: Create perpendicular lines from front line points...")
+    perpendicular_lines_layer = "211_off_grid_perpendicular_lines"
+
+    create_perpendicular_lines_from_front_points(
+        output_path,
+        cold_clusters_points_layer,
+        lines_from_vertices_layer,
+        off_grid_block,
+        output_path,
+        perpendicular_lines_layer,
     )
 
     return cold_grid_layer_name
