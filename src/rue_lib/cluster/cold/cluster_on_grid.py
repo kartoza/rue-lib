@@ -2,7 +2,9 @@ import math
 
 from osgeo import ogr
 from shapely import ops as shapely_ops
+from shapely import wkb as shapely_wkb
 
+from rue_lib.core.geometry_sampling import points_along_line
 from rue_lib.core.helpers import create_or_replace_layer
 
 
@@ -365,13 +367,20 @@ def extract_vertices_from_lines(
     if out_ds is None:
         raise ValueError(f"Could not open {input_gpkg} for writing")
 
-    out_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbPoint)
-    out_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("line_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("vertex_idx", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("x", ogr.OFTReal))
-    out_layer.CreateField(ogr.FieldDefn("y", ogr.OFTReal))
-    out_layer.CreateField(ogr.FieldDefn("angle_deg", ogr.OFTReal))
+    out_layer = create_or_replace_layer(
+        out_ds,
+        output_layer_name,
+        srs,
+        ogr.wkbPoint,
+        [
+            ("orig_id", ogr.OFTInteger),
+            ("line_id", ogr.OFTInteger),
+            ("vertex_idx", ogr.OFTInteger),
+            ("x", ogr.OFTReal),
+            ("y", ogr.OFTReal),
+            ("angle_deg", ogr.OFTReal),
+        ],
+    )
 
     for pt in points:
         out_feat = ogr.Feature(out_layer.GetLayerDefn())
@@ -397,7 +406,7 @@ def merge_vertices_into_lines_by_angle(
     vertices_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
-    angle_threshold_deg: float = 100.0,
+    angle_threshold_deg: float = 140.0,
 ) -> str:
     """Build line segments between consecutive vertices and merge them by group.
 
@@ -568,12 +577,19 @@ def merge_vertices_into_lines_by_angle(
     if out_ds is None:
         raise ValueError(f"Could not open {output_gpkg} for writing")
 
-    out_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
-    out_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("line_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("group_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("length", ogr.OFTReal))
-    out_layer.CreateField(ogr.FieldDefn("num_segments", ogr.OFTInteger))
+    out_layer = create_or_replace_layer(
+        out_ds,
+        output_layer_name,
+        srs,
+        ogr.wkbLineString,
+        [
+            ("orig_id", ogr.OFTInteger),
+            ("line_id", ogr.OFTInteger),
+            ("group_id", ogr.OFTInteger),
+            ("length", ogr.OFTReal),
+            ("num_segments", ogr.OFTInteger),
+        ],
+    )
 
     for row in merged_lines:
         feat = ogr.Feature(out_layer.GetLayerDefn())
@@ -593,4 +609,140 @@ def merge_vertices_into_lines_by_angle(
         f"  Created lines layer: {output_layer_name} ({len(segments)} segments merged "
         f"into {len(merged_lines)} lines)"
     )
+    return output_layer_name
+
+
+def _pick_longest_line(sh_geom):
+    if sh_geom is None or sh_geom.is_empty:
+        return None
+    gt = sh_geom.geom_type
+    if gt == "LineString":
+        return sh_geom
+    if gt == "MultiLineString":
+        return max(list(sh_geom.geoms), key=lambda g: g.length, default=None)
+    if gt == "GeometryCollection":
+        candidates = []
+        for g in sh_geom.geoms:
+            if g.geom_type in ("LineString", "MultiLineString"):
+                candidates.append(_pick_longest_line(g))
+        candidates = [c for c in candidates if c is not None and (not c.is_empty)]
+        return max(candidates, key=lambda g: g.length, default=None)
+    return None
+
+
+def sample_points_along_front_lines(
+    input_gpkg: str,
+    front_lines_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    width_m: float,
+) -> str:
+    """Sample points at regular intervals along the longest front lines.
+
+    For each unique orig_id (line_id) in the input layer, this function:
+      1. Selects the longest line from that group
+      2. Extracts the longest LineString component if the geometry is Multi/Collection
+      3. Samples points along that line at intervals of width_m
+
+    Args:
+        input_gpkg: Path to the GeoPackage containing the front lines layer.
+        front_lines_layer_name: Name of the front lines layer.
+        output_gpkg: Path to the GeoPackage to write the output points layer.
+        output_layer_name: Name of the output point layer to create/replace.
+        width_m: Interval in meters between sampled points along each line.
+
+    Returns:
+        The name of the created output point layer.
+
+    Raises:
+        ValueError: If the datasets/layers cannot be opened.
+    """
+    ds = ogr.Open(input_gpkg, 0)
+    if ds is None:
+        raise ValueError(f"Could not open {input_gpkg}")
+
+    lines_layer = ds.GetLayerByName(front_lines_layer_name)
+    if lines_layer is None:
+        raise ValueError(f"Layer {front_lines_layer_name} not found")
+
+    srs = lines_layer.GetSpatialRef()
+    line_defn = lines_layer.GetLayerDefn()
+    idx_l_orig = line_defn.GetFieldIndex("line_id")
+    idx_l_len = line_defn.GetFieldIndex("length")
+    idx_l_group = line_defn.GetFieldIndex("group_id")
+
+    lines_by_orig: dict[int, dict] = {}
+    for line in lines_layer:
+        geom = line.GetGeometryRef()
+        if geom is None or geom.IsEmpty():
+            continue
+
+        orig_id = line.GetField(idx_l_orig) if idx_l_orig != -1 else line.GetFID()
+        length = line.GetField(idx_l_len) if idx_l_len != -1 else 0.0
+        group_id = line.GetField(idx_l_group) if idx_l_group != -1 else 0
+
+        if orig_id not in lines_by_orig or length > lines_by_orig[orig_id]["length"]:
+            lines_by_orig[orig_id] = {
+                "geometry": geom.Clone(),
+                "orig_id": orig_id,
+                "length": length,
+                "group_id": group_id,
+            }
+
+    points_along_lines = []
+    for orig_id, line_data in lines_by_orig.items():
+        geom = line_data["geometry"]
+
+        longest_line = _pick_longest_line(shapely_wkb.loads(bytes(geom.ExportToWkb())))
+        if longest_line is None or longest_line.is_empty:
+            continue
+
+        points = points_along_line(
+            longest_line.wkt,
+            interval_m=width_m,
+            tail_threshold_m=width_m / 2,
+            include_start=False,
+            include_end=False,
+        )
+
+        id = 0
+        for point in points:
+            ogr_point = ogr.CreateGeometryFromWkb(point.wkb)
+            points_along_lines.append(
+                {
+                    "geometry": ogr_point,
+                    "group_id": orig_id,
+                    "id": id,
+                }
+            )
+            id += 1
+
+    out_ds = ogr.Open(output_gpkg, 1)
+    if out_ds is None:
+        raise ValueError(f"Could not open {output_gpkg} for writing")
+
+    point_layer = create_or_replace_layer(
+        out_ds,
+        f"{output_layer_name}",
+        srs,
+        ogr.wkbPoint,
+        [
+            ("id", ogr.OFTInteger),
+            ("group_id", ogr.OFTInteger),
+        ],
+    )
+
+    if points_along_lines:
+        print(f"  Created {len(points_along_lines)} points along front lines")
+        for pt in points_along_lines:
+            feat = ogr.Feature(point_layer.GetLayerDefn())
+            feat.SetGeometry(pt["geometry"])
+            feat.SetField("id", pt["id"])
+            feat.SetField("group_id", pt["group_id"])
+            point_layer.CreateFeature(feat)
+            feat = None
+        point_layer = None
+
+    out_ds = None
+
     return output_layer_name
