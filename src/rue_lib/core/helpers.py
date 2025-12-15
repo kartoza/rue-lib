@@ -44,7 +44,7 @@ def remove_layer_from_gpkg(gpkg_path: Path, layer_name: str) -> None:
 
 
 def create_or_replace_layer(
-    ds: ogr.DataSource,
+    ds,
     layer_name: str,
     srs: ogr.osr.SpatialReference,
     geom_type: int,
