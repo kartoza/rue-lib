@@ -37,6 +37,9 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    gpkg_path = out_dir / "outputs.gpkg"
+    gpkg_path = str(gpkg_path)
+
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
 
@@ -49,8 +52,6 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         roads_m = roads
     else:
         roads_m = to_metric_crs(roads)
-
-    gpkg_path = cfg.geopackage_path
 
     site_m.to_file(gpkg_path, layer="site", driver="GPKG")
     roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
@@ -89,5 +90,5 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     save_geojson(parcels_final, out_geojson)
 
     print("Generating financial data")
-    FinancialSite(config=cfg, site=site_m, roads_buffer=roads_buf_m)
+    FinancialSite(config=cfg)
     return out_geojson

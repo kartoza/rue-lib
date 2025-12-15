@@ -1,5 +1,7 @@
 # src/rue_lib/streets/financial.py
 
+from pathlib import Path
+
 import geopandas as gpd
 
 from rue_lib.financial import FinancialModel
@@ -17,27 +19,29 @@ class FinancialStreet(FinancialModel):
     road_len_sec_50: float
     road_len_loc_50: float
 
-    def __init__(
-        self,
-        config: StreetConfig,
-        site: gpd.GeoDataFrame,
-        roads: gpd.GeoDataFrame,
-        roads_local: gpd.GeoDataFrame,
-    ):
+    def __init__(self, config: StreetConfig):
         """Initialize a FinancialStreet object."""
+        out_dir = Path(config.output_dir)
+        output_path = out_dir / "outputs.gpkg"
+        output_path = str(output_path)
+
+        site = gpd.read_file(output_path, layer="00_site")
+        roads = gpd.read_file(output_path, layer="00_roads")
+        roads_local = gpd.read_file(output_path, layer="18_local_roads")
+
         # Filter for 100% roads (road_pcent = 100 or road_pcent doesn't exist)
         art_100 = roads[
             (roads["road_type"] == "road_art")
-            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))
-        ]
+            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))]
         sec_100 = roads[
             (roads["road_type"] == "road_sec")
-            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))
-        ]
+            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))]
 
         # Filter for 50% roads
-        art_50 = roads[(roads["road_type"] == "road_art") & (roads["road_pcent"] == 50)]
-        sec_50 = roads[(roads["road_type"] == "road_sec") & (roads["road_pcent"] == 50)]
+        art_50 = roads[
+            (roads["road_type"] == "road_art") & (roads["road_pcent"] == 50)]
+        sec_50 = roads[
+            (roads["road_type"] == "road_sec") & (roads["road_pcent"] == 50)]
 
         # Calculate lengths
         self.road_len_art_100 = art_100.length.sum()

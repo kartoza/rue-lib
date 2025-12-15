@@ -63,8 +63,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
-    site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg)
-    roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg)
+    site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg, layer_name="00_site", is_append_epsg=False)
+    roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False)
 
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(
@@ -305,7 +305,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Exporting local roads from off-grid cells as linework...")
-    local_roads_layer_name = "local_roads"
+    local_roads_layer_name = "18_local_roads"
     polygons_to_lines_layer(
         output_gpkg,
         [
@@ -354,6 +354,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     site_gdf = gpd.read_file(output_path, layer=site_layer_name)
     roads_gdf = gpd.read_file(output_path, layer=roads_layer_name)
     roads_local_gdf = gpd.read_file(output_path, layer=local_roads_layer_name)
-    FinancialStreet(config=cfg, site=site_gdf, roads=roads_gdf, roads_local=roads_local_gdf)
+    FinancialStreet(config=cfg)
 
     return output_gpkg
