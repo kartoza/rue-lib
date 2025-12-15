@@ -1033,6 +1033,7 @@ def create_off_grid_cold_clusters(
     output_layer_name: str,
     perpendicular_lines_layer_name: str = "211_perpendicular_lines",
     buffer_distance: float = 10.0,
+    target_area_m2: float = 5000.0,
 ) -> str:
     """Create cluster polygons by splitting off_grid0 blocks with lines from depth points.
 
@@ -1207,14 +1208,12 @@ def create_off_grid_cold_clusters(
                     print(f"      Error splitting block {block_id} with line: {e}")
                     continue
 
-    # Add remaining unsplit blocks as off_grid1
     for orig_id, block_rows in blocks_by_orig_id.items():
         for block_row in block_rows:
             block_geom = block_row.geometry
             if block_geom.is_empty or block_geom.area <= 0:
                 continue
 
-            # Check if we've already created a cluster with this centroid
             block_centroid = block_geom.centroid
             is_duplicate = False
             for existing_centroid in processed_block_centroids:
@@ -1242,8 +1241,66 @@ def create_off_grid_cold_clusters(
         print("  No clusters created")
         return output_layer_name
 
-    gdf_clusters = gpd.GeoDataFrame(cluster_records, geometry=cluster_polygons, crs=gdf_points.crs)
+    print(f"\n  Merging small off_grid1 clusters (area < {target_area_m2} m²)...")
+    merged_count = 0
+    temp_gdf = gpd.GeoDataFrame(cluster_records, geometry=cluster_polygons, crs=gdf_points.crs)
+
+    small_clusters_mask = (temp_gdf["type"] == "off_grid1") & (
+        temp_gdf["area"] < target_area_m2 * 0.95
+    )
+    small_cluster_indices = temp_gdf[small_clusters_mask].index.tolist()
+
+    small_cluster_indices.sort(key=lambda idx: temp_gdf.loc[idx, "area"])
+
+    print(f"    Found {len(small_cluster_indices)} small off_grid1 clusters to merge")
+
+    merged_away = set()
+
+    for idx in small_cluster_indices:
+        if idx in merged_away:
+            continue
+
+        small_geom = temp_gdf.loc[idx, "geometry"]
+        small_orig_id = temp_gdf.loc[idx, "orig_id"]
+
+        adjacent_indices = []
+        for other_idx in temp_gdf.index:
+            if other_idx == idx or other_idx in merged_away:
+                continue
+            other_geom = temp_gdf.loc[other_idx, "geometry"]
+            if small_geom.touches(other_geom) or small_geom.intersects(other_geom):
+                adjacent_indices.append(other_idx)
+
+        if not adjacent_indices:
+            continue
+
+        best_neighbor_idx = None
+        for adj_idx in adjacent_indices:
+            adj_type = temp_gdf.loc[adj_idx, "type"]
+            adj_orig_id = temp_gdf.loc[adj_idx, "orig_id"]
+            if adj_type == "off_grid1" and adj_orig_id == small_orig_id:
+                best_neighbor_idx = adj_idx
+                break
+
+        if best_neighbor_idx is not None:
+            neighbor_geom = temp_gdf.loc[best_neighbor_idx, "geometry"]
+            merged_geom = unary_union([small_geom, neighbor_geom])
+            merged_area = float(merged_geom.area)
+
+            if merged_area <= target_area_m2 * 1.10:
+                temp_gdf.loc[best_neighbor_idx, "geometry"] = merged_geom
+                temp_gdf.loc[best_neighbor_idx, "area"] = merged_area
+                merged_away.add(idx)
+                merged_count += 1
+
+    if merged_away:
+        temp_gdf = temp_gdf.drop(index=list(merged_away))
+        temp_gdf = temp_gdf.reset_index(drop=True)
+
+    print(f"    Total merged: {merged_count} small clusters")
+
+    gdf_clusters = temp_gdf
     gdf_clusters.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
-    print(f"  Created {len(cluster_polygons)} cluster polygons")
+    print(f"  Created {len(gdf_clusters)} cluster polygons (after merging)")
 
     return output_layer_name

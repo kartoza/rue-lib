@@ -221,6 +221,7 @@ def generate_cold(
         clusters_layer,
         perpendicular_lines_layer,
         buffer_distance=cfg.off_grid_cluster_width * 1.25,
+        target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
     return cold_grid_layer_name
