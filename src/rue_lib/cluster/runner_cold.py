@@ -170,6 +170,7 @@ def generate_cold(
     sample_points_along_front_lines(
         output_path,
         lines_from_vertices_layer,
+        None,
         output_path,
         cold_clusters_points_layer,
         width_m=float(cfg.off_grid_cluster_width),
@@ -185,6 +186,18 @@ def generate_cold(
         off_grid_block,
         output_path,
         perpendicular_lines_layer,
+    )
+
+    print("\nStep 9: Add depth points to perpendicular lines for off-grid clustering...")
+    depth_points_layer = "212_off_grid_depth_points"
+    sample_points_along_front_lines(
+        output_path,
+        perpendicular_lines_layer,
+        cold_clusters_points_layer,
+        output_path,
+        depth_points_layer,
+        width_m=float(cfg.off_grid_cluster_depth),
+        max_depth=1,
     )
 
     return cold_grid_layer_name

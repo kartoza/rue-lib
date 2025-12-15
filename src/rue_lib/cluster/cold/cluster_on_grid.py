@@ -780,23 +780,29 @@ def create_perpendicular_lines_from_front_points(
 def sample_points_along_front_lines(
     input_gpkg: str,
     front_lines_layer_name: str,
+    starting_points_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
     width_m: float,
+    max_depth: bool = None,
 ) -> str:
     """Sample points at regular intervals along the longest front lines.
 
     For each unique orig_id (line_id) in the input layer, this function:
       1. Selects the longest line from that group
       2. Extracts the longest LineString component if the geometry is Multi/Collection
-      3. Samples points along that line at intervals of width_m
+      3. If starting_points_layer_name is provided, starts sampling from that point
+      4. Samples points along that line at intervals of width_m
+      5. If first_point_only is True, only returns the first sampled point
 
     Args:
         input_gpkg: Path to the GeoPackage containing the front lines layer.
         front_lines_layer_name: Name of the front lines layer.
+        starting_points_layer_name: Optional name of starting points layer to begin sampling from.
         output_gpkg: Path to the GeoPackage to write the output points layer.
         output_layer_name: Name of the output point layer to create/replace.
         width_m: Interval in meters between sampled points along each line.
+        first_point_only: If True, only return the first sampled point per line.
 
     Returns:
         The name of the created output point layer.
@@ -804,6 +810,8 @@ def sample_points_along_front_lines(
     Raises:
         ValueError: If the datasets/layers cannot be opened.
     """
+    from shapely.geometry import Point as ShapelyPoint
+
     ds = ogr.Open(input_gpkg, 0)
     if ds is None:
         raise ValueError(f"Could not open {input_gpkg}")
@@ -817,6 +825,29 @@ def sample_points_along_front_lines(
     idx_l_orig = line_defn.GetFieldIndex("orig_id")
     idx_l_len = line_defn.GetFieldIndex("length")
     idx_l_group = line_defn.GetFieldIndex("group_id")
+
+    # Load starting points if provided
+    starting_points_by_id = {}
+    if starting_points_layer_name:
+        starting_points_layer = ds.GetLayerByName(starting_points_layer_name)
+        if starting_points_layer:
+            for feat in starting_points_layer:
+                geom = feat.GetGeometryRef()
+                if geom is None or geom.IsEmpty():
+                    continue
+
+                point_idx = feat.GetFieldIndex("id")
+                point_id = feat.GetField(point_idx) if point_idx != -1 else None
+
+                group_idx = feat.GetFieldIndex("group_id")
+                group_id = feat.GetField(group_idx) if group_idx != -1 else None
+
+                if point_id is not None:
+                    point = ShapelyPoint(geom.GetX(), geom.GetY())
+                    if starting_points_by_id.get(group_id) is None:
+                        starting_points_by_id[group_id] = {}
+                    starting_points_by_id[group_id][point_id] = point
+        print(f"  Loaded {len(starting_points_by_id)} starting points")
 
     lines_by_orig: dict[int, dict] = {}
     for line in lines_layer:
@@ -834,6 +865,9 @@ def sample_points_along_front_lines(
                 "orig_id": orig_id,
                 "length": length,
                 "group_id": group_id,
+                "point_id": line.GetField("point_id")
+                if line.GetFieldIndex("point_id") != -1
+                else None,
             }
 
     points_along_lines = []
@@ -844,16 +878,26 @@ def sample_points_along_front_lines(
         if longest_line is None or longest_line.is_empty:
             continue
 
+        starting_point = None
+        if line_data["group_id"] in starting_points_by_id:
+            if line_data["point_id"] in starting_points_by_id[line_data["group_id"]]:
+                starting_point = starting_points_by_id[line_data["group_id"]][line_data["point_id"]]
+                print(starting_point)
+
         points = points_along_line(
             longest_line.wkt,
             interval_m=width_m,
-            tail_threshold_m=width_m / 2,
-            include_start=False,
-            include_end=False,
+            tail_threshold_m=width_m / 2 if not starting_point else width_m,
+            include_start=starting_point is not None,
+            include_end=starting_point is not None,
+            starting_point=starting_point,
         )
 
         id = 0
         for point in points:
+            if max_depth is not None:
+                if id > max_depth:
+                    break
             ogr_point = ogr.CreateGeometryFromWkb(point.wkb)
             points_along_lines.append(
                 {
