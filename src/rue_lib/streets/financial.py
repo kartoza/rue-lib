@@ -18,25 +18,26 @@ class FinancialStreet(FinancialModel):
     road_len_loc_50: float
 
     def __init__(
-            self, config: StreetConfig,
-            site: gpd.GeoDataFrame,
-            roads: gpd.GeoDataFrame,
-            roads_local: gpd.GeoDataFrame,
+        self,
+        config: StreetConfig,
+        site: gpd.GeoDataFrame,
+        roads: gpd.GeoDataFrame,
+        roads_local: gpd.GeoDataFrame,
     ):
         """Initialize a FinancialStreet object."""
         # Filter for 100% roads (road_pcent = 100 or road_pcent doesn't exist)
         art_100 = roads[
-            (roads['road_type'] == 'road_art') &
-            ((roads['road_pcent'] == 100) | (roads['road_pcent'].isna()))]
+            (roads["road_type"] == "road_art")
+            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))
+        ]
         sec_100 = roads[
-            (roads['road_type'] == 'road_sec') &
-            ((roads['road_pcent'] == 100) | (roads['road_pcent'].isna()))]
+            (roads["road_type"] == "road_sec")
+            & ((roads["road_pcent"] == 100) | (roads["road_pcent"].isna()))
+        ]
 
         # Filter for 50% roads
-        art_50 = roads[
-            (roads['road_type'] == 'road_art') & (roads['road_pcent'] == 50)]
-        sec_50 = roads[
-            (roads['road_type'] == 'road_sec') & (roads['road_pcent'] == 50)]
+        art_50 = roads[(roads["road_type"] == "road_art") & (roads["road_pcent"] == 50)]
+        sec_50 = roads[(roads["road_type"] == "road_sec") & (roads["road_pcent"] == 50)]
 
         # Calculate lengths
         self.road_len_art_100 = art_100.length.sum()

@@ -55,8 +55,7 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     site_m.to_file(gpkg_path, layer="site", driver="GPKG")
     roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
 
-    roads_buf_m = buffer_roads(roads_m, cfg.road_arterial_width_m,
-                               cfg.road_secondary_width_m)
+    roads_buf_m = buffer_roads(roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m)
 
     if not roads_buf_m.empty:
         roads_buf_m.to_file(gpkg_path, layer="roads_buffered", driver="GPKG")

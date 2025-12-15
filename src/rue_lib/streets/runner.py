@@ -4,8 +4,7 @@ from pathlib import Path
 import geopandas as gpd
 from osgeo import gdal, ogr
 
-from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, \
-    reproject_layer
+from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.blocks import generate_on_grid_blocks
 from rue_lib.streets.grids import (
     create_cold_boundaries,
@@ -21,6 +20,7 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_inside_buffer_from_points,
     polygons_to_lines_layer,
 )
+
 from .cell import (
     fix_grid_cells_with_perpendicular_lines,
     merge_small_cells_with_neighbors,
@@ -68,48 +68,43 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(
-        output_path, roads_layer_name, "road_type = 'road_art'", output_path,
-        "04_arterial_roads"
+        output_path, roads_layer_name, "road_type = 'road_art'", output_path, "04_arterial_roads"
     )
 
     print("Step 5: Extracting secondary roads...")
     extract_by_expression(
-        output_path, roads_layer_name, "road_type = 'road_sec'", output_path,
-        "05_secondary_roads"
+        output_path, roads_layer_name, "road_type = 'road_sec'", output_path, "05_secondary_roads"
     )
 
     print("Step 5a: Extracting local roads...")
     extract_by_expression(
-        output_path, roads_layer_name, "road_type = 'road_loc'", output_path,
-        "05_local_roads"
+        output_path, roads_layer_name, "road_type = 'road_loc'", output_path, "05_local_roads"
     )
 
     preferred_depth_on_grid_arterial = (
-            cfg.part_art_d
-            + (
-                        cfg.off_grid_arterial_clusters_depth * cfg.off_grid_cluster_depth)
-            + cfg.road_locals_width_m
-            + cfg.part_loc_d
+        cfg.part_art_d
+        + (cfg.off_grid_arterial_clusters_depth * cfg.off_grid_cluster_depth)
+        + cfg.road_locals_width_m
+        + cfg.part_loc_d
     )
 
     preferred_depth_on_grid_secondary = (
-            cfg.part_sec_d
-            + (
-                        cfg.off_grid_secondary_clusters_depth * cfg.off_grid_cluster_depth)
-            + cfg.road_locals_width_m
-            + cfg.part_loc_d
+        cfg.part_sec_d
+        + (cfg.off_grid_secondary_clusters_depth * cfg.off_grid_cluster_depth)
+        + cfg.road_locals_width_m
+        + cfg.part_loc_d
     )
 
     preferred_depth_off_cluster_grid = (
-            cfg.part_loc_d * 2
-            + (cfg.off_grid_cluster_depth * cfg.off_grid_local_clusters_depth)
-            + cfg.road_locals_width_m
+        cfg.part_loc_d * 2
+        + (cfg.off_grid_cluster_depth * cfg.off_grid_local_clusters_depth)
+        + cfg.road_locals_width_m
     )
 
     preferred_width_off_cluster_grid = (
-            cfg.part_loc_d * 2
-            + (cfg.off_grid_cluster_width * cfg.off_grid_local_clusters_width)
-            + cfg.road_locals_width_m
+        cfg.part_loc_d * 2
+        + (cfg.off_grid_cluster_width * cfg.off_grid_local_clusters_width)
+        + cfg.road_locals_width_m
     )
 
     print("Step 6: Creating arterial road setback zone...")
@@ -165,8 +160,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "13_site_boundary_lines",
     )
 
-    print(
-        "Step 13a: Deriving dead-end boundary lines (site edges minus boundary lines)...")
+    print("Step 13a: Deriving dead-end boundary lines (site edges minus boundary lines)...")
     dead_end_lines_layer = create_dead_end_boundary_lines(
         output_gpkg,
         "09_site_minus_all_setbacks",
@@ -261,8 +255,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
         "13_site_boundary_points",
-        line_length=max(preferred_depth_on_grid_secondary,
-                        preferred_depth_on_grid_arterial) * 1.05,
+        line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
         output_layer_name="13_site_boundary_perp_from_points",
     )
 
@@ -274,8 +267,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "10_setback_clipped_merged",
     )
 
-    print(
-        "Step 16: Creating on-grid cells from merged setbacks and perpendiculars...")
+    print("Step 16: Creating on-grid cells from merged setbacks and perpendiculars...")
     _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
         output_gpkg,
         "10_setback_clipped_merged",
@@ -284,8 +276,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "16_on_grid_cells",
     )
 
-    print(
-        "Step 16a: Classifying on-grid cells by road type (arterial vs secondary)...")
+    print("Step 16a: Classifying on-grid cells by road type (arterial vs secondary)...")
     buffer_layer(
         output_path,
         "04_arterial_roads",
@@ -355,8 +346,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {site_layer}: Site polygon with roads subtracted")
-    print(
-        "  - 17_all_grids_merged: Merged grid cells with grid_type classification")
+    print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
 
@@ -364,9 +354,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     site_gdf = gpd.read_file(output_path, layer=site_layer_name)
     roads_gdf = gpd.read_file(output_path, layer=roads_layer_name)
     roads_local_gdf = gpd.read_file(output_path, layer=local_roads_layer_name)
-    FinancialStreet(
-        config=cfg, site=site_gdf, roads=roads_gdf,
-        roads_local=roads_local_gdf
-    )
+    FinancialStreet(config=cfg, site=site_gdf, roads=roads_gdf, roads_local=roads_local_gdf)
 
     return output_gpkg
