@@ -1,8 +1,11 @@
 import math
 
 from osgeo import ogr
+from shapely import LineString
 from shapely import ops as shapely_ops
 from shapely import wkb as shapely_wkb
+from shapely.ops import split as shapely_split
+from shapely.ops import unary_union
 
 from rue_lib.core.geometry_sampling import points_along_line
 from rue_lib.core.helpers import create_or_replace_layer
@@ -886,7 +889,6 @@ def sample_points_along_front_lines(
         if line_data["group_id"] in starting_points_by_id:
             if line_data["point_id"] in starting_points_by_id[line_data["group_id"]]:
                 starting_point = starting_points_by_id[line_data["group_id"]][line_data["point_id"]]
-                print(starting_point)
 
         points = points_along_line(
             longest_line.wkt,
@@ -943,6 +945,103 @@ def sample_points_along_front_lines(
 
     out_ds = None
 
+    return output_layer_name
+
+
+def create_off_grid_zero_clusters(
+    input_gpkg: str,
+    blocks_layer_name: str,
+    split_lines_layer_name: str,
+    output_layer_name: str,
+) -> str:
+    """Split off-grid blocks by perpendicular lines to create preliminary clusters (off_grid0)."""
+    import geopandas as gpd
+
+    gdf_blocks = gpd.read_file(input_gpkg, layer=blocks_layer_name)
+    gdf_lines = gpd.read_file(input_gpkg, layer=split_lines_layer_name)
+
+    lines_by_group = {}
+    for _, row in gdf_lines.iterrows():
+        group_id = row.get("group_id")
+        if group_id is not None:
+            if group_id not in lines_by_group:
+                lines_by_group[group_id] = []
+            line = row.geometry
+            if isinstance(line, LineString) and len(line.coords) >= 2:
+                coords = list(line.coords)
+                x1, y1 = coords[0]
+                x2, y2 = coords[1]
+                dx, dy = x2 - x1, y2 - y1
+                length = (dx**2 + dy**2) ** 0.5
+                if length > 0:
+                    dx, dy = dx / length, dy / length
+                    new_start = (x1 - dx * 50, y1 - dy * 50)
+                else:
+                    new_start = (x1, y1)
+                x1, y1 = coords[-2]
+                x2, y2 = coords[-1]
+                dx, dy = x2 - x1, y2 - y1
+                length = (dx**2 + dy**2) ** 0.5
+                if length > 0:
+                    dx, dy = dx / length, dy / length
+                    new_end = (x2 + dx * 50, y2 + dy * 50)
+                else:
+                    new_end = (x2, y2)
+
+                extended_line = LineString([new_start] + coords + [new_end])
+                lines_by_group[group_id].append(extended_line)
+            else:
+                lines_by_group[group_id].append(line)
+
+    blocks_by_id = {}
+    for _, row in gdf_blocks.iterrows():
+        block_id = row.get("id")
+        if block_id is not None:
+            if block_id not in blocks_by_id:
+                blocks_by_id[block_id] = []
+            blocks_by_id[block_id].append(row.geometry)
+
+    split_geoms = []
+    records = []
+    cid = 0
+
+    for group_id, line_geoms in lines_by_group.items():
+        if group_id not in blocks_by_id:
+            continue
+        block_geoms = blocks_by_id[group_id]
+        block_union = unary_union(block_geoms)
+
+        if block_union.is_empty:
+            continue
+        lines_union = unary_union(line_geoms)
+
+        try:
+            split_result = shapely_split(block_union, lines_union)
+            if hasattr(split_result, "geoms"):
+                parts_iter = list(split_result.geoms)
+            else:
+                parts_iter = [split_result]
+        except Exception:
+            parts_iter = [block_union]
+        for part in parts_iter:
+            if part.is_empty or part.area <= 0:
+                continue
+            split_geoms.append(part)
+            records.append(
+                {
+                    "id": cid,
+                    "orig_id": group_id,
+                    "type": "off_grid0",
+                    "area": float(part.area),
+                }
+            )
+            cid += 1
+    if not split_geoms:
+        print("  Warning: off_grid0 split produced no polygons")
+        return output_layer_name
+    gdf_out = gpd.GeoDataFrame(records, geometry=split_geoms, crs=gdf_blocks.crs)
+    gdf_out.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
+    print(f"  Created {len(gdf_out)} off_grid0 clusters into {output_layer_name}")
     return output_layer_name
 
 
@@ -1052,6 +1151,7 @@ def create_off_grid_cold_clusters(
     cluster_records = []
     cluster_id = 0
 
+    # Create off_grid1
     for point_id, points in points_by_id.items():
         if point_id == 0:
             continue
@@ -1127,6 +1227,7 @@ def create_off_grid_cold_clusters(
                         "line_id_1": line_id_1,
                         "line_id_2": line_id_2,
                         "area": float(final_cluster.area),
+                        "type": "off_grid1",
                     }
                 )
                 cluster_id += 1
