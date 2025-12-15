@@ -90,5 +90,5 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     save_geojson(parcels_final, out_geojson)
 
     print("Generating financial data")
-    FinancialSite(config=cfg, site=site_m, roads=roads_buf_m)
+    FinancialSite(config=cfg, site=site_m, roads_buffer=roads_buf_m)
     return out_geojson

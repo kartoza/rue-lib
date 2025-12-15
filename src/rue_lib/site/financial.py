@@ -15,10 +15,10 @@ class FinancialSite(FinancialModel):
     def __init__(
             self, config: SiteConfig,
             site: gpd.GeoDataFrame,
-            roads: gpd.GeoDataFrame
+            roads_buffer: gpd.GeoDataFrame
     ):
         """Initialize a Site object."""
         self.site_area_total = site.area.sum()
-        self.site_roads_area = roads.area.sum()
+        self.site_roads_area = roads_buffer.area.sum()
 
         self.save(config.output_dir)
