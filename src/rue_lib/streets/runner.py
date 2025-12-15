@@ -348,4 +348,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
 
+    print("Step 19: Generating financial data")
+
     return output_gpkg
