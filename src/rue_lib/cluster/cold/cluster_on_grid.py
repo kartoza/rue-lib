@@ -1,10 +1,13 @@
 import math
 
 from osgeo import ogr
+from shapely import LineString
 from shapely import ops as shapely_ops
 from shapely import wkb as shapely_wkb
+from shapely.ops import split as shapely_split
+from shapely.ops import unary_union
 
-from rue_lib.core.geometry_sampling import points_along_line
+from rue_lib.core.geometry_sampling import extend_line, points_along_line
 from rue_lib.core.helpers import create_or_replace_layer
 
 
@@ -700,6 +703,7 @@ def create_perpendicular_lines_from_front_points(
     perp_lines = []
     perp_records = []
 
+    id = 0
     for idx, row in gdf_points.iterrows():
         pt = row.geometry
         if pt is None or pt.is_empty or not isinstance(pt, Point):
@@ -761,11 +765,13 @@ def create_perpendicular_lines_from_front_points(
             lines_to_add = list(clipped.geoms)
         else:
             continue
-
         for line in lines_to_add:
             if line.length > 0:
                 perp_lines.append(line)
-                perp_records.append({"group_id": group_id, "point_id": row.get("id", idx)})
+                perp_records.append(
+                    {"group_id": group_id, "point_id": row.get("id", idx), "id": id}
+                )
+                id += 1
 
     if not perp_lines:
         print("  No perpendicular lines created")
@@ -822,6 +828,7 @@ def sample_points_along_front_lines(
 
     srs = lines_layer.GetSpatialRef()
     line_defn = lines_layer.GetLayerDefn()
+    idx_l_id = line_defn.GetFieldIndex("id")
     idx_l_orig = line_defn.GetFieldIndex("orig_id")
     idx_l_len = line_defn.GetFieldIndex("length")
     idx_l_group = line_defn.GetFieldIndex("group_id")
@@ -855,7 +862,7 @@ def sample_points_along_front_lines(
         if geom is None or geom.IsEmpty():
             continue
 
-        orig_id = line.GetField(idx_l_orig) if idx_l_orig != -1 else line.GetFID()
+        orig_id = line.GetField(idx_l_orig) if idx_l_orig != -1 else line.GetField(idx_l_id)
         length = line.GetField(idx_l_len) if idx_l_len != -1 else 0.0
         group_id = line.GetField(idx_l_group) if idx_l_group != -1 else 0
 
@@ -882,7 +889,6 @@ def sample_points_along_front_lines(
         if line_data["group_id"] in starting_points_by_id:
             if line_data["point_id"] in starting_points_by_id[line_data["group_id"]]:
                 starting_point = starting_points_by_id[line_data["group_id"]][line_data["point_id"]]
-                print(starting_point)
 
         points = points_along_line(
             longest_line.wkt,
@@ -938,5 +944,363 @@ def sample_points_along_front_lines(
         point_layer = None
 
     out_ds = None
+
+    return output_layer_name
+
+
+def create_off_grid_zero_clusters(
+    input_gpkg: str,
+    blocks_layer_name: str,
+    split_lines_layer_name: str,
+    output_layer_name: str,
+) -> str:
+    """Split off-grid blocks by perpendicular lines to create preliminary clusters (off_grid0)."""
+    import geopandas as gpd
+
+    gdf_blocks = gpd.read_file(input_gpkg, layer=blocks_layer_name)
+    gdf_lines = gpd.read_file(input_gpkg, layer=split_lines_layer_name)
+
+    lines_by_group = {}
+    for _, row in gdf_lines.iterrows():
+        group_id = row.get("group_id")
+        if group_id is not None:
+            if group_id not in lines_by_group:
+                lines_by_group[group_id] = []
+            line = row.geometry
+            if isinstance(line, LineString):
+                extended_line = extend_line(line, 50)
+                lines_by_group[group_id].append(extended_line)
+            else:
+                lines_by_group[group_id].append(line)
+
+    blocks_by_id = {}
+    for _, row in gdf_blocks.iterrows():
+        block_id = row.get("id")
+        if block_id is not None:
+            if block_id not in blocks_by_id:
+                blocks_by_id[block_id] = []
+            blocks_by_id[block_id].append(row.geometry)
+
+    split_geoms = []
+    records = []
+    cid = 0
+
+    for group_id, line_geoms in lines_by_group.items():
+        if group_id not in blocks_by_id:
+            continue
+        block_geoms = blocks_by_id[group_id]
+        block_union = unary_union(block_geoms)
+
+        if block_union.is_empty:
+            continue
+        lines_union = unary_union(line_geoms)
+
+        try:
+            split_result = shapely_split(block_union, lines_union)
+            if hasattr(split_result, "geoms"):
+                parts_iter = list(split_result.geoms)
+            else:
+                parts_iter = [split_result]
+        except Exception:
+            parts_iter = [block_union]
+        for part in parts_iter:
+            if part.is_empty or part.area <= 0:
+                continue
+            split_geoms.append(part)
+            records.append(
+                {
+                    "id": cid,
+                    "orig_id": group_id,
+                    "type": "off_grid0",
+                    "area": float(part.area),
+                }
+            )
+            cid += 1
+    if not split_geoms:
+        print("  Warning: off_grid0 split produced no polygons")
+        return output_layer_name
+    gdf_out = gpd.GeoDataFrame(records, geometry=split_geoms, crs=gdf_blocks.crs)
+    gdf_out.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
+    print(f"  Created {len(gdf_out)} off_grid0 clusters into {output_layer_name}")
+    return output_layer_name
+
+
+def create_off_grid_cold_clusters(
+    input_gpkg: str,
+    off_grid0_clusters_layer: str,
+    depth_points_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    perpendicular_lines_layer_name: str = "211_perpendicular_lines",
+    buffer_distance: float = 10.0,
+    target_area_m2: float = 5000.0,
+) -> str:
+    """Create cluster polygons by splitting off_grid0 blocks with lines from depth points.
+
+    Args:
+        input_gpkg: Path to the GeoPackage containing input layers.
+        off_grid0_clusters_layer: Name of the off_grid0 clusters layer (213).
+        depth_points_layer_name: Name of depth points layer (212).
+        output_gpkg: Path to the GeoPackage to write the output clusters.
+        output_layer_name: Name of the output cluster layer.
+
+    Returns:
+        The name of the created output layer.
+    """
+    import geopandas as gpd
+    from shapely.geometry import LineString, Point
+
+    print("\nCreating off-grid cold clusters from depth points...")
+
+    # Load layers
+    gdf_blocks = gpd.read_file(input_gpkg, layer=off_grid0_clusters_layer)
+    gdf_points = gpd.read_file(input_gpkg, layer=depth_points_layer_name)
+    gdf_lines = gpd.read_file(input_gpkg, layer=perpendicular_lines_layer_name)
+
+    print(f"  Loaded {len(gdf_blocks)} off_grid0 blocks")
+    print(f"  Loaded {len(gdf_points)} depth points")
+    print(f"  Loaded {len(gdf_lines)} perpendicular lines")
+
+    if gdf_points.empty or gdf_blocks.empty:
+        print("  Warning: one or more input layers are empty")
+        return output_layer_name
+
+    # Create mapping: line id -> line group_id (which is block orig_id)
+    line_id_to_block_id = {}
+    for _, row in gdf_lines.iterrows():
+        line_id = row.get("id")
+        line_group_id = row.get("group_id")
+        if line_id is not None and line_group_id is not None:
+            line_id_to_block_id[line_id] = line_group_id
+
+    print(f"  Created mapping from {len(line_id_to_block_id)} line IDs to block IDs")
+
+    gdf_id1_points = gdf_points[gdf_points["id"] == 1].copy()
+    print(f"  Filtered to {len(gdf_id1_points)} points with id=1")
+
+    gdf_id0_points = gdf_points[gdf_points["id"] == 0].copy()
+
+    points_by_block_id = {}
+    for _, row in gdf_id1_points.iterrows():
+        point_group_id = row.get("group_id")
+        if point_group_id is not None and point_group_id in line_id_to_block_id:
+            block_id = line_id_to_block_id[point_group_id]
+            if block_id not in points_by_block_id:
+                points_by_block_id[block_id] = []
+            points_by_block_id[block_id].append(
+                {
+                    "geometry": row.geometry,
+                    "line_id": point_group_id,
+                    "block_id": block_id,
+                }
+            )
+
+    print(f"  Points grouped by block_id: {sorted(points_by_block_id.keys())}")
+
+    id0_points_by_block_id = {}
+    for _, row in gdf_id0_points.iterrows():
+        point_group_id = row.get("group_id")  # This is the line_id
+        if point_group_id is not None and point_group_id in line_id_to_block_id:
+            block_id = line_id_to_block_id[point_group_id]
+            if block_id not in id0_points_by_block_id:
+                id0_points_by_block_id[block_id] = []
+            id0_points_by_block_id[block_id].append(row.geometry)
+
+    blocks_by_orig_id = {}
+    for _, row in gdf_blocks.iterrows():
+        orig_id = row.get("orig_id")
+        if orig_id is not None:
+            if orig_id not in blocks_by_orig_id:
+                blocks_by_orig_id[orig_id] = []
+            blocks_by_orig_id[orig_id].append(row)
+
+    print(f"  Blocks indexed by orig_id: {sorted(blocks_by_orig_id.keys())}")
+
+    cluster_polygons = []
+    cluster_records = []
+    cluster_id = 0
+
+    processed_block_centroids = []
+
+    print("  Looking for adjacent line_id pairs within each block...")
+    total_pairs = 0
+    for block_id, points_list in points_by_block_id.items():
+        if block_id not in blocks_by_orig_id:
+            print(f"    Block {block_id} not found in blocks layer")
+            continue
+
+        points_list_sorted = sorted(points_list, key=lambda p: p["line_id"])
+
+        for i in range(len(points_list_sorted) - 1):
+            pt1_data = points_list_sorted[i]
+            pt2_data = points_list_sorted[i + 1]
+
+            line_id_1 = pt1_data["line_id"]
+            line_id_2 = pt2_data["line_id"]
+            if line_id_2 - line_id_1 != 1:
+                continue
+
+            total_pairs += 1
+
+            pt1 = pt1_data["geometry"]
+            pt2 = pt2_data["geometry"]
+
+            if not isinstance(pt1, Point) or not isinstance(pt2, Point):
+                continue
+
+            line = LineString([pt1, pt2])
+            split_line = extend_line(line, buffer_distance)
+
+            blocks_to_split = blocks_by_orig_id[block_id]
+
+            for block_row in blocks_to_split:
+                block_geom = block_row.geometry
+                block_orig_id = block_row.get("orig_id")
+
+                try:
+                    split_result = shapely_split(block_geom, split_line)
+                    if hasattr(split_result, "geoms"):
+                        parts = list(split_result.geoms)
+                    else:
+                        parts = [split_result]
+
+                    if len(parts) < 2:
+                        print(f"      Warning: Split did not produce 2+ parts for block {block_id}")
+                        continue
+
+                    if block_orig_id in id0_points_by_block_id:
+                        id0_points = id0_points_by_block_id[block_orig_id]
+                        id0_point = id0_points[0]
+
+                        parts_with_dist = [(part, part.distance(id0_point)) for part in parts]
+                        parts_with_dist.sort(key=lambda x: x[1])
+
+                        for idx, (part, _) in enumerate(parts_with_dist[:2]):
+                            if part.is_empty or part.area <= 0:
+                                continue
+
+                            part_centroid = part.centroid
+                            is_duplicate = False
+                            for existing_centroid in processed_block_centroids:
+                                if part_centroid.distance(existing_centroid) < 0.1:
+                                    is_duplicate = True
+                                    break
+
+                            if is_duplicate:
+                                continue
+
+                            cluster_type = "off_grid1" if idx == 0 else "off_grid2"
+                            cluster_polygons.append(part)
+                            cluster_records.append(
+                                {
+                                    "id": cluster_id,
+                                    "orig_id": block_orig_id,
+                                    "type": cluster_type,
+                                    "area": float(part.area),
+                                }
+                            )
+                            processed_block_centroids.append(part_centroid)
+                            cluster_id += 1
+                            print(f"      Created {cluster_type} cluster (id={cluster_id - 1})")
+                            processed_block_centroids.append(block_geom.centroid)
+
+                except Exception as e:
+                    print(f"      Error splitting block {block_id} with line: {e}")
+                    continue
+
+    for orig_id, block_rows in blocks_by_orig_id.items():
+        for block_row in block_rows:
+            block_geom = block_row.geometry
+            if block_geom.is_empty or block_geom.area <= 0:
+                continue
+
+            block_centroid = block_geom.centroid
+            is_duplicate = False
+            for existing_centroid in processed_block_centroids:
+                if block_centroid.distance(existing_centroid) < 0.1:
+                    is_duplicate = True
+                    break
+
+            if is_duplicate:
+                continue
+
+            cluster_polygons.append(block_geom)
+            cluster_records.append(
+                {
+                    "id": cluster_id,
+                    "orig_id": orig_id,
+                    "type": "off_grid1",
+                    "area": float(block_geom.area),
+                }
+            )
+            processed_block_centroids.append(block_centroid)
+            cluster_id += 1
+            print(f"    Added unsplit block (orig_id={orig_id}) as off_grid1 (id={cluster_id - 1})")
+
+    if not cluster_polygons:
+        print("  No clusters created")
+        return output_layer_name
+
+    print(f"\n  Merging small off_grid1 clusters (area < {target_area_m2} m²)...")
+    merged_count = 0
+    temp_gdf = gpd.GeoDataFrame(cluster_records, geometry=cluster_polygons, crs=gdf_points.crs)
+
+    small_clusters_mask = (temp_gdf["type"] == "off_grid1") & (
+        temp_gdf["area"] < target_area_m2 * 0.95
+    )
+    small_cluster_indices = temp_gdf[small_clusters_mask].index.tolist()
+
+    small_cluster_indices.sort(key=lambda idx: temp_gdf.loc[idx, "area"])
+
+    print(f"    Found {len(small_cluster_indices)} small off_grid1 clusters to merge")
+
+    merged_away = set()
+
+    for idx in small_cluster_indices:
+        if idx in merged_away:
+            continue
+
+        small_geom = temp_gdf.loc[idx, "geometry"]
+        small_orig_id = temp_gdf.loc[idx, "orig_id"]
+
+        adjacent_indices = []
+        for other_idx in temp_gdf.index:
+            if other_idx == idx or other_idx in merged_away:
+                continue
+            other_geom = temp_gdf.loc[other_idx, "geometry"]
+            if small_geom.touches(other_geom) or small_geom.intersects(other_geom):
+                adjacent_indices.append(other_idx)
+
+        if not adjacent_indices:
+            continue
+
+        best_neighbor_idx = None
+        for adj_idx in adjacent_indices:
+            adj_type = temp_gdf.loc[adj_idx, "type"]
+            adj_orig_id = temp_gdf.loc[adj_idx, "orig_id"]
+            if adj_type == "off_grid1" and adj_orig_id == small_orig_id:
+                best_neighbor_idx = adj_idx
+                break
+
+        if best_neighbor_idx is not None:
+            neighbor_geom = temp_gdf.loc[best_neighbor_idx, "geometry"]
+            merged_geom = unary_union([small_geom, neighbor_geom])
+            merged_area = float(merged_geom.area)
+
+            if merged_area <= target_area_m2 * 1.10:
+                temp_gdf.loc[best_neighbor_idx, "geometry"] = merged_geom
+                temp_gdf.loc[best_neighbor_idx, "area"] = merged_area
+                merged_away.add(idx)
+                merged_count += 1
+
+    if merged_away:
+        temp_gdf = temp_gdf.drop(index=list(merged_away))
+        temp_gdf = temp_gdf.reset_index(drop=True)
+
+    print(f"    Total merged: {merged_count} small clusters")
+
+    gdf_clusters = temp_gdf
+    gdf_clusters.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    print(f"  Created {len(gdf_clusters)} cluster polygons (after merging)")
 
     return output_layer_name

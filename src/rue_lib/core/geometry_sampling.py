@@ -9,6 +9,46 @@ from shapely.ops import linemerge
 GeomInput = Union[str, bytes, bytearray, memoryview]
 
 
+def extend_line(line: LineString, extension_m: float) -> LineString:
+    """Extend a LineString by a given distance at both ends.
+
+    Args:
+        line: The LineString to extend
+        extension_m: Distance in meters to extend at each end
+
+    Returns:
+        A new LineString extended by extension_m at both ends
+    """
+    if not isinstance(line, LineString) or len(line.coords) < 2:
+        return line
+
+    coords = list(line.coords)
+
+    # Extend start
+    x1, y1 = coords[0]
+    x2, y2 = coords[1]
+    dx, dy = x2 - x1, y2 - y1
+    length = (dx**2 + dy**2) ** 0.5
+    if length > 0:
+        dx, dy = dx / length, dy / length
+        new_start = (x1 - dx * extension_m, y1 - dy * extension_m)
+    else:
+        new_start = (x1, y1)
+
+    # Extend end
+    x1, y1 = coords[-2]
+    x2, y2 = coords[-1]
+    dx, dy = x2 - x1, y2 - y1
+    length = (dx**2 + dy**2) ** 0.5
+    if length > 0:
+        dx, dy = dx / length, dy / length
+        new_end = (x2 + dx * extension_m, y2 + dy * extension_m)
+    else:
+        new_end = (x2, y2)
+
+    return LineString([new_start] + coords + [new_end])
+
+
 def _load_line_geom(line_wkt_or_wkb: GeomInput) -> LineString | MultiLineString:
     """Load a LineString/MultiLineString from WKT (str) or WKB (bytes / hex str)."""
     if isinstance(line_wkt_or_wkb, (bytes, bytearray, memoryview)):
