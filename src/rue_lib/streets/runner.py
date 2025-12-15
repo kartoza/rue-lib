@@ -1,7 +1,6 @@
 # src/rue_lib/streets/runner.py
 from pathlib import Path
 
-import geopandas as gpd
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
@@ -63,8 +62,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
-    site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg, layer_name="00_site", is_append_epsg=False)
-    roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False)
+    site_layer_name = reproject_layer(
+        cfg.parcel_path, output_path, utm_epsg, layer_name="00_site", is_append_epsg=False
+    )
+    roads_layer_name = reproject_layer(
+        cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False
+    )
 
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(
@@ -351,9 +354,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
 
     print("Step 19: Generating financial data")
-    site_gdf = gpd.read_file(output_path, layer=site_layer_name)
-    roads_gdf = gpd.read_file(output_path, layer=roads_layer_name)
-    roads_local_gdf = gpd.read_file(output_path, layer=local_roads_layer_name)
     FinancialStreet(config=cfg)
 
     return output_gpkg

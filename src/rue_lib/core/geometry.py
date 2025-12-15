@@ -200,9 +200,7 @@ def get_utm_zone_from_layer(layer):
     return epsg_code
 
 
-def reproject_layer(
-        input_path, output_path, target_epsg, layer_name=None, is_append_epsg=True
-):
+def reproject_layer(input_path, output_path, target_epsg, layer_name=None, is_append_epsg=True):
     """Reproject a vector layer to a target CRS using GDAL/OGR.
 
     Args:
