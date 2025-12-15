@@ -215,12 +215,12 @@ def generate_cold(
     clusters_layer = "214_off_grid_cold_clusters"
     create_off_grid_cold_clusters(
         output_path,
-        off_grid_block,
-        perpendicular_lines_layer,
+        off_grid0_layer,
         depth_points_layer,
-        cold_clusters_points_layer,
         output_path,
         clusters_layer,
+        perpendicular_lines_layer,
+        buffer_distance=cfg.off_grid_cluster_width * 1.25,
     )
 
     return cold_grid_layer_name
