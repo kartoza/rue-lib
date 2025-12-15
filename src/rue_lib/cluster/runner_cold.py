@@ -20,6 +20,7 @@ from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
 )
+from rue_lib.cluster.cold.subdiv_at_convex_corner import find_convex_points
 from rue_lib.cluster.cold.subdiv_block import (
     find_concave_points,
     subdivide_blocks_by_concave_points,
@@ -164,6 +165,15 @@ def generate_cold(
         extract_vertices_layer_name,
         output_path,
         lines_from_vertices_layer,
+    )
+
+    print("\nStep 6b: Find convex points from boundary...")
+    convex_points_layer_name = "208b_convex_points"
+    find_convex_points(
+        output_path,
+        extract_vertices_layer_name,
+        output_path,
+        convex_points_layer_name,
     )
 
     print("\nStep 7: Sample points along front lines...")
