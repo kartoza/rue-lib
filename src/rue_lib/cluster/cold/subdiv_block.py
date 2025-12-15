@@ -464,7 +464,7 @@ def subdivide_blocks_by_concave_points(
 
             if direction1_x is not None:
                 current_length = 1.0
-                while current_length < 200.0:
+                while current_length < 1000.0:
                     test_line = ogr.Geometry(ogr.wkbLineString)
                     test_line.AddPoint(offset1_x, offset1_y)
                     test_line.AddPoint(
@@ -477,7 +477,6 @@ def subdivide_blocks_by_concave_points(
 
                     current_length += 5.0
 
-                # Create final line
                 line1 = ogr.Geometry(ogr.wkbLineString)
                 line1.AddPoint(offset1_x, offset1_y)
                 line1.AddPoint(
