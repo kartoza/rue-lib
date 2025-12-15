@@ -782,7 +782,7 @@ def subdivide_blocks_by_concave_points(
             id += 1
             feat.SetField("orig_id", rem_data["orig_id"])
             feat.SetField("is_concave", rem_data["is_concave"])
-            feat.SetField("type", "off_grid")
+            feat.SetField("type", "concave_corner" if rem_data["is_concave"] else "off_grid")
             feat.SetField("block_type", rem_data["block_type"])
 
             if rem_data["concave_x"] is not None:
