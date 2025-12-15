@@ -15,12 +15,17 @@ from rue_lib.cluster.cold.cluster_on_grid import (
     extract_vertices_from_lines,
     merge_vertices_into_lines_by_angle,
     sample_points_along_front_lines,
+    subtract_cold_clusters_from_off_grid_blocks,
 )
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
 )
-from rue_lib.cluster.cold.subdiv_at_convex_corner import find_convex_points
+from rue_lib.cluster.cold.subdiv_at_convex_corner import (
+    create_clusters_from_convex_points,
+    find_convex_points,
+    subtract_convex_clusters_from_blocks,
+)
 from rue_lib.cluster.cold.subdiv_block import (
     find_concave_points,
     subdivide_blocks_by_concave_points,
@@ -176,6 +181,31 @@ def generate_cold(
         convex_points_layer_name,
     )
 
+    print("\nStep 6c: Create clusters from convex points...")
+    convex_clusters_layer = "208c_convex_clusters"
+    max_partition_depth = max(
+        cfg.on_grid_partition_depth_arterial_roads,
+        cfg.on_grid_partition_depth_secondary_roads,
+    )
+    create_clusters_from_convex_points(
+        output_path,
+        convex_points_layer_name,
+        on_grid_block,
+        output_path,
+        convex_clusters_layer,
+        max_partition_depth,
+    )
+
+    print("\nStep 6d: Subtract convex clusters from blocks to create loc_loc clusters...")
+    loc_loc_clusters_layer = "208d_loc_loc_clusters"
+    subtract_convex_clusters_from_blocks(
+        output_path,
+        on_grid_block,
+        convex_clusters_layer,
+        output_path,
+        loc_loc_clusters_layer,
+    )
+
     print("\nStep 7: Sample points along front lines...")
     cold_clusters_points_layer = "210_off_grid_cold_clusters_points"
 
@@ -232,6 +262,16 @@ def generate_cold(
         perpendicular_lines_layer,
         buffer_distance=cfg.off_grid_cluster_width * 1.25,
         target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
+    )
+
+    print("\nStep 12: Subtract cold clusters from off-grid blocks to create loc_loc clusters...")
+    off_grid_loc_loc_layer = "215_off_grid_loc_loc_clusters"
+    subtract_cold_clusters_from_off_grid_blocks(
+        output_path,
+        off_grid_block,
+        clusters_layer,
+        output_path,
+        off_grid_loc_loc_layer,
     )
 
     return cold_grid_layer_name
