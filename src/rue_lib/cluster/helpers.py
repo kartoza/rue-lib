@@ -5,9 +5,10 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
+from osgeo import ogr
 from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
-from rue_lib.core.definitions import PropertyKeys, RoadTypes
+from rue_lib.core.definitions import BlockTypes, ClusterTypes, PropertyKeys, RoadTypes
 
 
 def compute_angle_dot(polygon: Polygon, vertex_idx: int) -> float:
@@ -241,3 +242,80 @@ def convert_polygonz_to_polygon(gpkg_path: str, layer_name: str):
 
     # Save back to the same layer (overwrite)
     gdf.to_file(gpkg_path, layer=layer_name, driver="GPKG")
+
+
+def assign_cluster_type(gpkg_path: str, block_layer_name: str, final_layer_name: str):
+    """
+    Assign cluster_type from block layer to final layer based on geometry match.
+
+    For each feature in final layer, finds matching feature in block layer
+    and assigns its type as cluster_type.
+
+    Args:
+        gpkg_path: Path to GeoPackage containing the layers
+        block_layer_name: Name of the layer containing block types
+        final_layer_name: Name of the final layer to update with cluster_type
+    """
+    print(f"Assigning cluster types from {block_layer_name} to {final_layer_name}...")
+
+    # Open the GeoPackage for reading and writing
+    ds = ogr.Open(gpkg_path, 1)
+    if ds is None:
+        raise ValueError(f"Could not open {gpkg_path} for writing")
+
+    final_layer = ds.GetLayerByName(final_layer_name)
+    if final_layer is None:
+        raise ValueError(f"Layer {final_layer_name} not found")
+
+    block_layer = ds.GetLayerByName(block_layer_name)
+    if block_layer is None:
+        raise ValueError(f"Layer {block_layer_name} not found")
+
+    # Create cluster_type field if it doesn't exist
+    layer_defn = final_layer.GetLayerDefn()
+    if layer_defn.GetFieldIndex("cluster_type") == -1:
+        final_layer.CreateField(ogr.FieldDefn("cluster_type", ogr.OFTString))
+        print("  Created cluster_type field")
+
+    updated_count = 0
+
+    # Loop through final layer
+    for final_feat in final_layer:
+        final_geom = final_feat.GetGeometryRef()
+        if final_geom is None:
+            continue
+
+        # Find matching feature in block layer by centroid
+        final_geom_centroid = final_geom.Centroid()
+        block_layer.SetSpatialFilter(final_geom_centroid)
+        block_type = None
+        for block_feat in block_layer:
+            block_geom = block_feat.GetGeometryRef()
+
+            # Check if final geometry centroid is within block geometry
+            if block_geom and final_geom_centroid.Within(block_geom):
+                block_type = block_feat.GetField("type")
+                break
+
+        block_layer.ResetReading()
+
+        # Assign cluster_type if found
+        if block_type is not None:
+            # Collect off-grid part
+            if block_type == BlockTypes.ON_GRID_ART:
+                block_type = ClusterTypes.ON_GRID_ART
+            elif block_type == BlockTypes.ON_GRID_SEC:
+                block_type = ClusterTypes.ON_GRID_SEC
+            elif block_type == BlockTypes.OFF_GRID:
+                block_type = ClusterTypes.ON_GRID_LOC
+
+            final_feat.SetField("cluster_type", block_type)
+            final_layer.SetFeature(final_feat)
+            updated_count += 1
+
+    print(f"  Updated {updated_count} features with cluster_type")
+
+    # Clean up
+    ds = None
+
+    print(f"Cluster type assignment completed for layer: {final_layer_name}")

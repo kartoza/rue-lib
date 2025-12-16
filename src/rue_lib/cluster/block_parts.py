@@ -611,3 +611,8 @@ def extract_block_parts_from_off_grid(
     gdf_out.to_file(output_path, layer=output_sides_layer_name, driver="GPKG")
     gdf_out = gpd.GeoDataFrame(all_off_grid_parts, crs=warm_grid_layer.crs)
     gdf_out.to_file(output_path, layer=output_off_grid_layer_name, driver="GPKG")
+
+    warm_grid_layer = None
+    off_grids_inner_layer = None
+    off_grid_frame_layer = None
+    roads_layer = None
