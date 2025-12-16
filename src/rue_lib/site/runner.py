@@ -86,9 +86,15 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         parcels_exploded.to_crs(4326) if not parcels_exploded.empty else parcels_exploded
     )
 
-    out_geojson = out_dir / "parcels.geojson"
+    out_geojson = out_dir / "outputs.geojson"
     save_geojson(parcels_final, out_geojson)
+
+    roads_buf_m = roads_buf_m.to_crs(4326) if not roads_buf_m.empty else roads_buf_m
+
+    out_geojson = out_dir / "roads.geojson"
+    save_geojson(roads_buf_m, out_geojson)
 
     print("Generating financial data")
     FinancialSite(config=cfg)
+
     return out_geojson

@@ -10,7 +10,7 @@ def main():
 
     config = ClusterConfig(
         roads_path="data/roads.geojson",
-        input_path="outputs/step2_streets/all_grids_merged.geojson",
+        input_path="outputs/step2_streets/outputs.geojson",
         output_dir="outputs/step3_clusters",
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,

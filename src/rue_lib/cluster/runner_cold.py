@@ -8,6 +8,8 @@ from pathlib import Path
 from osgeo import ogr
 
 from rue_lib.cluster.cold.cluster_on_grid import (
+    create_off_grid_cold_clusters,
+    create_off_grid_zero_clusters,
     create_perpendicular_lines_from_front_points,
     extract_off_grid_adjacent_lines,
     extract_vertices_from_lines,
@@ -131,7 +133,7 @@ def generate_cold(
         boundary_points_layer_name,
         output_path,
         cutting_lines_layer_name,
-        cfg.road_local_width_m,
+        cfg.road_local_width_m / 2.0,
         clipped_lines_layer_name,
     )
 
@@ -170,6 +172,7 @@ def generate_cold(
     sample_points_along_front_lines(
         output_path,
         lines_from_vertices_layer,
+        None,
         output_path,
         cold_clusters_points_layer,
         width_m=float(cfg.off_grid_cluster_width),
@@ -185,6 +188,40 @@ def generate_cold(
         off_grid_block,
         output_path,
         perpendicular_lines_layer,
+    )
+
+    print("\nStep 10: Add depth points to perpendicular lines for off-grid clustering...")
+    depth_points_layer = "212_off_grid_depth_points"
+    sample_points_along_front_lines(
+        output_path,
+        perpendicular_lines_layer,
+        cold_clusters_points_layer,
+        output_path,
+        depth_points_layer,
+        width_m=float(cfg.off_grid_cluster_depth),
+        max_depth=1,
+    )
+
+    print("\nStep 9: Split off-grid blocks into preliminary clusters (off_grid0)...")
+    off_grid0_layer = "213_off_grid0_clusters"
+    create_off_grid_zero_clusters(
+        output_path,
+        off_grid_block,
+        perpendicular_lines_layer,
+        off_grid0_layer,
+    )
+
+    print("\nStep 11: Create cluster polygons from depth points...")
+    clusters_layer = "214_off_grid_cold_clusters"
+    create_off_grid_cold_clusters(
+        output_path,
+        off_grid0_layer,
+        depth_points_layer,
+        output_path,
+        clusters_layer,
+        perpendicular_lines_layer,
+        buffer_distance=cfg.off_grid_cluster_width * 1.25,
+        target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
     return cold_grid_layer_name

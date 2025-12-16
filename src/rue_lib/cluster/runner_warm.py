@@ -40,7 +40,7 @@ def generate_warm(
     part_loc_d = cfg.on_grid_partition_depth_local_roads
 
     part_og_w = cfg.off_grid_cluster_width
-    part_og_d = cfg.off_grid_cluster_width
+    part_og_d = cfg.off_grid_cluster_depth
 
     output_path = str(output_gpkg)
     print("==============================================================")
