@@ -228,6 +228,8 @@ def create_clusters_from_convex_points(
     for split_lines in split_lines_by_convex:
         split_lines_data = split_lines_by_convex[split_lines]
         block_geom = blocks_by_id[split_lines_data["block_id"]]
+        if "line2" not in split_lines_data:
+            continue
         try:
             lines_union = unary_union([split_lines_data["line0"], split_lines_data["line2"]])
             split_result = shapely_split(block_geom, lines_union)
@@ -276,7 +278,6 @@ def create_clusters_from_convex_points(
 
     if not cluster_polygons:
         print("  No clusters created")
-        return output_layer_name
 
     gdf_clusters = gpd.GeoDataFrame(cluster_records, geometry=cluster_polygons, crs=gdf_blocks.crs)
 

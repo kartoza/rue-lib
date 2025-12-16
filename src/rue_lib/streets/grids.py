@@ -912,8 +912,7 @@ def create_cold_boundaries(
     output_path: Path,
     subsites_layer: str,
     off_grid_cells_layer: str,
-    arterial_setback_layer: str,
-    secondary_setback_layer: str,
+    on_grid_cells_layer: str,
     output_layer_name: str,
 ) -> str:
     """Create cold boundaries by erasing subsites from grid cells and setback areas.
@@ -942,35 +941,15 @@ def create_cold_boundaries(
 
     gdf_subsites = gpd.read_file(output_path, layer=subsites_layer)
     gdf_off_grid = gpd.read_file(output_path, layer=off_grid_cells_layer)
-    gdf_arterial_setback = gpd.read_file(output_path, layer=arterial_setback_layer)
-    gdf_secondary_setback = gpd.read_file(output_path, layer=secondary_setback_layer)
+    gdf_on_grid = gpd.read_file(output_path, layer=on_grid_cells_layer)
 
-    print(f"  Loaded {len(gdf_subsites)} subsite(s)")
-    print(f"  Loaded {len(gdf_off_grid)} off-grid cells")
-    print(f"  Loaded {len(gdf_arterial_setback)} arterial setback polygon(s)")
-    print(f"  Loaded {len(gdf_secondary_setback)} secondary setback polygon(s)")
-
-    if gdf_subsites.empty:
-        print("  Warning: No subsites found")
-        return None
-
-    subsites_union = gdf_subsites.geometry.unary_union
-    print("  Merged subsites into unified geometry")
+    subsites_union = unary_union(gdf_subsites.geometry)
 
     layers_to_erase = []
-    gap_fill_buffer = 1.0
+    gap_fill_buffer = 1
 
-    if not gdf_off_grid.empty:
-        layers_to_erase.append(gdf_off_grid.geometry.unary_union)
-        print("  Added off-grid cells to erase list")
-
-    if not gdf_arterial_setback.empty:
-        layers_to_erase.append(gdf_arterial_setback.geometry.unary_union)
-        print("  Added arterial setback to erase list")
-
-    if not gdf_secondary_setback.empty:
-        layers_to_erase.append(gdf_secondary_setback.geometry.unary_union)
-        print("  Added secondary setback to erase list")
+    layers_to_erase.append(unary_union(gdf_off_grid.geometry).buffer(0.0001))
+    layers_to_erase.append(unary_union(gdf_on_grid.geometry).buffer(0.0001))
 
     if not layers_to_erase:
         print("  Warning: No layers to erase, returning subsites as cold boundaries")
@@ -986,20 +965,21 @@ def create_cold_boundaries(
         cold_result = subsites_union.difference(erase_final)
         print("  Erased development areas from subsites")
 
-    # Handle the result geometry
     if cold_result.is_empty:
         print("  Warning: No cold boundaries remain after erase operation")
         return None
 
+    cold_polygons = []
     if cold_result.geom_type == "Polygon":
         cold_polygons = [cold_result]
     elif cold_result.geom_type == "MultiPolygon":
         cold_polygons = list(cold_result.geoms)
-    else:
-        print(f"  Warning: Unexpected geometry type: {cold_result.geom_type}")
-        return None
+    elif cold_result.geom_type == "GeometryCollection":
+        cold_polygons = [geom for geom in cold_result.geoms if geom.geom_type == "Polygon"]
 
-    print(f"  Created {len(cold_polygons)} initial cold boundary polygon(s)")
+    if not cold_polygons:
+        print("  Warning: No polygon geometries found in cold boundaries")
+        return None
 
     cold_boundaries = []
     cold_attrs = []

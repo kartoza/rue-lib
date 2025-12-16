@@ -35,6 +35,8 @@ def merge_and_classify_on_grid_clusters(
     print(f"  Loaded {len(gdf_convex)} convex corner clusters")
 
     if gdf_blocks.empty or gdf_convex.empty:
+        gdf_result = gpd.GeoDataFrame([], geometry=[], crs=gdf_blocks.crs)
+        gdf_result.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     convex_by_block = {}
