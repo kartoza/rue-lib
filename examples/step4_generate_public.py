@@ -1,5 +1,6 @@
 # examples/step4_generate_public.py
 
+from rue_lib.config import MainConfig
 from rue_lib.public import PublicConfig, generate_public
 
 
@@ -12,10 +13,10 @@ def main():
 
     config = PublicConfig(
         site_path="outputs/step1_parcels/parcels.geojson",
-        input_path="outputs/step3_clusters/outputs.gpkg",
+        input_path="outputs/step3_clusters/outputs.geojson",
         output_dir="outputs/step4_public",
-        open_percent=6.0,
-        amen_percent=5.0,
+        open_percent=MainConfig.open_percent,
+        amen_percent=MainConfig.amen_percent,
     )
 
     print("=" * 60)
