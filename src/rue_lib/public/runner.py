@@ -20,10 +20,6 @@ def generate_public(cfg: PublicConfig) -> Path:
     Returns:
         Path to output file
     """
-    print("Step 19: Generating financial data")
-    FinancialPublic(config=cfg)
-    return
-
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
