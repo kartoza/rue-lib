@@ -1,4 +1,5 @@
 import geopandas as gpd
+import pandas as pd
 from shapely.ops import unary_union
 
 
@@ -224,5 +225,55 @@ def merge_and_classify_off_grid_clusters(
     gdf_result = gpd.GeoDataFrame(result_records, geometry=result_polygons, crs=gdf_blocks.crs)
     gdf_result.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
     print(f"  Created {len(gdf_result)} loc_loc clusters from off-grid blocks")
+
+    return output_layer_name
+
+
+def merge_final_cold_clusters(
+    input_gpkg: str,
+    on_grid_clusters_layer_name: str,
+    off_grid_clusters_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+) -> str:
+    """
+    Merge final on-grid and off-grid cold clusters into a single layer.
+
+    Args:
+        input_gpkg: Path to input GeoPackage
+        on_grid_clusters_layer_name: Name of the on-grid clusters layer
+        off_grid_clusters_layer_name: Name of the off-grid clusters layer
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for merged output layer
+
+    Returns:
+        Name of the output layer
+    """
+    print("\nMerging final on-grid and off-grid cold clusters...")
+
+    # Load both layers
+    gdf_on_grid = gpd.read_file(input_gpkg, layer=on_grid_clusters_layer_name)
+    gdf_off_grid = gpd.read_file(input_gpkg, layer=off_grid_clusters_layer_name)
+
+    print(f"  Loaded {len(gdf_on_grid)} on-grid clusters")
+    print(f"  Loaded {len(gdf_off_grid)} off-grid clusters")
+
+    if gdf_on_grid.empty and gdf_off_grid.empty:
+        print("  Warning: both input layers are empty")
+        return output_layer_name
+
+    if gdf_on_grid.empty:
+        gdf_merged = gdf_off_grid.copy()
+    elif gdf_off_grid.empty:
+        gdf_merged = gdf_on_grid.copy()
+    else:
+        gdf_merged = gpd.GeoDataFrame(
+            pd.concat([gdf_on_grid, gdf_off_grid], ignore_index=True),
+            crs=gdf_on_grid.crs,
+        )
+
+    gdf_merged["id"] = range(len(gdf_merged))
+    gdf_merged.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    print(f"  Created {len(gdf_merged)} total cold clusters")
 
     return output_layer_name

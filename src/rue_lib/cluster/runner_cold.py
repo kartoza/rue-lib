@@ -19,6 +19,7 @@ from rue_lib.cluster.cold.cluster_on_grid import (
 from rue_lib.cluster.cold.clusters import (
     merge_and_classify_off_grid_clusters,
     merge_and_classify_on_grid_clusters,
+    merge_final_cold_clusters,
 )
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
@@ -277,7 +278,17 @@ def generate_cold(
         on_grid_final_layer,
     )
 
-    return cold_grid_layer_name
+    print("\nStep 14: Merge final on-grid and off-grid cold clusters...")
+    final_clusters_layer = "217_final_cold_clusters"
+    merge_final_cold_clusters(
+        output_path,
+        on_grid_final_layer,
+        off_grid_final_layer,
+        output_path,
+        final_clusters_layer,
+    )
+
+    return final_clusters_layer
 
 
 def erase_roads_from_cold_grid(
