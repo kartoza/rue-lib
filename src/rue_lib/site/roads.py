@@ -33,7 +33,10 @@ def buffer_geometry(geom_wkt: str, distance: float, cap_style: int = 2, join_sty
 
 
 def buffer_roads(
-    roads_m: gpd.GeoDataFrame, road_arterial_width_m: float = 16, road_secondary_width_m: float = 10
+    roads_m: gpd.GeoDataFrame,
+    road_arterial_width_m: float = 16,
+    road_secondary_width_m: float = 10,
+    road_type_key: str = "type",
 ) -> gpd.GeoDataFrame:
     """
     Create road corridors as polygons.
@@ -46,11 +49,11 @@ def buffer_roads(
     Returns:
         Buffered road polygons
     """
-    if "type" not in roads_m.columns:
-        roads_m["type"] = None
+    if road_type_key not in roads_m.columns:
+        roads_m[road_type_key] = None
 
-    art = roads_m[roads_m["type"] == "road_art"].copy()
-    sec = roads_m[roads_m["type"].isin(["road_sec", "road_sec_new"])].copy()
+    art = roads_m[roads_m[road_type_key] == "road_art"].copy()
+    sec = roads_m[roads_m[road_type_key].isin(["road_sec", "road_sec_new"])].copy()
 
     parts = []
 

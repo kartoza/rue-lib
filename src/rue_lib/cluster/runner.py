@@ -103,8 +103,8 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_layer_name=input_roads_buffer_layer_name,
         # TODO:
         #  We add half of local as currently it contains locals
-        road_arterial_width_m=(cfg.road_arterial_width_m + cfg.road_local_width_m),
-        road_secondary_width_m=(cfg.road_secondary_width_m + cfg.road_local_width_m),
+        road_arterial_width_m=cfg.road_arterial_width_m,
+        road_secondary_width_m=cfg.road_secondary_width_m,
         road_local_width_m=cfg.road_local_width_m,
     )
 
