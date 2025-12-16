@@ -12,7 +12,7 @@ def main():
     """
 
     config = PublicConfig(
-        site_path="outputs/step1_parcels/parcels.geojson",
+        site_path="outputs/step1_parcels/outputs.geojson",
         input_path="outputs/step3_clusters/outputs.geojson",
         output_dir="outputs/step4_public",
         open_percent=MainConfig.open_percent,

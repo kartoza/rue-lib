@@ -36,6 +36,9 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    output_gpkg = out_dir / "outputs.gpkg"
+    gpkg_path = str(output_gpkg)
+
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
 
@@ -48,8 +51,6 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         roads_m = roads
     else:
         roads_m = to_metric_crs(roads)
-
-    gpkg_path = cfg.geopackage_path
 
     site_m.to_file(gpkg_path, layer="site", driver="GPKG")
     roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
@@ -84,7 +85,12 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         parcels_exploded.to_crs(4326) if not parcels_exploded.empty else parcels_exploded
     )
 
-    out_geojson = out_dir / "parcels.geojson"
+    out_geojson = out_dir / "outputs.geojson"
     save_geojson(parcels_final, out_geojson)
+
+    roads_buf_m = roads_buf_m.to_crs(4326) if not roads_buf_m.empty else roads_buf_m
+
+    out_geojson = out_dir / "roads.geojson"
+    save_geojson(roads_buf_m, out_geojson)
 
     return out_geojson

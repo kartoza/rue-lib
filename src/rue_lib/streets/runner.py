@@ -334,7 +334,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 18: Exporting merged grids to GeoJSON...")
-    output_geojson = output_dir / "all_grids_merged.geojson"
+    output_geojson = output_dir / "outputs.geojson"
     export_layer_to_geojson(
         str(output_gpkg),
         "17_all_grids_merged",
