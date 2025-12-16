@@ -131,6 +131,7 @@ def create_clusters_from_convex_points(
     cluster_polygons = []
     cluster_records = []
     cluster_id = 0
+    split_lines_by_convex = {}
 
     convex_by_block = {}
     for _, row in gdf_convex.iterrows():
@@ -142,15 +143,15 @@ def create_clusters_from_convex_points(
 
     print(f"  Processing {len(convex_by_block)} blocks with convex points...")
 
+    convex_idx = -1
     for block_id, convex_points in convex_by_block.items():
         if block_id not in blocks_by_id:
             print(f"    Warning: Block {block_id} not found")
             continue
 
         block_geom = blocks_by_id[block_id]
-        split_lines = []
-
         for convex_row in convex_points:
+            convex_idx += 1
             curr_point = convex_row.geometry
             cx, cy = curr_point.x, curr_point.y
 
@@ -188,29 +189,26 @@ def create_clusters_from_convex_points(
                     line0 = LineString([(cx, cy), (line_end_x, line_end_y)])
                 else:
                     continue
-
-                line0_extended = line0
-                split_lines.append(line0_extended)
-
+                split_lines_by_convex[convex_idx] = {
+                    "line0": line0,
+                    "convex": convex_row,
+                    "block_id": block_id,
+                }
             center_x2 = (cx + p2_x) / 2
             center_y2 = (cy + p2_y) / 2
-
             dx2 = p2_x - cx
             dy2 = p2_y - cy
             len2 = math.hypot(dx2, dy2)
             if len2 > 0:
                 dx2, dy2 = dx2 / len2, dy2 / len2
                 perp_x2, perp_y2 = -dy2, dx2
-
                 test_dist = 1
                 end1_x = center_x2 + perp_x2 * test_dist
                 end1_y = center_y2 + perp_y2 * test_dist
                 end2_x = center_x2 - perp_x2 * test_dist
                 end2_y = center_y2 - perp_y2 * test_dist
-
                 test_pt1 = Point(end1_x, end1_y)
                 test_pt2 = Point(end2_x, end2_y)
-
                 if block_geom.contains(test_pt1):
                     line_end_x = cx + perp_x2 * line_length
                     line_end_y = cy + perp_y2 * line_length
@@ -222,47 +220,57 @@ def create_clusters_from_convex_points(
                 else:
                     continue
 
-                line2_extended = line2
-                split_lines.append(line2_extended)
+                if convex_idx not in split_lines_by_convex:
+                    continue
 
-        if split_lines:
-            try:
-                lines_union = unary_union(split_lines)
-                split_result = shapely_split(block_geom, lines_union)
+                split_lines_by_convex[convex_idx]["line2"] = line2
 
-                if hasattr(split_result, "geoms"):
-                    parts = list(split_result.geoms)
-                else:
-                    parts = [split_result]
+    for split_lines in split_lines_by_convex:
+        split_lines_data = split_lines_by_convex[split_lines]
+        block_geom = blocks_by_id[split_lines_data["block_id"]]
+        try:
+            lines_union = unary_union([split_lines_data["line0"], split_lines_data["line2"]])
+            split_result = shapely_split(block_geom, lines_union)
 
-                min_area = 10.0
+            if hasattr(split_result, "geoms"):
+                parts = list(split_result.geoms)
+            else:
+                parts = [split_result]
 
-                corner_parts_count = 0
-                for part in parts:
-                    if part.is_empty or part.area <= 0:
-                        continue
+            min_area = 0.20 * (max_partition_depth**2)
 
-                    part_area = float(part.area)
+            corner_parts_count = 0
 
-                    if part_area < min_area:
-                        continue
+            parts.sort(key=lambda g: g.centroid.distance(split_lines_data["convex"].geometry))
 
-                    cluster_polygons.append(part)
-                    cluster_records.append(
-                        {
-                            "id": cluster_id,
-                            "block_id": int(block_id),
-                            "type": "convex_cluster",
-                            "area": part_area,
-                        }
-                    )
-                    cluster_id += 1
-                    corner_parts_count += 1
+            if len(parts) > 2:
+                part = parts[0]
+                if part.is_empty or part.area <= 0:
+                    continue
 
-                print(f"    Block {block_id}: created {corner_parts_count} corner clusters")
+                part_area = float(part.area)
 
-            except Exception as e:
-                print(f"    Warning: Failed to split block {block_id}: {e}")
+                if part_area < min_area:
+                    continue
+
+                cluster_polygons.append(part)
+                cluster_records.append(
+                    {
+                        "id": cluster_id,
+                        "block_id": int(block_id),
+                        "type": "loc_loc",
+                        "area": part_area,
+                        "distance_to_corner": float(
+                            part.centroid.distance(split_lines_data["convex"].geometry)
+                        ),
+                    }
+                )
+                cluster_id += 1
+                corner_parts_count += 1
+            print(f"    Block {block_id}: created {corner_parts_count} corner clusters")
+
+        except Exception as e:
+            print(f"    Warning: Failed to split block {block_id}: {e}")
 
     if not cluster_polygons:
         print("  No clusters created")
