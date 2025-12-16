@@ -709,7 +709,7 @@ def subdivide_blocks_by_concave_points(
             feat.SetField("id", buff_data["id"])
             feat.SetField("block_id", buff_data["block_id"])
             feat.SetField("road_type", buff_data["road_type"])
-            feat.SetField("type", "on_grid")
+            feat.SetField("type", "loc_loc")
             split_buffered_layer.CreateFeature(feat)
             feat = None
 

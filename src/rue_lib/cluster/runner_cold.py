@@ -15,13 +15,15 @@ from rue_lib.cluster.cold.cluster_on_grid import (
     extract_vertices_from_lines,
     merge_vertices_into_lines_by_angle,
     sample_points_along_front_lines,
-    subtract_cold_clusters_from_off_grid_blocks,
+)
+from rue_lib.cluster.cold.clusters import (
+    merge_and_classify_off_grid_clusters,
+    merge_and_classify_on_grid_clusters,
 )
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
 )
-from rue_lib.cluster.cold.on_grid_clusters import merge_and_classify_on_grid_clusters
 from rue_lib.cluster.cold.subdiv_at_convex_corner import (
     create_clusters_from_convex_points,
     find_convex_points,
@@ -254,24 +256,25 @@ def generate_cold(
         target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
-    print("\nStep 12: Subtract cold clusters from off-grid blocks to create loc_loc clusters...")
-    off_grid_loc_loc_layer = "215_off_grid_loc_loc_clusters"
-    subtract_cold_clusters_from_off_grid_blocks(
+    print("\nStep 12: Merge and classify off-grid cold clusters...")
+    off_grid_final_layer = "215_final_cold_off_grid_clusters"
+    merge_and_classify_off_grid_clusters(
         output_path,
         off_grid_block,
         clusters_layer,
         output_path,
-        off_grid_loc_loc_layer,
+        off_grid_final_layer,
     )
 
-    print("\nStep 13: Subtract convex corners from on-grid blocks to")
-    loc_loc_clusters_layer = "216_final_cold_on_grid_clusters"
+    print("\nStep 13: Merge and classify on-grid cold clusters...")
+    on_grid_final_layer = "216_final_cold_on_grid_clusters"
     merge_and_classify_on_grid_clusters(
         output_path,
         on_grid_block,
         convex_clusters_layer,
+        concave_points_layer_name,
         output_path,
-        loc_loc_clusters_layer,
+        on_grid_final_layer,
     )
 
     return cold_grid_layer_name
