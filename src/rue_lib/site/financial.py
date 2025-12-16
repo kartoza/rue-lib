@@ -25,4 +25,7 @@ class FinancialSite(FinancialModel):
         self.site_area_total = site_gdf.area.sum()
         self.site_roads_area = roads_buffer_gdf.area.sum()
 
+        site_gdf = None
+        roads_buffer_gdf = None
+
         self.save(config.output_dir)

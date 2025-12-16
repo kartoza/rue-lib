@@ -4,6 +4,7 @@ from pathlib import Path
 from osgeo import gdal, ogr
 
 from .config import PublicConfig
+from .financial import FinancialPublic
 from .operations import (
     allocate_amenities,
     allocate_open_spaces,
@@ -19,6 +20,10 @@ def generate_public(cfg: PublicConfig) -> Path:
     Returns:
         Path to output file
     """
+    print("Step 19: Generating financial data")
+    FinancialPublic(config=cfg)
+    return
+
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
@@ -84,5 +89,9 @@ def generate_public(cfg: PublicConfig) -> Path:
     )
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
+
+
+    print("Step 19: Generating financial data")
+    FinancialPublic(config=cfg)
 
     return output_gpkg

@@ -51,4 +51,7 @@ class FinancialStreet(FinancialModel):
         self.road_len_sec_50 = sec_50.length.sum()
         self.road_len_loc_50 = 0
 
+        roads = None
+        roads_local = None
+
         self.save(output_dir=config.output_dir)
