@@ -1,7 +1,7 @@
 # src/rue_lib/public/operations.py
 from osgeo import ogr, osr
 
-from rue_lib.core.definitions import ColorTypes
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
 
 
 def allocate_open_spaces(
@@ -129,7 +129,7 @@ def allocate_open_spaces(
             continue
 
         # Find central block (closest off-grid block to site centroid)
-        off_grid_blocks = [b for b in all_blocks if b["type"] == "off_grid0"]
+        off_grid_blocks = [b for b in all_blocks if b["type"] == ClusterTypes.OFF_GRID_WARM]
         if not off_grid_blocks:
             print(f"    No off-grid blocks found for site {site_id}")
             continue
@@ -245,12 +245,14 @@ def allocate_open_spaces(
                 out_feat.SetField(i, value)
 
             new_type = out_feat.GetField("type") + "_os"
+            new_cluster_type = out_feat.GetField("cluster_type") + "_os"
             out_feat.SetField("allocation", "open_space")
             out_feat.SetField("group_id", group_id)
             out_feat.SetField("group_rank", group_rank)
             out_feat.SetField("is_root", is_root)
             out_feat.SetField("dist_to_center", dist_to_center)
             out_feat.SetField("type", new_type)
+            out_feat.SetField("cluster_type", new_cluster_type)
             out_feat.SetField("color", ColorTypes[new_type])
             out_feat.SetField("cluster_index", src_feat.GetFID())
             output_layer.CreateFeature(out_feat)
@@ -400,7 +402,7 @@ def allocate_amenities(
         print(f"    Remaining blocks found for site {site_id} : {len(remaining_blocks)}")
 
         # Filter through parts: get off-grid blocks with their attached on-grid parts
-        off_grid_blocks = [b for b in remaining_blocks if b["type"] == "off_grid0"]
+        off_grid_blocks = [b for b in remaining_blocks if b["type"] == ClusterTypes.OFF_GRID_WARM]
         on_grid_block_types = ["loc", "loc_loc", "sec", "art"]
         on_grid_blocks = [b for b in remaining_blocks if b["type"] in on_grid_block_types]
 
@@ -465,10 +467,12 @@ def allocate_amenities(
                 out_feat.SetField(i, value)
 
             new_type = out_feat.GetField("type") + "_am"
+            new_cluster_type = out_feat.GetField("cluster_type") + "_am"
             out_feat.SetField("allocation", "amenity")
             out_feat.SetField("type", new_type)
+            out_feat.SetField("cluster_type", new_cluster_type)
             out_feat.SetField("color", ColorTypes[new_type])
-            out_feat.SetField("cluster_index", out_feat.GetFID())
+            out_feat.SetField("cluster_index", src_feat.GetFID())
             output_layer.CreateFeature(out_feat)
             out_feat = None
 

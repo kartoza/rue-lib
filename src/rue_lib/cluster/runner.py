@@ -10,10 +10,16 @@ from osgeo import ogr
 
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.core.geometry import get_utm_zone_from_layer, reproject_layer
-from rue_lib.streets.operations import export_layer_to_geojson, extract_by_geometry_type
+from rue_lib.streets.operations import (
+    export_layer_to_geojson,
+    extract_by_expression,
+    extract_by_geometry_type,
+)
 
 from ..core import merge_gpkg_layers
+from ..core.definitions import BlockTypes
 from ..core.roads import extract_roads_buffer
+from .helpers import assign_cluster_type
 from .runner_cold import generate_cold
 from .runner_warm import generate_warm
 
@@ -67,6 +73,18 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         output_path,
         input_blocks_layer_name,
     )
+    extract_by_expression(
+        output_path,
+        input_blocks_layer_name,
+        (
+            f"type = '{BlockTypes.COLD_GRID}' or "
+            f"type = '{BlockTypes.ON_GRID_ART}' or "
+            f"type = '{BlockTypes.ON_GRID_SEC}' or "
+            f"type = '{BlockTypes.OFF_GRID}'"
+        ),
+        output_path,
+        input_blocks_layer_name,
+    )
 
     input_roads_layer_name = "002_input_roads"
     extract_by_geometry_type(
@@ -105,6 +123,11 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         gpkg_path=output_gpkg,
         layer_names=[warm_final_layer_name, cold_final_layer_name],
         output_layer_name=final_layer_name,
+    )
+    assign_cluster_type(
+        gpkg_path=output_gpkg,
+        block_layer_name=input_blocks_layer_name,
+        final_layer_name=final_layer_name,
     )
 
     print("Exporting merged grids to GeoJSON...")
