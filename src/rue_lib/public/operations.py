@@ -5,11 +5,11 @@ from rue_lib.core.definitions import ColorTypes
 
 
 def allocate_open_spaces(
-        input_path: str,
-        parcels_path: str,
-        output_gpkg: str,
-        output_layer_name: str = "02_open_spaces",
-        open_percent: float = 4.0,
+    input_path: str,
+    parcels_path: str,
+    output_gpkg: str,
+    output_layer_name: str = "02_open_spaces",
+    open_percent: float = 4.0,
 ) -> str:
     """
     Allocate open spaces starting from central blocks.
@@ -61,9 +61,7 @@ def allocate_open_spaces(
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(
-        output_layer_name, blocks_srs, ogr.wkbPolygon
-    )
+    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon)
 
     # Create fields (copy from blocks layer plus type)
     layer_defn = blocks_layer.GetLayerDefn()
@@ -95,8 +93,7 @@ def allocate_open_spaces(
         site_area = parcel_geom.Area()
         required_open_area = site_area * (open_percent / 100.0)
 
-        print(
-            f"  Site {site_id}: area={site_area:.2f}, required_open={required_open_area:.2f}")
+        print(f"  Site {site_id}: area={site_area:.2f}, required_open={required_open_area:.2f}")
 
         # Get all blocks for this site
         blocks_layer.SetSpatialFilter(parcel_geom)
@@ -153,30 +150,26 @@ def allocate_open_spaces(
                 "root": og_block,
                 "attached": [],
                 "total_area": og_block["area"],
-                "distance_to_center": central_centroid.Distance(
-                    og_block["centroid"]),
+                "distance_to_center": central_centroid.Distance(og_block["centroid"]),
             }
             off_grid_groups.append(group)
 
         # Attach on-grid blocks to nearest off-grid root
         on_grid_block_types = ["loc", "loc_loc", "sec", "art"]
-        on_grid_blocks = [b for b in all_blocks if
-                          b["type"] in on_grid_block_types]
+        on_grid_blocks = [b for b in all_blocks if b["type"] in on_grid_block_types]
         on_grid_blocks.sort(key=lambda x: x["distance"])
         for on_block in on_grid_blocks:
             min_dist = float("inf")
             closest_group = None
             for group in off_grid_groups:
-                if not on_block["geometry"].Intersects(
-                        group["root"]["geometry"]):
+                if not on_block["geometry"].Intersects(group["root"]["geometry"]):
                     continue
                 dist = on_block["centroid"].Distance(group["root"]["centroid"])
                 if dist < min_dist:
                     min_dist = dist
                     closest_group = group
 
-            on_block["distance_to_center"] = central_centroid.Distance(
-                on_block["centroid"])
+            on_block["distance_to_center"] = central_centroid.Distance(on_block["centroid"])
 
             if closest_group is not None:
                 closest_group["attached"].append(on_block)
@@ -208,10 +201,8 @@ def allocate_open_spaces(
 
             root_block = group["root"]
             key = _block_key(root_block)
-            if key not in allocated_ids and current_area + root_block[
-                "area"] < required_open_area:
-                allocated_blocks.append(
-                    (root_block, group_id, 1, group_rank, dist_to_center))
+            if key not in allocated_ids and current_area + root_block["area"] < required_open_area:
+                allocated_blocks.append((root_block, group_id, 1, group_rank, dist_to_center))
                 allocated_ids.add(key)
                 current_area += root_block["area"]
 
@@ -225,8 +216,7 @@ def allocate_open_spaces(
                     if key in allocated_ids:
                         continue
                     allocated_blocks.append(
-                        (attached, group_id, 0, group_rank,
-                         attached["distance_to_center"])
+                        (attached, group_id, 0, group_rank, attached["distance_to_center"])
                     )
                     allocated_ids.add(key)
 
@@ -276,12 +266,12 @@ def allocate_open_spaces(
 
 
 def allocate_amenities(
-        input_path: str,
-        open_spaces_layer_name: str,
-        parcels_path: str,
-        output_gpkg: str,
-        output_layer_name: str = "03_amenities",
-        amen_percent: float = 10.0,
+    input_path: str,
+    open_spaces_layer_name: str,
+    parcels_path: str,
+    output_gpkg: str,
+    output_layer_name: str = "03_amenities",
+    amen_percent: float = 10.0,
 ) -> str:
     """
     Allocate amenities from remaining blocks after open space allocation.
@@ -346,9 +336,7 @@ def allocate_amenities(
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(
-        output_layer_name, blocks_srs, ogr.wkbPolygon
-    )
+    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon)
 
     # Create fields (copy from blocks layer plus type)
     layer_defn = blocks_layer.GetLayerDefn()
@@ -372,8 +360,7 @@ def allocate_amenities(
         site_area = parcel_geom.Area()
         required_amen_area = site_area * (amen_percent / 100.0)
 
-        print(
-            f"  Site {site_id}: area={site_area:.2f}, required_amen={required_amen_area:.2f}")
+        print(f"  Site {site_id}: area={site_area:.2f}, required_amen={required_amen_area:.2f}")
 
         # Get all blocks for this site (excluding open spaces)
         blocks_layer.SetSpatialFilter(parcel_geom)
@@ -410,21 +397,12 @@ def allocate_amenities(
         if not remaining_blocks:
             print(f"    No remaining blocks found for site {site_id}")
             continue
-        print(
-            f"    Remaining blocks found for site {site_id} : "
-            f"{len(remaining_blocks)}"
-        )
+        print(f"    Remaining blocks found for site {site_id} : {len(remaining_blocks)}")
 
         # Filter through parts: get off-grid blocks with their attached on-grid parts
-        off_grid_blocks = [
-            b for b in remaining_blocks if
-            b["type"] == "off_grid0"
-        ]
+        off_grid_blocks = [b for b in remaining_blocks if b["type"] == "off_grid0"]
         on_grid_block_types = ["loc", "loc_loc", "sec", "art"]
-        on_grid_blocks = [
-            b for b in remaining_blocks if
-            b["type"] in on_grid_block_types
-        ]
+        on_grid_blocks = [b for b in remaining_blocks if b["type"] in on_grid_block_types]
 
         # Group blocks similar to open space allocation
         off_grid_groups = []
@@ -454,8 +432,7 @@ def allocate_amenities(
         # Sort groups by distance to site center
         off_grid_groups.sort(key=lambda x: x["distance"])
 
-        print(
-            f"    Found {len(remaining_blocks)} remaining blocks, {len(off_grid_groups)} groups")
+        print(f"    Found {len(remaining_blocks)} remaining blocks, {len(off_grid_groups)} groups")
 
         # Allocate groups until amenity requirement is met
         allocated_blocks = []
@@ -505,10 +482,10 @@ def allocate_amenities(
 
 
 def merge(
-        input_gpkg: str,
-        final_layer_name: str,
-        open_spaces_layer_name: str,
-        amenities_layer_name: str,
+    input_gpkg: str,
+    final_layer_name: str,
+    open_spaces_layer_name: str,
+    amenities_layer_name: str,
 ):
     """
     Merge open spaces and amenities into the final layer.
@@ -567,8 +544,7 @@ def merge(
                 # Copy all fields from open space feature
                 for i in range(open_space_feat.GetFieldCount()):
                     field_name = open_space_feat.GetFieldDefnRef(i).GetName()
-                    if final_layer.GetLayerDefn().GetFieldIndex(
-                            field_name) >= 0:
+                    if final_layer.GetLayerDefn().GetFieldIndex(field_name) >= 0:
                         value = open_space_feat.GetField(i)
                         updated_feat.SetField(field_name, value)
 
@@ -604,8 +580,7 @@ def merge(
                 # Copy all fields from amenity feature
                 for i in range(amenity_feat.GetFieldCount()):
                     field_name = amenity_feat.GetFieldDefnRef(i).GetName()
-                    if final_layer.GetLayerDefn().GetFieldIndex(
-                            field_name) >= 0:
+                    if final_layer.GetLayerDefn().GetFieldIndex(field_name) >= 0:
                         value = amenity_feat.GetField(i)
                         updated_feat.SetField(field_name, value)
 

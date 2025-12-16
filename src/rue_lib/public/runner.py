@@ -3,12 +3,13 @@ from pathlib import Path
 
 from osgeo import gdal, ogr
 
+from ..streets.operations import export_layer_to_geojson
 from .config import PublicConfig
 from .operations import (
     allocate_amenities,
-    allocate_open_spaces, merge,
+    allocate_open_spaces,
+    merge,
 )
-from ..streets.operations import export_layer_to_geojson
 
 gdal.UseExceptions()
 
@@ -41,9 +42,7 @@ def generate_public(cfg: PublicConfig) -> Path:
     input_ds = ogr.Open(cfg.input_path, 0)
     input_layer = input_ds.GetLayer()
     if input_layer is None:
-        raise ValueError(
-            f"Layer {clusters_layer} not found in {cfg.input_path}"
-        )
+        raise ValueError(f"Layer {clusters_layer} not found in {cfg.input_path}")
 
     output_ds = ogr.Open(output_path, 1)
     if output_ds is None:
@@ -68,9 +67,7 @@ def generate_public(cfg: PublicConfig) -> Path:
 
     # Copy the layer
     output_ds.CopyLayer(site_layer, "00_site_path")
-    print(
-        f"  Copied site layer with {site_layer.GetFeatureCount()} features to output"
-    )
+    print(f"  Copied site layer with {site_layer.GetFeatureCount()} features to output")
 
     # Copy the layer
     final_layer_name = "04_final"

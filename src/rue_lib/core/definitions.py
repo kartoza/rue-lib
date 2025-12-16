@@ -187,26 +187,21 @@ ColorTypes = {
     ClusterTypes.ON_GRID_ART: "rgb(235,201,199)",
     ClusterTypes.ON_GRID_SEC: "rgb(250,232,219)",
     ClusterTypes.ON_GRID_LOC: "rgb(250,242,212)",
-
     # Corner types - arterial combinations
     ClusterTypes.ON_GRID_ART_ART: "rgb(204,130,122)",
     ClusterTypes.ON_GRID_ART_SEC: "rgb(217,158,153)",
     ClusterTypes.ON_GRID_ART_LOC: "rgb(230,186,184)",
-
     # Corner types - secondary combinations
     ClusterTypes.ON_GRID_SEC_SEC: "rgb(250,207,176)",
     ClusterTypes.ON_GRID_SEC_LOC: "rgb(250,219,199)",
-
     # Corner types - local combinations
     ClusterTypes.ON_GRID_LOC_LOC: "rgb(250,235,186)",
-
     # Off-grid types
     ClusterTypes.OFF_GRID: "rgb(207,230,242)",
     ClusterTypes.OFF_GRID_WARM: "rgb(207,230,242)",
     ClusterTypes.OFF_GRID_COLD: "rgb(207,230,242)",
     ClusterTypes.OFF_GRID_COLD2: "rgb(173,212,230)",
     ClusterTypes.CONCAVE_CORNER: "rgb(207,230,242)",
-
     # Amenity types
     ClusterTypes.AMENITY: "rgb(217,153,168)",
     ClusterTypes.SEC_AMENITY: "rgb(217,153,168)",
@@ -217,7 +212,6 @@ ColorTypes = {
     ClusterTypes.OFF_GRID0_AMENITY: "rgb(217,153,168)",
     ClusterTypes.OFF_GRID1_AMENITY: "rgb(217,153,168)",
     ClusterTypes.OFF_GRID2_AMENITY: "rgb(217,153,168)",
-
     # Green/Open space types
     ClusterTypes.GREEN0: "rgb(219,242,207)",
     ClusterTypes.GREEN1: "rgb(219,242,207)",
@@ -232,7 +226,6 @@ ColorTypes = {
     ClusterTypes.OFF_GRID1_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.OFF_GRID2_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.CORNER_PARK: "rgb(191,230,171)",
-
     # Path and entrance types
     ClusterTypes.INTERNAL_PATH: "rgb(237,255,230)",
     ClusterTypes.PATH0: "rgb(237,255,230)",
@@ -241,7 +234,6 @@ ColorTypes = {
     ClusterTypes.ACCESS_PATH: "rgb(255,250,235)",
     ClusterTypes.ENTRANCE0: "rgb(255,250,235)",
     ClusterTypes.ENTRANCE1: "rgb(255,250,235)",
-
     # Other types
     ClusterTypes.OFF_GRID_CLUSTER_2ND: "rgb(173,212,230)",
     ClusterTypes.PUBLIC_STREETS: "rgb(255,255,255)",
