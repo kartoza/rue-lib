@@ -144,6 +144,7 @@ class ClusterTypes(EnumType):
 
     # Amenity types
     AMENITY = "am"
+    ART_AMENITY = "art_am"
     SEC_AMENITY = "sec_am"
     SEC_SEC_AMENITY = "sec_sec_am"
     SEC_LOC_AMENITY = "sec_loc_am"
@@ -204,6 +205,7 @@ ColorTypes = {
     ClusterTypes.CONCAVE_CORNER: "rgb(207,230,242)",
     # Amenity types
     ClusterTypes.AMENITY: "rgb(217,153,168)",
+    ClusterTypes.ART_AMENITY: "rgb(217,153,168)",
     ClusterTypes.SEC_AMENITY: "rgb(217,153,168)",
     ClusterTypes.SEC_SEC_AMENITY: "rgb(217,153,168)",
     ClusterTypes.SEC_LOC_AMENITY: "rgb(217,153,168)",
