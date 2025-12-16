@@ -90,7 +90,6 @@ def generate_public(cfg: PublicConfig) -> Path:
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
 
-
     print("Step 19: Generating financial data")
     FinancialPublic(config=cfg)
 

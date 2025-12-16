@@ -17,5 +17,4 @@ class FinancialModel:
         output_dir = Path(output_dir)
         output_dir.mkdir(parents=True, exist_ok=True)
         output_path = output_dir / "financial.json"
-        print(self.data_in_json())
         output_path.write_text(json.dumps(self.data_in_json(), indent=2))
