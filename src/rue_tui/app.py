@@ -156,6 +156,11 @@ class RueTuiApp(App):
         color: $accent;
         margin: 1 0;
     }
+
+    /* Rounded right edge for final button (viewer button) */
+    #btn-view {
+        border-right: round $primary;
+    }
     """
 
     TITLE = "🏙️ RUE TUI - Rapid Urbanisation Explorer"
@@ -390,11 +395,17 @@ class RueTuiApp(App):
             current_btn.variant = "success"
             current_btn.disabled = False
 
-            # Enable next step
+            # Enable next step and focus it
             if step < 3:
                 next_btn = self.query_one(f"#btn-step{step + 1}")
                 next_btn.disabled = False
                 next_btn.variant = "primary"
+                # Auto-focus the next step button
+                next_btn.focus()
+            else:
+                # After step 3, focus the viewer button
+                view_btn = self.query_one("#btn-view")
+                view_btn.focus()
 
             # Enable view buttons
             view_btn = self.query_one("#btn-view")

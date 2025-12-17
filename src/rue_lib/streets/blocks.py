@@ -15,6 +15,22 @@ from rue_lib.streets.operations import (
 from .geometry_utils import break_linestring_by_angle
 
 
+def explode_multipolygon(geom):
+    """Convert a multipolygon to individual polygons."""
+    polygons = []
+    geom_type = ogr.GT_Flatten(geom.GetGeometryType())
+
+    if geom_type == ogr.wkbPolygon:
+        polygons.append(geom.Clone())
+    elif geom_type == ogr.wkbMultiPolygon:
+        for i in range(geom.GetGeometryCount()):
+            sub_geom = geom.GetGeometryRef(i)
+            sub_geom_type = ogr.GT_Flatten(sub_geom.GetGeometryType())
+            if sub_geom_type == ogr.wkbPolygon:
+                polygons.append(sub_geom.Clone())
+    return polygons
+
+
 def merge_lines(
     gpkg_path,
     perpendicular_lines_layer,
@@ -234,7 +250,7 @@ def polygonize_and_classify_blocks(
             break
 
     # Create output layer
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
 
     # Add classification fields
     block_id_field = ogr.FieldDefn("block_id", ogr.OFTInteger)
@@ -266,21 +282,18 @@ def polygonize_and_classify_blocks(
             block_type = "off_grid"
             off_grid_blocks += 1
 
-        # Create output feature
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        # Ensure polygon is converted to multipolygon for compatibility
-        if poly.GetGeometryType() == ogr.wkbPolygon:
-            multi_geom = ogr.Geometry(ogr.wkbMultiPolygon)
-            multi_geom.AddGeometry(poly)
-            out_feature.SetGeometry(multi_geom)
-        else:
-            out_feature.SetGeometry(poly)
-        out_feature.SetField("block_id", block_id)
-        out_feature.SetField("block_type", block_type)
-        out_feature.SetField("area", poly.GetArea())
+        # Create output features - explode multipolygons into individual polygons
+        polygons = explode_multipolygon(poly)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
+            out_feature.SetField("block_id", block_id)
+            out_feature.SetField("block_type", block_type)
+            out_feature.SetField("area", polygon.GetArea())
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            block_id += 1
 
     ds = None
 
@@ -311,7 +324,7 @@ def filter_classified_blocks(
             ds.DeleteLayer(i)
             break
 
-    out_lyr = ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    out_lyr = ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
 
     # Copy all fields from input
     in_defn = in_lyr.GetLayerDefn()

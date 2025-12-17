@@ -329,7 +329,7 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
             output_ds.DeleteLayer(i)
             break
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
 
     for geom in geoms:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())

@@ -5,6 +5,46 @@ from osgeo import ogr
 from shapely import wkt
 
 
+def explode_polygon_geodataframe(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Explode MultiPolygon geometries into individual Polygon features.
+
+    Args:
+        gdf: Input GeoDataFrame that may contain MultiPolygon geometries
+
+    Returns:
+        GeoDataFrame with all geometries as single Polygons
+    """
+    # Only process if there are any MultiPolygon geometries
+    if gdf.empty or not any(gdf.geom_type == "MultiPolygon"):
+        return gdf
+
+    # Use explode() to convert MultiPolygons to individual Polygons
+    exploded = gdf.explode(index_parts=False)
+
+    # Reset index to ensure unique indices
+    exploded = exploded.reset_index(drop=True)
+
+    return exploded
+
+
+def save_gdf_to_gpkg(gdf: gpd.GeoDataFrame, path: Path, layer: str, driver: str = "GPKG") -> None:
+    """
+    Save GeoDataFrame to GeoPackage with MultiPolygon explosion.
+
+    Args:
+        gdf: GeoDataFrame to save
+        path: Output path
+        layer: Layer name
+        driver: Output driver (default: GPKG)
+    """
+    # Explode MultiPolygons into individual Polygons if needed
+    gdf_exploded = explode_polygon_geodataframe(gdf)
+
+    # Save the GeoDataFrame
+    gdf_exploded.to_file(path, layer=layer, driver=driver)
+
+
 def feature_geom_to_shapely(feat):
     """
     Convert a feature geometry (QGIS or OGR) to Shapely.

@@ -594,7 +594,7 @@ def grids_from_site(
     if ds.GetLayerByName(point_layer_name):
         ds.DeleteLayer(point_layer_name)
 
-    grid_layer = ds.CreateLayer(grid_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D)
+    grid_layer = ds.CreateLayer(grid_layer_name, srs, geom_type=ogr.wkbPolygon25D)
     grid_layer.CreateField(ogr.FieldDefn("grid_id", ogr.OFTInteger))
 
     area_field = ogr.FieldDefn("area", ogr.OFTReal)

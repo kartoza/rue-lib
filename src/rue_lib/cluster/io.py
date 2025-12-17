@@ -61,12 +61,36 @@ def save_geojson(gdf: gpd.GeoDataFrame, path: Path) -> None:
     gdf.to_file(path, driver="GeoJSON")
 
 
+def explode_polygon_geodataframe(gdf: gpd.GeoDataFrame) -> gpd.GeoDataFrame:
+    """
+    Explode MultiPolygon geometries into individual Polygon features.
+
+    Args:
+        gdf: Input GeoDataFrame that may contain MultiPolygon geometries
+
+    Returns:
+        GeoDataFrame with all geometries as single Polygons
+    """
+    # Only process if there are any MultiPolygon geometries
+    if gdf.empty or not any(gdf.geom_type == "MultiPolygon"):
+        return gdf
+
+    # Use explode() to convert MultiPolygons to individual Polygons
+    exploded = gdf.explode(index_parts=False)
+
+    # Reset index to ensure unique indices
+    exploded = exploded.reset_index(drop=True)
+
+    return exploded
+
+
 def save_geopackage(gdf: gpd.GeoDataFrame, path: Path, layer: str) -> None:
     """
     Save GeoDataFrame to GeoPackage file.
 
     This function prepares the geopackage using a template if it doesn't exist,
     ensuring consistent styling and structure for QGIS visualization.
+    All MultiPolygon geometries are automatically exploded into individual Polygons.
 
     Args:
         gdf: GeoDataFrame to save
@@ -76,5 +100,8 @@ def save_geopackage(gdf: gpd.GeoDataFrame, path: Path, layer: str) -> None:
     # Prepare the geopackage (copy from template if needed)
     prepare_geopackage(path)
 
+    # Explode MultiPolygons into individual Polygons if needed
+    gdf_exploded = explode_polygon_geodataframe(gdf)
+
     # Save the GeoDataFrame to the prepared geopackage
-    gdf.to_file(path, layer=layer, driver="GPKG")
+    gdf_exploded.to_file(path, layer=layer, driver="GPKG")

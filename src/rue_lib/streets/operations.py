@@ -14,13 +14,20 @@ from .geometry_utils import (
 )
 
 
-def ensure_multipolygon(geom):
-    """Convert a polygon to multipolygon if needed for layer compatibility."""
-    if geom.GetGeometryType() == ogr.wkbPolygon:
-        multi_geom = ogr.Geometry(ogr.wkbMultiPolygon)
-        multi_geom.AddGeometry(geom)
-        return multi_geom
-    return geom
+def explode_multipolygon(geom):
+    """Convert a multipolygon to individual polygons."""
+    polygons = []
+    geom_type = ogr.GT_Flatten(geom.GetGeometryType())
+
+    if geom_type == ogr.wkbPolygon:
+        polygons.append(geom.Clone())
+    elif geom_type == ogr.wkbMultiPolygon:
+        for i in range(geom.GetGeometryCount()):
+            sub_geom = geom.GetGeometryRef(i)
+            sub_geom_type = ogr.GT_Flatten(sub_geom.GetGeometryType())
+            if sub_geom_type == ogr.wkbPolygon:
+                polygons.append(sub_geom.Clone())
+    return polygons
 
 
 def _ogr_to_shapely(ogr_geom):
@@ -218,9 +225,9 @@ def clip_layer(
 
     # Convert to 3D geometry type for layer compatibility
     if geom_type == ogr.wkbPolygon:
-        geom_type = ogr.wkbMultiPolygon25D
+        geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbMultiPolygon:
-        geom_type = ogr.wkbMultiPolygon25D
+        geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbLineString:
         geom_type = ogr.wkbLineString25D
     elif geom_type == ogr.wkbMultiLineString:
@@ -309,16 +316,19 @@ def clip_layer(
 
     feature_id = 1
     for geom, field_values in clipped_features:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ensure_multipolygon(geom))
-        out_feature.SetField("id", feature_id)
+        # Explode multipolygons into individual polygons
+        polygons = explode_multipolygon(geom)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
+            out_feature.SetField("id", feature_id)
 
-        for field_name, value in field_values.items():
-            out_feature.SetField(field_name, value)
+            for field_name, value in field_values.items():
+                out_feature.SetField(field_name, value)
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
 
     output_ds = None
 
@@ -353,9 +363,9 @@ def erase_layer(
 
     # Convert to 3D geometry type for layer compatibility
     if geom_type == ogr.wkbPolygon:
-        geom_type = ogr.wkbMultiPolygon25D
+        geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbMultiPolygon:
-        geom_type = ogr.wkbMultiPolygon25D
+        geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbLineString:
         geom_type = ogr.wkbLineString25D
     elif geom_type == ogr.wkbMultiLineString:
@@ -471,21 +481,24 @@ def erase_layer(
 
     feature_id = 1
     for geom, field_values in erased_features:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ensure_multipolygon(geom))
+        # Explode multipolygons into individual polygons
+        polygons = explode_multipolygon(geom)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
 
-        if not has_id_field:
-            out_feature.SetField("id", feature_id)
-        elif "id" in field_values:
-            # Preserve existing id
-            pass
+            if not has_id_field:
+                out_feature.SetField("id", feature_id)
+            elif "id" in field_values:
+                # Preserve existing id
+                pass
 
-        for field_name, value in field_values.items():
-            out_feature.SetField(field_name, value)
+            for field_name, value in field_values.items():
+                out_feature.SetField(field_name, value)
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
 
     output_ds = None
 
@@ -574,7 +587,7 @@ def merge_layers_without_overlaps(input_path, layer_names, output_path, output_l
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon25D)
 
     id_field = ogr.FieldDefn("id", ogr.OFTInteger)
     output_layer.CreateField(id_field)
@@ -755,7 +768,7 @@ def create_on_grid_cells_from_perpendiculars(
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon25D)
 
     id_field = ogr.FieldDefn("id", ogr.OFTInteger)
     output_layer.CreateField(id_field)
@@ -892,7 +905,7 @@ def classify_on_grid_cells_by_setback(
     if output_ds.GetLayerByName(arterial_output_layer_name):
         output_ds.DeleteLayer(arterial_output_layer_name)
     arterial_output_layer = output_ds.CreateLayer(
-        arterial_output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D
+        arterial_output_layer_name, srs, geom_type=ogr.wkbPolygon25D
     )
 
     for i in range(cells_layer_defn.GetFieldCount()):
@@ -913,7 +926,7 @@ def classify_on_grid_cells_by_setback(
     if output_ds.GetLayerByName(secondary_output_layer_name):
         output_ds.DeleteLayer(secondary_output_layer_name)
     secondary_output_layer = output_ds.CreateLayer(
-        secondary_output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D
+        secondary_output_layer_name, srs, geom_type=ogr.wkbPolygon25D
     )
 
     for i in range(cells_layer_defn.GetFieldCount()):
@@ -1916,7 +1929,7 @@ def create_grid_from_division_points(
             output_ds.DeleteLayer(i)
             break
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
     if output_layer is None:
         raise RuntimeError("Could not create output layer.")
 
@@ -1928,15 +1941,18 @@ def create_grid_from_division_points(
 
     feature_id = 1
     for polygon_geom, setback_id in grid_polygons:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ensure_multipolygon(polygon_geom))
-        out_feature.SetField("id", feature_id)
-        if setback_id is not None:
-            out_feature.SetField("setback_id", int(setback_id))
+        # Explode multipolygons into individual polygons
+        polygons = explode_multipolygon(polygon_geom)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
+            out_feature.SetField("id", feature_id)
+            if setback_id is not None:
+                out_feature.SetField("setback_id", int(setback_id))
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
 
     output_ds = None
 
@@ -2390,7 +2406,7 @@ def create_grid_from_on_grid(
             output_ds.DeleteLayer(i)
             break
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
     if output_layer is None:
         raise RuntimeError("Could not create output layer.")
 
@@ -2402,15 +2418,18 @@ def create_grid_from_on_grid(
 
     feature_id = 1
     for polygon_geom, setback_id in grid_polygons:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ensure_multipolygon(polygon_geom))
-        out_feature.SetField("id", feature_id)
-        if setback_id is not None:
-            out_feature.SetField("setback_id", int(setback_id))
+        # Explode multipolygons into individual polygons
+        polygons = explode_multipolygon(polygon_geom)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
+            out_feature.SetField("id", feature_id)
+            if setback_id is not None:
+                out_feature.SetField("setback_id", int(setback_id))
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
 
     output_ds = None
 
@@ -2637,7 +2656,7 @@ def cleanup_grid_blocks(
             output_ds.DeleteLayer(i)
             break
 
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
+    output_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon25D)
     if output_layer is None:
         raise RuntimeError("Could not create output layer.")
 
@@ -2652,16 +2671,19 @@ def cleanup_grid_blocks(
 
     feature_id = 1
     for polygon_geom, setback_id in cleaned_blocks:
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ensure_multipolygon(polygon_geom))
-        out_feature.SetField("id", feature_id)
-        if setback_id is not None:
-            out_feature.SetField("setback_id", int(setback_id))
-        out_feature.SetField("area", float(polygon_geom.Area()))
+        # Explode multipolygons into individual polygons
+        polygons = explode_multipolygon(polygon_geom)
+        for polygon in polygons:
+            out_feature = ogr.Feature(output_layer.GetLayerDefn())
+            out_feature.SetGeometry(polygon)
+            out_feature.SetField("id", feature_id)
+            if setback_id is not None:
+                out_feature.SetField("setback_id", int(setback_id))
+            out_feature.SetField("area", float(polygon.Area()))
 
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
+            output_layer.CreateFeature(out_feature)
+            out_feature = None
+            feature_id += 1
 
     output_ds = None
 
@@ -2789,7 +2811,7 @@ def merge_grid_layers_with_type(
         if ds.GetLayerByName(output_layer_name):
             ds.DeleteLayer(output_layer_name)
 
-        output_layer = ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D)
+        output_layer = ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon25D)
 
         # Create all fields in output layer
         for _field_name, field_defn in all_field_defs.items():
@@ -2845,9 +2867,7 @@ def merge_grid_layers_with_type(
         if output_ds.GetLayerByName(output_layer_name):
             output_ds.DeleteLayer(output_layer_name)
 
-        output_layer = output_ds.CreateLayer(
-            output_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D
-        )
+        output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon25D)
 
         all_field_defs = {}
 
