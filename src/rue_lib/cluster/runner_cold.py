@@ -498,12 +498,18 @@ def extract_road_adjacent_vertices(
     # Write lines layer
     if lines_to_write:
         gdf_lines = gpd.GeoDataFrame(lines_to_write, geometry="geometry", crs=gdf_grid.crs)
-        gdf_lines.to_file(output_gpkg, layer=lines_layer_name, driver="GPKG")
+    else:
+        # Create empty layer with proper schema
+        gdf_lines = gpd.GeoDataFrame([], geometry=[], crs=gdf_grid.crs)
+    gdf_lines.to_file(output_gpkg, layer=lines_layer_name, driver="GPKG")
 
     # Write points layer
     if points_to_write:
         gdf_points = gpd.GeoDataFrame(points_to_write, geometry="geometry", crs=gdf_grid.crs)
-        gdf_points.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    else:
+        # Create empty layer with proper schema
+        gdf_points = gpd.GeoDataFrame([], geometry=[], crs=gdf_grid.crs)
+    gdf_points.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     total_vertices = len(points_to_write)
     total_lines = len(lines_to_write)

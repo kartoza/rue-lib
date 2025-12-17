@@ -38,7 +38,7 @@ def merge_and_classify_on_grid_clusters(
     print(f"  Loaded {len(gdf_blocks)} on-grid blocks")
     print(f"  Loaded {len(gdf_convex)} convex corner clusters")
 
-    if gdf_blocks.empty or gdf_convex.empty:
+    if gdf_blocks.empty:
         gdf_result = gpd.GeoDataFrame([], geometry=[], crs=gdf_blocks.crs)
         gdf_result.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
@@ -96,7 +96,8 @@ def merge_and_classify_on_grid_clusters(
                     continue
 
                 result_polygons.extend(convex_geoms)
-                result_records.extend(convex_records_by_block[block_id])
+                if block_id in convex_records_by_block:
+                    result_records.extend(convex_records_by_block[block_id])
 
                 for part in parts:
                     if part.is_empty or part.area <= 10.0:
@@ -218,6 +219,13 @@ def merge_and_classify_off_grid_clusters(
     print(f"  Loaded {len(gdf_cold)} cold clusters")
 
     if gdf_blocks.empty or gdf_cold.empty:
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame(
+            [],
+            geometry=[],
+            crs=gdf_blocks.crs if not gdf_blocks.empty else gdf_cold.crs,
+        )
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     cold_by_orig_id = {}
@@ -308,6 +316,9 @@ def merge_final_cold_clusters(
 
     if gdf_on_grid.empty and gdf_off_grid.empty:
         print("  Warning: both input layers are empty")
+        # Create empty layer - use a default CRS if both are empty
+        gdf_empty = gpd.GeoDataFrame([], geometry=[])
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     if gdf_on_grid.empty:
