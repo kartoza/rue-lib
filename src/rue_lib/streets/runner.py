@@ -328,10 +328,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 17: Merging all grid layers with grid_type information...")
+    all_grid_layer_name = "17_all_grids_merged"
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
-        "17_all_grids_merged",
+        all_grid_layer_name,
         [
             (cleaned_cells_layer, "off_grid_local_streets"),
             (off_grid_inner_layer, "off_grid"),
@@ -344,6 +345,41 @@ def generate_streets(cfg: StreetConfig) -> Path:
             ("05_secondary_roads", "road_secondary"),
             (local_roads_layer_name, "road_local"),
         ],
+    )
+
+    # --------------------------------------
+    # Extract local roads from merged grids
+    # --------------------------------------
+    local_road_grid_layer_name = "17_local_road_grid"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        (
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'on_grid_sec_local_streets' OR "
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'off_grid_local_streets' "
+        ),
+        output_path,
+        local_road_grid_layer_name,
+    )
+    buildable_zone_layer_name = "17_buildable_zone"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        "zone_type = 'buildable'",
+        output_path,
+        buildable_zone_layer_name,
+    )
+
+    print("Cutting local roads with buildable zone to get roads outside buildable area...")
+    erase_layer(
+        output_path,
+        local_road_grid_layer_name,
+        output_path,
+        buildable_zone_layer_name,
+        output_path,
+        "17_local_roads_buffer",
     )
 
     print("Step 18: Exporting merged grids to GeoJSON...")

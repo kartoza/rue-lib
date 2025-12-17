@@ -19,6 +19,11 @@ class FinancialStreet(FinancialModel):
     road_len_sec_50: float
     road_len_loc_50: float
 
+    # Area of roads
+    road_area_art: float
+    road_area_sec: float
+    road_area_loc: float
+
     def __init__(self, config: StreetConfig):
         """Initialize a FinancialStreet object."""
         out_dir = Path(config.output_dir)
@@ -51,7 +56,16 @@ class FinancialStreet(FinancialModel):
         self.road_len_sec_50 = sec_50.length.sum()
         self.road_len_loc_50 = 0
 
+        # Calculate areas
+        road_buffer = gpd.read_file(output_path, layer="00_roads_buffer")
+        local_roads_buffer = gpd.read_file(output_path, layer="17_local_roads_buffer")
+        self.road_area_art = road_buffer[(road_buffer["road_type"] == "road_art")].area.sum()
+        self.road_area_sec = road_buffer[(road_buffer["road_type"] == "road_sec")].area.sum()
+        self.road_area_loc = local_roads_buffer.area.sum()
+
         roads = None
         roads_local = None
+        road_buffer = None
+        local_roads_buffer = None
 
         self.save(output_dir=config.output_dir)
