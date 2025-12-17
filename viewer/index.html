@@ -1375,7 +1375,7 @@
                         source: sourceId,
                         paint: {
                             'fill-color':
-                                ['case', ['has', 'color'], ['get', 'color'], color],
+                                ['case', ['==', ['get', 'type'], 'road_local'], 'rgba(255,255,255)', ['has', 'color'], ['get', 'color'], 'rgba(255,255,255)'],
                             'fill-opacity':
                                 ['case', ['has', 'color'], 0.8, 0.3],
                         }

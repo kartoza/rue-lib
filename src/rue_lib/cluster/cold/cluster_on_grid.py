@@ -7,6 +7,7 @@ from shapely import wkb as shapely_wkb
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
 from rue_lib.core.geometry_sampling import extend_line, points_along_line
 from rue_lib.core.helpers import create_or_replace_layer
 
@@ -1189,7 +1190,11 @@ def create_off_grid_cold_clusters(
                             if is_duplicate:
                                 continue
 
-                            cluster_type = "off_grid1" if idx == 0 else "off_grid2"
+                            cluster_type = (
+                                ClusterTypes.OFF_GRID_COLD
+                                if idx == 0
+                                else ClusterTypes.OFF_GRID_COLD2
+                            )
                             cluster_polygons.append(part)
                             cluster_records.append(
                                 {
@@ -1197,6 +1202,7 @@ def create_off_grid_cold_clusters(
                                     "orig_id": block_orig_id,
                                     "type": cluster_type,
                                     "area": float(part.area),
+                                    "color": ColorTypes[cluster_type],
                                 }
                             )
                             processed_block_centroids.append(part_centroid)
@@ -1224,12 +1230,14 @@ def create_off_grid_cold_clusters(
             if is_duplicate:
                 continue
 
+            _type = ClusterTypes.OFF_GRID_COLD
             cluster_polygons.append(block_geom)
             cluster_records.append(
                 {
                     "id": cluster_id,
                     "orig_id": orig_id,
-                    "type": "off_grid1",
+                    "type": _type,
+                    "color": ColorTypes[_type],
                     "area": float(block_geom.area),
                 }
             )
