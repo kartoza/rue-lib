@@ -1,9 +1,11 @@
 import math
 
+import geopandas as gpd
 from osgeo import ogr
 from shapely import LineString
 from shapely import ops as shapely_ops
 from shapely import wkb as shapely_wkb
+from shapely.geometry import Point
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
@@ -240,168 +242,137 @@ def extract_off_grid_adjacent_lines(
     return output_layer_name
 
 
+def _quantize_coord(x: float, y: float, tol: float) -> tuple[int, int]:
+    """Quantize coordinates for deduplication."""
+    return (int(round(x / tol)), int(round(y / tol)))
+
+
+def _calculate_angle_deg(
+    prev_xy: tuple[float, float], cur_xy: tuple[float, float], next_xy: tuple[float, float]
+) -> float:
+    """Calculate angle in degrees at current vertex formed by prev -> cur -> next."""
+    px, py = prev_xy
+    cx, cy = cur_xy
+    nx, ny = next_xy
+
+    ax = px - cx
+    ay = py - cy
+    bx = nx - cx
+    by = ny - cy
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la <= 1e-12 or lb <= 1e-12:
+        return 0.0
+    dot = ax * bx + ay * by
+    c = dot / (la * lb)
+    c = max(-1.0, min(1.0, c))  # Clamp to [-1, 1]
+    return math.degrees(math.acos(c))
+
+
+def _extract_coords_from_linestring(line_geom: LineString, tol: float) -> list[tuple[float, float]]:
+    """Extract and deduplicate coordinates from a LineString geometry."""
+    coords = list(line_geom.coords)
+
+    if len(coords) < 2:
+        return []
+    x0, y0 = coords[0]
+    xn, yn = coords[-1]
+    if abs(x0 - xn) <= tol and abs(y0 - yn) <= tol:
+        coords = coords[:-1]
+    deduped: list[tuple[float, float]] = []
+    for x, y in coords:
+        if not deduped:
+            deduped.append((x, y))
+            continue
+        lx, ly = deduped[-1]
+        if abs(x - lx) <= tol and abs(y - ly) <= tol:
+            continue
+        deduped.append((x, y))
+
+    return deduped
+
+
 def extract_vertices_from_lines(
     input_gpkg: str,
     input_layer_name: str,
     output_layer_name: str,
-    tol: float = 1,
+    tol: float = 0.1,
 ) -> str:
-    ds = ogr.Open(input_gpkg, 0)
-    if ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    """Extract vertices from line geometries with angle calculation and deduplication.
 
-    in_layer = ds.GetLayerByName(input_layer_name)
-    if in_layer is None:
-        raise ValueError(f"Layer {input_layer_name} not found")
+    Args:
+        input_gpkg: Path to input GeoPackage
+        input_layer_name: Name of the input lines layer
+        output_layer_name: Name for the output vertices layer
+        tol: Tolerance for deduplication (default: 1)
 
-    srs = in_layer.GetSpatialRef()
+    Returns:
+        Name of the output layer
+    """
+    gdf_lines = gpd.read_file(input_gpkg, layer=input_layer_name)
 
-    points: list[dict] = []
+    if gdf_lines.empty:
+        print(f"  Warning: {input_layer_name} is empty")
+        return output_layer_name
+    if "orig_id" not in gdf_lines.columns:
+        gdf_lines["orig_id"] = gdf_lines.index
+
+    points_data = []
     line_counter = 0
     seen_by_orig: dict[int, set[tuple[int, int]]] = {}
 
-    def qkey(x: float, y: float) -> tuple[int, int]:
-        return (int(round(x / tol)), int(round(y / tol)))
-
-    def angle_deg(
-        prev_xy: tuple[float, float], cur_xy: tuple[float, float], next_xy: tuple[float, float]
-    ) -> float:
-        px, py = prev_xy
-        cx, cy = cur_xy
-        nx, ny = next_xy
-
-        ax = px - cx
-        ay = py - cy
-        bx = nx - cx
-        by = ny - cy
-
-        la = math.hypot(ax, ay)
-        lb = math.hypot(bx, by)
-        if la <= 1e-12 or lb <= 1e-12:
-            return 0.0
-
-        dot = ax * bx + ay * by
-        c = dot / (la * lb)
-        if c > 1.0:
-            c = 1.0
-        elif c < -1.0:
-            c = -1.0
-
-        return math.degrees(math.acos(c))
-
-    for feat in in_layer:
-        geom = feat.GetGeometryRef()
-        if geom is None or geom.IsEmpty():
+    for idx, row in gdf_lines.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
             continue
 
-        orig_id_idx = feat.GetFieldIndex("orig_id")
-        orig_id_val = feat.GetField(orig_id_idx) if orig_id_idx != -1 else None
-        if orig_id_val is None:
-            orig_id_val = int(feat.GetFID())
+        orig_id = int(row["orig_id"]) if row["orig_id"] is not None else int(idx)
+        seen = seen_by_orig.setdefault(orig_id, set())
+        if geom.geom_type == "LineString":
+            lines_to_process = [geom]
+        elif geom.geom_type == "MultiLineString":
+            lines_to_process = list(geom.geoms)
+        else:
+            continue
 
-        seen = seen_by_orig.setdefault(int(orig_id_val), set())
+        for line_geom in lines_to_process:
+            coords = _extract_coords_from_linestring(line_geom, tol)
 
-        def handle_line(
-            line_geom: ogr.Geometry, *, current_seen: set[tuple[int, int]], current_orig_id: int
-        ):
-            nonlocal line_counter
-
-            n = line_geom.GetPointCount()
-            if n < 2:
+            if len(coords) < 2:
                 line_counter += 1
-                return
+                continue
 
-            coords = [(line_geom.GetX(i), line_geom.GetY(i)) for i in range(n)]
-            x0, y0 = coords[0]
-            xn, yn = coords[-1]
-            if abs(x0 - xn) <= tol and abs(y0 - yn) <= tol:
-                coords = coords[:-1]
-            deduped: list[tuple[float, float]] = []
-            for x, y in coords:
-                if not deduped:
-                    deduped.append((x, y))
-                    continue
-                lx, ly = deduped[-1]
-                if abs(x - lx) <= tol and abs(y - ly) <= tol:
-                    continue
-                deduped.append((x, y))
-
-            m = len(deduped)
             vertex_out_idx = 1
-
-            for i, (x, y) in enumerate(deduped):
-                k = qkey(x, y)
-                if k in current_seen:
-                    continue
-                current_seen.add(k)
-                if i > 0 and i < m - 1:
-                    ang = angle_deg(deduped[i - 1], deduped[i], deduped[i + 1])
+            for i, (x, y) in enumerate(coords):
+                k = _quantize_coord(x, y, tol)
+                seen.add(k)
+                if 0 < i < len(coords) - 1:
+                    ang = _calculate_angle_deg(coords[i - 1], coords[i], coords[i + 1])
                 else:
                     ang = 0.0
 
-                pt_geom = ogr.Geometry(ogr.wkbPoint)
-                pt_geom.AddPoint(x, y)
-                points.append(
+                points_data.append(
                     {
-                        "geometry": pt_geom,
-                        "orig_id": current_orig_id,
+                        "orig_id": orig_id,
                         "line_id": line_counter,
                         "vertex_idx": vertex_out_idx,
                         "x": x,
                         "y": y,
                         "angle_deg": ang,
+                        "geometry": Point(x, y),
                     }
                 )
                 vertex_out_idx += 1
 
             line_counter += 1
 
-        gtype = geom.GetGeometryType()
-        if gtype in (ogr.wkbLineString, ogr.wkbLineString25D):
-            handle_line(geom, current_seen=seen, current_orig_id=int(orig_id_val))
-        elif gtype in (ogr.wkbMultiLineString, ogr.wkbGeometryCollection):
-            for i in range(geom.GetGeometryCount()):
-                sub = geom.GetGeometryRef(i)
-                if sub and sub.GetGeometryType() in (ogr.wkbLineString, ogr.wkbLineString25D):
-                    handle_line(sub, current_seen=seen, current_orig_id=int(orig_id_val))
+    if not points_data:
+        print(f"  Warning: No vertices extracted from {input_layer_name}")
+        return output_layer_name
+    gdf_vertices = gpd.GeoDataFrame(points_data, crs=gdf_lines.crs)
+    gdf_vertices.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
 
-    ds = None
-
-    out_ds = ogr.Open(input_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {input_gpkg} for writing")
-
-    out_layer = create_or_replace_layer(
-        out_ds,
-        output_layer_name,
-        srs,
-        ogr.wkbPoint,
-        [
-            ("orig_id", ogr.OFTInteger),
-            ("line_id", ogr.OFTInteger),
-            ("vertex_idx", ogr.OFTInteger),
-            ("x", ogr.OFTReal),
-            ("y", ogr.OFTReal),
-            ("angle_deg", ogr.OFTReal),
-        ],
-    )
-
-    for pt in points:
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(pt["geometry"])
-        out_feat.SetField("orig_id", pt["orig_id"])
-        out_feat.SetField("line_id", pt["line_id"])
-        out_feat.SetField("vertex_idx", pt["vertex_idx"])
-        out_feat.SetField("x", pt["x"])
-        out_feat.SetField("y", pt["y"])
-        out_feat.SetField("angle_deg", float(pt["angle_deg"]))
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
-
-    out_layer = None
-    out_ds = None
-
-    print(f"  Created vertices layer: {output_layer_name} ({len(points)} points)")
+    print(f"  Created vertices layer: {output_layer_name} ({len(gdf_vertices)} points)")
     return output_layer_name
 
 
@@ -962,12 +933,14 @@ def create_off_grid_zero_clusters(
     gdf_lines = gpd.read_file(input_gpkg, layer=split_lines_layer_name)
 
     lines_by_group = {}
+    lines_records_by_group = {}
     for _, row in gdf_lines.iterrows():
         group_id = row.get("group_id")
         if group_id is not None:
             if group_id not in lines_by_group:
                 lines_by_group[group_id] = []
             line = row.geometry
+            lines_records_by_group.setdefault(group_id, []).append(row)
             if isinstance(line, LineString):
                 extended_line = extend_line(line, 50)
                 lines_by_group[group_id].append(extended_line)
@@ -1008,10 +981,22 @@ def create_off_grid_zero_clusters(
             if part.is_empty or part.area <= 0:
                 continue
             split_geoms.append(part)
+
+            # Find closest line record for orig_id
+            min_dist = float("inf")
+            line_id = None
+            for line_record in lines_records_by_group.get(group_id, []):
+                line_geom = line_record.geometry
+                dist = part.distance(line_geom)
+                if dist < min_dist:
+                    min_dist = dist
+                    line_id = line_record.get("id")
+
             records.append(
                 {
                     "id": cid,
                     "orig_id": group_id,
+                    "line_id": line_id,
                     "type": "off_grid0",
                     "area": float(part.area),
                 }
@@ -1053,7 +1038,6 @@ def create_off_grid_cold_clusters(
 
     print("\nCreating off-grid cold clusters from depth points...")
 
-    # Load layers
     gdf_blocks = gpd.read_file(input_gpkg, layer=off_grid0_clusters_layer)
     gdf_points = gpd.read_file(input_gpkg, layer=depth_points_layer_name)
     gdf_lines = gpd.read_file(input_gpkg, layer=perpendicular_lines_layer_name)
@@ -1066,7 +1050,6 @@ def create_off_grid_cold_clusters(
         print("  Warning: one or more input layers are empty")
         return output_layer_name
 
-    # Create mapping: line id -> line group_id (which is block orig_id)
     line_id_to_block_id = {}
     for _, row in gdf_lines.iterrows():
         line_id = row.get("id")
@@ -1082,23 +1065,29 @@ def create_off_grid_cold_clusters(
     gdf_id0_points = gdf_points[gdf_points["id"] == 0].copy()
 
     points_by_block_id = {}
+    id1_points_by_group_id = {}
     for _, row in gdf_id1_points.iterrows():
         point_group_id = row.get("group_id")
         if point_group_id is not None and point_group_id in line_id_to_block_id:
             block_id = line_id_to_block_id[point_group_id]
             if block_id not in points_by_block_id:
                 points_by_block_id[block_id] = []
+            if block_id not in id1_points_by_group_id:
+                id1_points_by_group_id[block_id] = {}
             points_by_block_id[block_id].append(
                 {
                     "geometry": row.geometry,
                     "line_id": point_group_id,
                     "block_id": block_id,
+                    "id": row.get("id"),
                 }
             )
+            id1_points_by_group_id[block_id][point_group_id] = row.geometry
 
     print(f"  Points grouped by block_id: {sorted(points_by_block_id.keys())}")
 
     id0_points_by_block_id = {}
+    id0_points_by_group_id = {}
     for _, row in gdf_id0_points.iterrows():
         point_group_id = row.get("group_id")  # This is the line_id
         if point_group_id is not None and point_group_id in line_id_to_block_id:
@@ -1106,6 +1095,7 @@ def create_off_grid_cold_clusters(
             if block_id not in id0_points_by_block_id:
                 id0_points_by_block_id[block_id] = []
             id0_points_by_block_id[block_id].append(row.geometry)
+            id0_points_by_group_id[point_group_id] = row.geometry
 
     blocks_by_orig_id = {}
     for _, row in gdf_blocks.iterrows():
@@ -1125,12 +1115,20 @@ def create_off_grid_cold_clusters(
 
     print("  Looking for adjacent line_id pairs within each block...")
     total_pairs = 0
+
+    points_no_prev = []
+    points_no_next = []
+    perp_debug_lines = []
+
     for block_id, points_list in points_by_block_id.items():
         if block_id not in blocks_by_orig_id:
             print(f"    Block {block_id} not found in blocks layer")
             continue
 
         points_list_sorted = sorted(points_list, key=lambda p: p["line_id"])
+
+        points_no_prev.append(points_list_sorted[0])
+        points_no_next.append(points_list_sorted[-1])
 
         for i in range(len(points_list_sorted) - 1):
             pt1_data = points_list_sorted[i]
@@ -1139,10 +1137,11 @@ def create_off_grid_cold_clusters(
             line_id_1 = pt1_data["line_id"]
             line_id_2 = pt2_data["line_id"]
             if line_id_2 - line_id_1 != 1:
+                points_no_next.append(pt1_data)
+                points_no_prev.append(pt2_data)
                 continue
 
             total_pairs += 1
-
             pt1 = pt1_data["geometry"]
             pt2 = pt2_data["geometry"]
 
@@ -1150,7 +1149,7 @@ def create_off_grid_cold_clusters(
                 continue
 
             line = LineString([pt1, pt2])
-            split_line = extend_line(line, buffer_distance)
+            split_line = extend_line(line, buffer_distance / 2)
 
             blocks_to_split = blocks_by_orig_id[block_id]
 
@@ -1164,7 +1163,6 @@ def create_off_grid_cold_clusters(
                         parts = list(split_result.geoms)
                     else:
                         parts = [split_result]
-
                     if len(parts) < 2:
                         print(f"      Warning: Split did not produce 2+ parts for block {block_id}")
                         continue
@@ -1214,6 +1212,150 @@ def create_off_grid_cold_clusters(
                     print(f"      Error splitting block {block_id} with line: {e}")
                     continue
 
+    perp_line_points = []
+    if points_no_prev:
+        for pt_data in points_no_prev:
+            curr_pt = pt_data["geometry"]
+            line_id = pt_data.get("line_id")
+            block_id = pt_data.get("block_id")
+            if line_id in perp_line_points:
+                continue
+            perp_line_points.append(line_id)
+            if line_id is None or curr_pt is None or not isinstance(curr_pt, Point):
+                continue
+            start_pt = id0_points_by_group_id.get(line_id)
+            if start_pt is None:
+                continue
+            vec = (curr_pt.x - start_pt.x, curr_pt.y - start_pt.y)
+            vec_len = math.hypot(*vec)
+            if vec_len < 1e-6:
+                continue
+            perp = (-vec[1] / vec_len, vec[0] / vec_len)
+            cand1 = Point(
+                curr_pt.x + perp[0] * buffer_distance * 2, curr_pt.y + perp[1] * buffer_distance * 2
+            )
+            cand2 = Point(
+                curr_pt.x - perp[0] * buffer_distance * 2, curr_pt.y - perp[1] * buffer_distance * 2
+            )
+            endpoints = []
+            next_start = id1_points_by_group_id.get(block_id, {}).get(line_id + 1)
+            if next_start is not None:
+                d1 = cand1.distance(next_start)
+                d2 = cand2.distance(next_start)
+                chosen = cand1 if d1 > d2 else cand2
+                endpoints.append((chosen, 1 if chosen is cand1 else -1))
+            else:
+                endpoints.append((cand1, 1))
+                endpoints.append((cand2, -1))
+
+            for end_pt, dir_sign in endpoints:
+                line = extend_line(LineString([curr_pt, end_pt]), 1)
+                perp_debug_lines.append(
+                    {
+                        "geometry": line,
+                        "block_id": block_id,
+                        "line_id": line_id,
+                        "dir": dir_sign,
+                        "has_next": next_start is not None,
+                    }
+                )
+
+    if points_no_next:
+        for pt_data in points_no_next:
+            curr_pt = pt_data["geometry"]
+            line_id = pt_data.get("line_id")
+            block_id = pt_data.get("block_id")
+
+            if line_id in perp_line_points:
+                continue
+
+            perp_line_points.append(line_id)
+            if line_id is None or curr_pt is None or not isinstance(curr_pt, Point):
+                continue
+            start_pt = id0_points_by_group_id.get(line_id)
+            if start_pt is None:
+                continue
+            vec = (curr_pt.x - start_pt.x, curr_pt.y - start_pt.y)
+            vec_len = math.hypot(*vec)
+            if vec_len < 1e-6:
+                continue
+            perp = (-vec[1] / vec_len, vec[0] / vec_len)
+            cand1 = Point(
+                curr_pt.x + perp[0] * buffer_distance * 2, curr_pt.y + perp[1] * buffer_distance * 2
+            )
+            cand2 = Point(
+                curr_pt.x - perp[0] * buffer_distance * 2, curr_pt.y - perp[1] * buffer_distance * 2
+            )
+            prev_start = id1_points_by_group_id.get(block_id, {}).get(line_id - 1)
+            endpoints = []
+            if prev_start is not None:
+                d1 = cand1.distance(prev_start)
+                d2 = cand2.distance(prev_start)
+                chosen = cand1 if d1 > d2 else cand2
+                endpoints.append((chosen, 1 if chosen is cand1 else -1))
+            else:
+                endpoints.append((cand1, 1))
+                endpoints.append((cand2, -1))
+
+            for end_pt, dir_sign in endpoints:
+                line = extend_line(LineString([curr_pt, end_pt]), 1)
+                perp_debug_lines.append(
+                    {
+                        "geometry": line,
+                        "block_id": block_id,
+                        "line_id": line_id,
+                        "dir": dir_sign,
+                        "has_next": False,
+                    }
+                )
+
+    if perp_debug_lines:
+        for perp_line in perp_debug_lines:
+            line_geom = perp_line["geometry"]
+            for block_row in blocks_by_orig_id.get(perp_line["block_id"], []):
+                block_geom = block_row.geometry
+                try:
+                    split_result = shapely_split(block_geom, line_geom)
+                    if hasattr(split_result, "geoms"):
+                        parts = list(split_result.geoms)
+                    else:
+                        parts = [split_result]
+                    if len(parts) < 2:
+                        continue
+                    else:
+                        parts_with_dist = [
+                            (part, part.distance(line_geom.centroid)) for part in parts
+                        ]
+                        parts_with_dist.sort(key=lambda x: x[1])
+                        for idx, (part, _) in enumerate(parts_with_dist[:2]):
+                            if part.is_empty or part.area <= 0:
+                                continue
+                            part_centroid = part.centroid
+                            is_duplicate = False
+                            for existing_centroid in processed_block_centroids:
+                                if part_centroid.distance(existing_centroid) < 0.1:
+                                    is_duplicate = True
+                                    break
+                            if is_duplicate:
+                                continue
+                            cluster_type = "off_grid1" if idx == 0 else "off_grid2"
+                            cluster_polygons.append(part)
+                            cluster_records.append(
+                                {
+                                    "id": cluster_id,
+                                    "orig_id": block_orig_id,
+                                    "type": cluster_type,
+                                    "area": float(part.area),
+                                }
+                            )
+                            processed_block_centroids.append(part_centroid)
+                            cluster_id += 1
+                            print(f"      Created {cluster_type} cluster (id={cluster_id - 1})")
+                            processed_block_centroids.append(block_geom.centroid)
+                except Exception as e:
+                    print(f"      Error splitting block {block_row.get('id')} with perp line: {e}")
+                    continue
+
     for orig_id, block_rows in blocks_by_orig_id.items():
         for block_row in block_rows:
             block_geom = block_row.geometry
@@ -1257,13 +1399,11 @@ def create_off_grid_cold_clusters(
         temp_gdf["area"] < target_area_m2 * 0.95
     )
     small_cluster_indices = temp_gdf[small_clusters_mask].index.tolist()
-
     small_cluster_indices.sort(key=lambda idx: temp_gdf.loc[idx, "area"])
 
     print(f"    Found {len(small_cluster_indices)} small off_grid1 clusters to merge")
 
     merged_away = set()
-
     for idx in small_cluster_indices:
         if idx in merged_away:
             continue
@@ -1306,7 +1446,6 @@ def create_off_grid_cold_clusters(
         temp_gdf = temp_gdf.reset_index(drop=True)
 
     print(f"    Total merged: {merged_count} small clusters")
-
     gdf_clusters = temp_gdf
     gdf_clusters.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
     print(f"  Created {len(gdf_clusters)} cluster polygons (after merging)")

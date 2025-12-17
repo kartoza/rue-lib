@@ -58,7 +58,7 @@ def extract_roads_buffer(
 
         # Create buffered polygon with sharp corners (mitered joins)
         # join_style=2 creates sharp corners instead of rounded
-        buffered_geom = geometry.buffer(buffer_width / 2.0, join_style=2)
+        buffered_geom = geometry.buffer(buffer_width / 2.0, join_style=2, cap_style=3)
 
         # Keep all properties and update geometry
         row_dict = row.to_dict()

@@ -10,6 +10,7 @@ def merge_and_classify_on_grid_clusters(
     blocks_layer_name: str,
     convex_clusters_layer_name: str,
     concave_points_layer_name: str,
+    roads_buffer_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
 ) -> str:
@@ -32,11 +33,14 @@ def merge_and_classify_on_grid_clusters(
     gdf_blocks = gpd.read_file(input_gpkg, layer=blocks_layer_name)
     gdf_convex = gpd.read_file(input_gpkg, layer=convex_clusters_layer_name)
     gdf_concave_points = gpd.read_file(input_gpkg, layer=concave_points_layer_name)
+    gdf_roads_buffer = gpd.read_file(input_gpkg, layer=roads_buffer_layer_name)
 
     print(f"  Loaded {len(gdf_blocks)} on-grid blocks")
     print(f"  Loaded {len(gdf_convex)} convex corner clusters")
 
     if gdf_blocks.empty or gdf_convex.empty:
+        gdf_result = gpd.GeoDataFrame([], geometry=[], crs=gdf_blocks.crs)
+        gdf_result.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     convex_by_block = {}
@@ -139,10 +143,45 @@ def merge_and_classify_on_grid_clusters(
         print("  No loc_loc clusters created")
         return output_layer_name
 
-    # Update records id
+    def _get_road_type_priority(road_types, remove=False):
+        """Get road type in priority order: arterial > secondary > local."""
+        for road_type, short_name in [
+            ("road_arterial", "art"),
+            ("road_secondary", "sec"),
+            ("road_local", "loc"),
+        ]:
+            if road_type in road_types:
+                if remove:
+                    road_types.remove(road_type)
+                return short_name
+        return "loc"
+
     cluster_id = 0
     for record in result_records:
         record["id"] = cluster_id
+        road_types = []
+
+        roads_touched = gdf_roads_buffer[
+            gdf_roads_buffer.intersects(result_polygons[cluster_id].buffer(0.1))
+        ]
+        if not roads_touched.empty:
+            road_types = roads_touched["type"].unique().tolist()
+            road_types = [rt for rt in road_types if rt]
+
+        is_corner = "_" in record.get("type")
+
+        if is_corner:
+            primary_type = _get_road_type_priority(road_types, remove=True)
+            secondary_type = _get_road_type_priority(road_types, remove=False)
+            record["type"] = f"{primary_type}_{secondary_type}"
+        else:
+            if "road_arterial" in road_types and "road_local" in road_types:
+                record["type"] = "loc"
+            else:
+                record["type"] = _get_road_type_priority(road_types, remove=False)
+
+        record["road_types"] = ",".join(road_types)
+
         cluster_id += 1
 
     gdf_result = gpd.GeoDataFrame(result_records, geometry=result_polygons, crs=gdf_blocks.crs)

@@ -230,6 +230,8 @@ def create_clusters_from_convex_points(
     for split_lines in split_lines_by_convex:
         split_lines_data = split_lines_by_convex[split_lines]
         block_geom = blocks_by_id[split_lines_data["block_id"]]
+        if "line2" not in split_lines_data:
+            continue
         try:
             lines_union = unary_union([split_lines_data["line0"], split_lines_data["line2"]])
             split_result = shapely_split(block_geom, lines_union)
@@ -243,7 +245,7 @@ def create_clusters_from_convex_points(
 
             corner_parts_count = 0
 
-            parts.sort(key=lambda g: g.centroid.distance(split_lines_data["convex"].geometry))
+            parts.sort(key=lambda g: g.centroid.distance(lines_union.centroid))
 
             if len(parts) > 2:
                 part = parts[0]
@@ -272,14 +274,13 @@ def create_clusters_from_convex_points(
                 )
                 cluster_id += 1
                 corner_parts_count += 1
-            print(f"    Block {block_id}: created {corner_parts_count} corner clusters")
+            print(f"    Block {split_lines_data['block_id']}: created {corner_parts_count} corner")
 
         except Exception as e:
             print(f"    Warning: Failed to split block {block_id}: {e}")
 
     if not cluster_polygons:
         print("  No clusters created")
-        return output_layer_name
 
     gdf_clusters = gpd.GeoDataFrame(cluster_records, geometry=cluster_polygons, crs=gdf_blocks.crs)
 
