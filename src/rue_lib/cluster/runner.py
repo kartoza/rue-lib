@@ -11,6 +11,7 @@ from osgeo import ogr
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.core.geometry import get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.operations import extract_by_geometry_type
+from rue_lib.utils.io import prepare_geopackage
 
 from ..core import merge_gpkg_layers
 from ..core.roads import extract_roads_buffer
@@ -42,10 +43,13 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    output_gpkg = out_dir / "outputs.gpkg"
+    output_gpkg = Path(cfg.geopackage_path)
     output_path = str(output_gpkg)
-    if os.path.exists(output_path):
-        os.remove(output_path)
+
+    # Use existing geopackage if it exists (from previous steps), otherwise create new one
+    if not os.path.exists(output_path):
+        # Prepare geopackage with template
+        prepare_geopackage(output_gpkg)
 
     # Step 1: Read input data
     print("Step 1: Determining UTM zone...")

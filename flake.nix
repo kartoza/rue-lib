@@ -4,10 +4,6 @@
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
-    timvim = {
-      url = "github:timlinux/timvim";
-      flake = false;
-    };
   };
 
   outputs =
@@ -15,7 +11,6 @@
       self,
       nixpkgs,
       flake-utils,
-      timvim,
     }:
     flake-utils.lib.eachDefaultSystem (
       system:
@@ -36,6 +31,11 @@
             scipy
             rich
             shapely
+            # TUI dependencies
+            textual
+            matplotlib
+            fiona
+            pillow
             # Development dependencies
             pytest
             pytest-cov
@@ -49,39 +49,15 @@
           ]
         );
 
-        # Neovim with timvim configuration
-        neovimWithTimvim = pkgs.neovim.override {
-          configure = {
-            customRC = ''
-              " Load timvim configuration
-              set runtimepath^=${timvim}
-              set runtimepath+=${timvim}/after
-              lua << EOF
-              -- Set up timvim if init.lua exists
-              local timvim_init = "${timvim}/init.lua"
-              if vim.fn.filereadable(timvim_init) == 1 then
-                dofile(timvim_init)
-              end
-              EOF
-            '';
-            packages.myPlugins = with pkgs.vimPlugins; {
-              start = [
-                # Essential plugins
-                vim-nix
-                nvim-lspconfig
-                nvim-treesitter
-              ];
-            };
-          };
-        };
-
       in
       {
         # Development shell
         devShells.default = pkgs.mkShell {
           buildInputs = [
             pythonEnv
-            neovimWithTimvim
+            # Image viewers for TUI
+            pkgs.fim  # Frame buffer image viewer
+            pkgs.feh  # X11 image viewer (fallback)
 
             pkgs.chafa
             # Additional tools
@@ -98,11 +74,16 @@
           ];
 
           shellHook = ''
-            export PYTHONPATH="$pythonWithPackages/lib/python*/site-packages:${self}/src:$PYTHONPATH"
+            # Set Python path for rue-lib and rue-tui
+            export PYTHONPATH="${self}/src:${self}:$PYTHONPATH"
 
             # Set GDAL environment
             export GDAL_DATA="${pkgs.gdal}/share/gdal"
             export PROJ_LIB="${pkgs.proj}/share/proj"
+
+            # Create convenient aliases
+            alias rue-tui="python -m rue_tui"
+            alias run-tui="python scripts/run_tui.py"
 
             # Ensure pre-commit is installed
             if [ -f .git/hooks/pre-commit ]; then
@@ -130,13 +111,14 @@
             echo -e "        🌈 Your Dev Environment is prepared."
             echo -e ""
             echo -e "Quick Commands:$RESET"
-            echo -e "   $GRAY▶$RESET  $CYAN./scripts/vscode.sh$RESET  - VSCode preconfigured for python dev"
-            echo -e "   $GRAY▶$RESET  $CYAN./scripts/checks.sh$RESET  - Run pre-commit checks"
-            echo -e "   $GRAY▶$RESET  $CYAN./scripts/clean.sh$RESET  - Cleanup dev dolder o "
-            echo -e "   $GRAY▶$RESET  $CYAN nix flake show$RESET    - Show available configurations"
-            echo -e "   $GRAY▶$RESET  $CYAN nix flake check$RESET   - Run all flake checks"
-            echo -e "   $GRAY▶$RESET  $CYAN nix run .#test $RESET   - Run all tests"
-            echo -e "   $GRAY▶$RESET  $CYAN nix run .#test-cov $RESET   - Run all tests with coverage"
+            echo -e "   $GRAY▶$RESET  $CYAN./scripts/vscode.sh$RESET     - VSCode preconfigured for python dev"
+            echo -e "   $GRAY▶$RESET  $CYAN./scripts/checks.sh$RESET     - Run pre-commit checks"
+            echo -e "   $GRAY▶$RESET  $CYAN./scripts/clean.sh$RESET      - Cleanup dev folder"
+            echo -e "   $GRAY▶$RESET  $CYAN nix flake show$RESET        - Show available configurations"
+            echo -e "   $GRAY▶$RESET  $CYAN nix flake check$RESET       - Run all flake checks"
+            echo -e "   $GRAY▶$RESET  $CYAN nix run .#test$RESET         - Run all tests"
+            echo -e "   $GRAY▶$RESET  $CYAN nix run .#test-cov$RESET     - Run all tests with coverage"
+            echo -e "   $GRAY▶$RESET  $CYAN nix run .#run-examples$RESET - Run all examples and open in QGIS"
             echo -e "$RESET$ORANGE \n__________________________________________________________________\n"
             echo "To run QGIS with your profile, use one of these commands:"
             echo -e "$RESET$ORANGE \n__________________________________________________________________\n"
@@ -159,6 +141,7 @@
           propagatedBuildInputs = with pkgs.python313Packages; [
             gdal
             geopandas
+            scipy
             rich
             shapely
           ];
@@ -202,6 +185,87 @@
                 export PROJ_LIB="${pkgs.proj}/share/proj"
                 cd ${self}
                 ${pythonEnv}/bin/pytest tests/ --cov=rue_lib --cov-report=html --cov-report=term
+              ''
+            );
+          };
+
+          rue-tui = {
+            type = "app";
+            program = toString (
+              pkgs.writeShellScript "rue-tui" ''
+                export PYTHONPATH="${self}/src:${self}:$PYTHONPATH"
+                export GDAL_DATA="${pkgs.gdal}/share/gdal"
+                export PROJ_LIB="${pkgs.proj}/share/proj"
+                cd ${self}
+
+                echo "🏙️ Launching RUE TUI..."
+                echo "======================="
+
+                # Create demo data if needed
+                if [ ! -f "data/site.geojson" ] || [ ! -f "data/roads.geojson" ]; then
+                  echo "📁 Creating demo data..."
+                  mkdir -p data
+                  ${pythonEnv}/bin/python rue_tui/demo_data.py
+                fi
+
+                # Launch the TUI
+                ${pythonEnv}/bin/python -m rue_tui
+              ''
+            );
+          };
+
+          run-examples = {
+            type = "app";
+            program = toString (
+              pkgs.writeShellScript "run-examples" ''
+                export PYTHONPATH="${self}/src:$PYTHONPATH"
+                export GDAL_DATA="${pkgs.gdal}/share/gdal"
+                export PROJ_LIB="${pkgs.proj}/share/proj"
+                cd ${self}
+
+                # Create unique writable output directory
+                OUTPUT_DIR="/tmp/rue-examples-$(date +%Y%m%d-%H%M%S)"
+                mkdir -p "$OUTPUT_DIR"
+
+                echo "🌈 Running RUE-lib examples in sequence..."
+                echo "========================================="
+                echo "Output directory: $OUTPUT_DIR"
+                echo ""
+
+                # Step 1: Generate Parcels
+                echo "🏗️  Running Step 1: Generate Parcels"
+                echo "-----------------------------------"
+                ${pythonEnv}/bin/python examples/step1_generate_parcels.py --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+
+                # Step 2: Generate Streets
+                echo ""
+                echo "🛣️  Running Step 2: Generate Streets"
+                echo "----------------------------------"
+                ${pythonEnv}/bin/python examples/step2_generate_streets.py --parcels "$OUTPUT_DIR/parcels.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+
+                # Step 3: Generate Clusters
+                echo ""
+                echo "🏘️  Running Step 3: Generate Clusters"
+                echo "------------------------------------"
+                ${pythonEnv}/bin/python examples/step3_generate_cluster.py --input "$OUTPUT_DIR/all_grids_merged.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+
+                # Open output geopackage in QGIS
+                echo ""
+                echo "🗺️  Opening output geopackage in QGIS LTR..."
+                echo "-------------------------------------------"
+                if [ -f "$OUTPUT_DIR/output.gpkg" ]; then
+                  nix run github:qgis/QGIS#qgis-ltr -- --profile RUE "$OUTPUT_DIR/output.gpkg" &
+                  echo "✅ QGIS LTR opened with output.gpkg"
+                else
+                  echo "❌ Output geopackage not found at $OUTPUT_DIR/output.gpkg"
+                  echo "Looking for alternative outputs..."
+                  find "$OUTPUT_DIR" -name "*.gpkg" -type f | head -5
+                fi
+
+                echo ""
+                echo "🎉 All examples completed!"
+                echo "========================="
+                echo "📁 Outputs saved to: $OUTPUT_DIR"
               ''
             );
           };

@@ -1,0 +1,80 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "rue-tui"
+version = "0.1.0"
+description = "Terminal User Interface for RUE-lib Urban Planning Analysis"
+readme = "README.md"
+authors = [
+    {name = "RUE-lib Team", email = "noreply@rue-lib.org"}
+]
+license = {text = "MIT"}
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering :: GIS",
+    "Topic :: Software Development :: User Interfaces",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+requires-python = ">=3.9"
+dependencies = [
+    "rue-lib",
+    "textual>=0.45.0",
+    "rich>=13.0.0",
+    "geopandas>=0.12.0",
+    "matplotlib>=3.5.0",
+    "fiona>=1.8.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-cov>=4.0.0",
+    "black>=22.0.0",
+    "isort>=5.10.0",
+    "flake8>=5.0.0",
+    "mypy>=0.990",
+]
+image = [
+    "fim",  # Frame buffer image viewer
+    "feh",  # X11 image viewer
+]
+
+[project.urls]
+Homepage = "https://github.com/timlinux/rue-lib"
+Repository = "https://github.com/timlinux/rue-lib"
+Documentation = "https://rue-lib.readthedocs.io"
+"Bug Reports" = "https://github.com/timlinux/rue-lib/issues"
+
+[project.scripts]
+rue-tui = "rue_tui.app:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["rue_tui*"]
+exclude = ["tests*"]
+
+[tool.setuptools.package-data]
+rue_tui = ["*.css", "*.tcss"]
+
+[tool.black]
+line-length = 88
+target-version = ['py39']
+
+[tool.isort]
+profile = "black"
+multi_line_output = 3
+
+[tool.mypy]
+python_version = "3.9"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

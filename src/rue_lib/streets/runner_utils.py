@@ -178,7 +178,7 @@ def polygons_to_lines_layer(
         out_ds = driver.CreateDataSource(output_path)
     if out_ds.GetLayerByName(output_layer_name):
         out_ds.DeleteLayer(output_layer_name)
-    out_layer = out_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbLineString)
+    out_layer = out_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbLineString25D)
 
     out_layer.CreateField(ogr.FieldDefn("src_id", ogr.OFTInteger))
     out_layer.CreateField(ogr.FieldDefn("ring_id", ogr.OFTInteger))

@@ -37,8 +37,7 @@
     "root": {
       "inputs": {
         "flake-utils": "flake-utils",
-        "nixpkgs": "nixpkgs",
-        "timvim": "timvim"
+        "nixpkgs": "nixpkgs"
       }
     },
     "systems": {
@@ -53,22 +52,6 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
-        "type": "github"
-      }
-    },
-    "timvim": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1763251013,
-        "narHash": "sha256-H3UYU92Bej7LP++l1FpRAluxduUI0ZKzHCFsa2aImy4=",
-        "owner": "timlinux",
-        "repo": "timvim",
-        "rev": "c94b4abb49d7c3d1975cb3aef5a9323dcd37982f",
-        "type": "github"
-      },
-      "original": {
-        "owner": "timlinux",
-        "repo": "timvim",
         "type": "github"
       }
     }

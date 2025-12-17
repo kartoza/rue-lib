@@ -19,6 +19,7 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_inside_buffer_from_points,
     polygons_to_lines_layer,
 )
+from rue_lib.utils.io import prepare_geopackage
 
 from .cell import (
     fix_grid_cells_with_perpendicular_lines,
@@ -50,7 +51,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 
-    output_gpkg = output_dir / "outputs.gpkg"
+    output_gpkg = Path(cfg.geopackage_path)
+
+    # Prepare geopackage with template (creates from template if needed)
+    prepare_geopackage(output_gpkg)
+
     output_path = str(output_gpkg)
 
     print("Step 1: Determining UTM zone...")

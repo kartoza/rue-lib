@@ -69,7 +69,7 @@ def merge_lines(
             ds.DeleteLayer(i)
             break
 
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString25D)
 
     source_field = ogr.FieldDefn("source", ogr.OFTString)
     output_layer.CreateField(source_field)
@@ -234,7 +234,7 @@ def polygonize_and_classify_blocks(
             break
 
     # Create output layer
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
 
     # Add classification fields
     block_id_field = ogr.FieldDefn("block_id", ogr.OFTInteger)
@@ -268,7 +268,13 @@ def polygonize_and_classify_blocks(
 
         # Create output feature
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(poly)
+        # Ensure polygon is converted to multipolygon for compatibility
+        if poly.GetGeometryType() == ogr.wkbPolygon:
+            multi_geom = ogr.Geometry(ogr.wkbMultiPolygon)
+            multi_geom.AddGeometry(poly)
+            out_feature.SetGeometry(multi_geom)
+        else:
+            out_feature.SetGeometry(poly)
         out_feature.SetField("block_id", block_id)
         out_feature.SetField("block_type", block_type)
         out_feature.SetField("area", poly.GetArea())
@@ -305,7 +311,7 @@ def filter_classified_blocks(
             ds.DeleteLayer(i)
             break
 
-    out_lyr = ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
+    out_lyr = ds.CreateLayer(output_layer_name, srs, ogr.wkbMultiPolygon25D)
 
     # Copy all fields from input
     in_defn = in_lyr.GetLayerDefn()

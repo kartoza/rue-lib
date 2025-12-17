@@ -594,7 +594,7 @@ def grids_from_site(
     if ds.GetLayerByName(point_layer_name):
         ds.DeleteLayer(point_layer_name)
 
-    grid_layer = ds.CreateLayer(grid_layer_name, srs, geom_type=ogr.wkbPolygon)
+    grid_layer = ds.CreateLayer(grid_layer_name, srs, geom_type=ogr.wkbMultiPolygon25D)
     grid_layer.CreateField(ogr.FieldDefn("grid_id", ogr.OFTInteger))
 
     area_field = ogr.FieldDefn("area", ogr.OFTReal)
@@ -610,7 +610,7 @@ def grids_from_site(
     area_ratio_field.SetPrecision(4)
     grid_layer.CreateField(area_ratio_field)
 
-    point_layer = ds.CreateLayer(point_layer_name, srs, geom_type=ogr.wkbPoint)
+    point_layer = ds.CreateLayer(point_layer_name, srs, geom_type=ogr.wkbPoint25D)
     point_layer.CreateField(ogr.FieldDefn("pt_id", ogr.OFTInteger))
 
     grid_id = 1
@@ -652,7 +652,13 @@ def grids_from_site(
             grid_id += 1
 
             geom = ogr.CreateGeometryFromWkt(cell.wkt)
-            feat.SetGeometry(geom)
+            # Ensure polygon is converted to multipolygon for compatibility
+            if geom.GetGeometryType() == ogr.wkbPolygon:
+                multi_geom = ogr.Geometry(ogr.wkbMultiPolygon)
+                multi_geom.AddGeometry(geom)
+                feat.SetGeometry(multi_geom)
+            else:
+                feat.SetGeometry(geom)
             grid_layer.CreateFeature(feat)
             feat = None
 

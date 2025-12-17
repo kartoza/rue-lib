@@ -5,6 +5,8 @@ from pathlib import Path
 
 import geopandas as gpd
 
+from ..utils.io import prepare_geopackage
+
 
 def read_site(path: str) -> gpd.GeoDataFrame:
     """
@@ -63,9 +65,16 @@ def save_geopackage(gdf: gpd.GeoDataFrame, path: Path, layer: str) -> None:
     """
     Save GeoDataFrame to GeoPackage file.
 
+    This function prepares the geopackage using a template if it doesn't exist,
+    ensuring consistent styling and structure for QGIS visualization.
+
     Args:
         gdf: GeoDataFrame to save
         path: Output path for GeoPackage file
         layer: Name of layer to create/update in GeoPackage
     """
+    # Prepare the geopackage (copy from template if needed)
+    prepare_geopackage(path)
+
+    # Save the GeoDataFrame to the prepared geopackage
     gdf.to_file(path, layer=layer, driver="GPKG")

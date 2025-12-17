@@ -25,6 +25,7 @@ class ClusterConfig:
     roads_path: str  # Path to roads network
     input_path: str  # Path to streets output, or previous step output
     output_dir: str  # Path to output directory
+    geopackage_path: str = "outputs/output.gpkg"  # Path to output geopackage
 
     # Fixed data
     # Off-grid plot threshold (0.5 = 50% of target, below it is park)

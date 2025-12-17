@@ -12,6 +12,7 @@ from rue_lib.site.config import SiteConfig
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
 from rue_lib.streets.operations import erase_layer
+from rue_lib.utils.io import prepare_geopackage
 
 
 def generate_parcels(cfg: SiteConfig) -> Path:
@@ -50,6 +51,9 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         roads_m = to_metric_crs(roads)
 
     gpkg_path = cfg.geopackage_path
+
+    # Prepare geopackage with template (creates from template if needed)
+    prepare_geopackage(gpkg_path)
 
     site_m.to_file(gpkg_path, layer="site", driver="GPKG")
     roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")

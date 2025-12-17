@@ -140,7 +140,7 @@ def extract_arterial_edge_lines(
             ds.DeleteLayer(i)
             break
 
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString25D)
 
     for line in result_lines:
         out_feature = ogr.Feature(output_layer.GetLayerDefn())
@@ -174,7 +174,7 @@ def create_division_points(gpkg_path, line_layer_name, output_layer_name, prefer
             ds.DeleteLayer(i)
             break
 
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint25D)
 
     line_id_field = ogr.FieldDefn("line_id", ogr.OFTInteger)
     output_layer.CreateField(line_id_field)
@@ -288,7 +288,7 @@ def create_perpendicular_lines(
             ds.DeleteLayer(i)
             break
 
-    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString)
+    output_layer = ds.CreateLayer(output_layer_name, srs, ogr.wkbLineString25D)
 
     line_id_field = ogr.FieldDefn("line_id", ogr.OFTInteger)
     output_layer.CreateField(line_id_field)

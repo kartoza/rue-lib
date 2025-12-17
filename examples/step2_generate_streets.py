@@ -1,5 +1,13 @@
 # examples/step2_generate_streets.py
 
+import os
+import sys
+
+# Ensure we use the local rue_lib instead of any installed version
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
+
+import argparse
+
 from rue_lib.config import MainConfig
 from rue_lib.streets.runner import StreetConfig, generate_streets
 
@@ -8,11 +16,25 @@ def main():
     """
     Step 2: Generate street blocks from parcels and roads.
     """
+    parser = argparse.ArgumentParser(description="Generate street blocks from parcels and roads")
+    parser.add_argument(
+        "--parcels",
+        default="outputs/step1_parcels/parcels.geojson",
+        help="Path to parcels geojson file",
+    )
+    parser.add_argument(
+        "--output-dir", default="outputs/step2_streets", help="Output directory for street blocks"
+    )
+    parser.add_argument(
+        "--geopackage", default="outputs/output.gpkg", help="Path to output geopackage file"
+    )
+    args = parser.parse_args()
 
     config = StreetConfig(
-        parcel_path="outputs/step1_parcels/subsites.geojson",
+        parcel_path=args.parcels,
         roads_path="data/roads.geojson",
-        output_dir="outputs/step2_streets",
+        output_dir=args.output_dir,
+        geopackage_path=args.geopackage,
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,

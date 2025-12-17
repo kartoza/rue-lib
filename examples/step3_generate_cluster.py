@@ -1,4 +1,6 @@
 # examples/step3_generate_clusters.py
+import argparse
+
 from rue_lib.cluster.runner import ClusterConfig, generate_clusters
 from rue_lib.config import MainConfig
 
@@ -7,11 +9,25 @@ def main():
     """
     Step 3: Generate clusters/partitions from street blocks and roads.
     """
+    parser = argparse.ArgumentParser(description="Generate clusters/partitions from street blocks")
+    parser.add_argument(
+        "--input",
+        default="outputs/step2_streets/all_grids_merged.geojson",
+        help="Path to street blocks geojson file",
+    )
+    parser.add_argument(
+        "--output-dir", default="outputs/step3_clusters", help="Output directory for clusters"
+    )
+    parser.add_argument(
+        "--geopackage", default="outputs/output.gpkg", help="Path to output geopackage file"
+    )
+    args = parser.parse_args()
 
     config = ClusterConfig(
         roads_path="data/roads.geojson",
-        input_path="outputs/step2_streets/all_grids_merged.geojson",
-        output_dir="outputs/step3_clusters",
+        input_path=args.input,
+        output_dir=args.output_dir,
+        geopackage_path=args.geopackage,
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,
