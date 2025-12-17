@@ -1257,6 +1257,8 @@ def create_off_grid_cold_clusters(
                         "line_id": line_id,
                         "dir": dir_sign,
                         "has_next": next_start is not None,
+                        "id0_x": start_pt.x,
+                        "id0_y": start_pt.y,
                     }
                 )
 
@@ -1306,12 +1308,15 @@ def create_off_grid_cold_clusters(
                         "line_id": line_id,
                         "dir": dir_sign,
                         "has_next": False,
+                        "id0_x": start_pt.x,
+                        "id0_y": start_pt.y,
                     }
                 )
 
     if perp_debug_lines:
         for perp_line in perp_debug_lines:
             line_geom = perp_line["geometry"]
+            start_pt = Point(perp_line["id0_x"], perp_line["id0_y"])
             for block_row in blocks_by_orig_id.get(perp_line["block_id"], []):
                 block_geom = block_row.geometry
                 try:
@@ -1324,7 +1329,7 @@ def create_off_grid_cold_clusters(
                         continue
                     else:
                         parts_with_dist = [
-                            (part, part.distance(line_geom.centroid)) for part in parts
+                            (part, part.distance(start_pt.centroid)) for part in parts
                         ]
                         parts_with_dist.sort(key=lambda x: x[1])
                         for idx, (part, _) in enumerate(parts_with_dist[:2]):
@@ -1346,6 +1351,7 @@ def create_off_grid_cold_clusters(
                                     "orig_id": block_orig_id,
                                     "type": cluster_type,
                                     "area": float(part.area),
+                                    "color": ColorTypes[cluster_type],
                                 }
                             )
                             processed_block_centroids.append(part_centroid)
