@@ -1,5 +1,7 @@
 """Custom widgets for the RUE TUI application."""
 
+import subprocess
+from pathlib import Path
 from typing import Optional
 
 from rich import box
@@ -17,6 +19,7 @@ from textual.widgets import (
     Input,
     Label,
     Static,
+    Tree,
 )
 
 
@@ -490,3 +493,641 @@ class ActionButton(Button):
         print(f"DEBUG: ActionButton {self.id} clicked!")
         # Let the default button behavior handle the rest
         await super()._on_click(event)
+
+
+class LayerTreeView(Tree):
+    """Tree view widget for browsing geopackage layers."""
+
+    class LayerSelected(Message):
+        """Message sent when a layer is selected."""
+
+        def __init__(self, layer_name: str) -> None:
+            super().__init__()
+            self.layer_name = layer_name
+
+    def __init__(self, **kwargs):
+        super().__init__("📦 GeoPackage Layers", **kwargs)
+        self._layers = []
+        self.geopackage_path = None
+
+    def update_layers(self, geopackage_path: str, layer_info: list[tuple]):
+        """Update the layers in the tree view."""
+        self.geopackage_path = geopackage_path
+        self._layers = layer_info
+        self._rebuild_tree()
+
+    def _rebuild_tree(self):
+        """Rebuild the tree with current layer information."""
+        self.clear()
+
+        if not self._layers:
+            self.root.add_leaf("📋 No layers available", data=None)
+            return
+
+        # Group layers by category
+        categories = {
+            "Input Data": ["site", "roads"],
+            "Step 1 - Parcels": ["parcels", "sites", "roads_buffered"],
+            "Step 2 - Streets": [
+                "04_arterial_roads",
+                "05_secondary_roads",
+                "local_roads",
+                "17_all_grids_merged",
+            ],
+            "Step 3 - Clusters": ["111_warm_block_final", "300_final", "cold", "warm"],
+        }
+
+        # Create categorized tree structure
+        category_nodes = {}
+        uncategorized_layers = {layer[0] for layer in self._layers}
+
+        for category, layer_names in categories.items():
+            category_node = self.root.add(f"📁 {category}")
+            category_nodes[category] = category_node
+
+            for layer_name in layer_names:
+                matching_layers = [layer for layer in self._layers if layer[0] == layer_name]
+                if matching_layers:
+                    layer_name, feature_count = matching_layers[0]
+                    if feature_count > 0:
+                        icon = "✅"
+                    else:
+                        icon = "⚠️"
+
+                    category_node.add_leaf(
+                        f"{icon} {layer_name} ({feature_count})", data=layer_name
+                    )
+                    uncategorized_layers.discard(layer_name)
+
+        # Add any remaining uncategorized layers
+        if uncategorized_layers:
+            other_node = self.root.add("📁 Other Layers")
+            for layer_name in sorted(uncategorized_layers):
+                matching_layers = [layer for layer in self._layers if layer[0] == layer_name]
+                if matching_layers:
+                    _, feature_count = matching_layers[0]
+                    icon = "✅" if feature_count > 0 else "⚠️"
+                    other_node.add_leaf(f"{icon} {layer_name} ({feature_count})", data=layer_name)
+
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        """Handle tree node selection."""
+        if event.node.data:  # Only handle leaf nodes with layer data
+            self.post_message(self.LayerSelected(event.node.data))
+
+
+class LayerDetailPanel(Static):
+    """Panel showing detailed information about a selected layer."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_layer = None
+        self.geopackage_path = None
+        self._show_welcome()
+
+    def _show_welcome(self):
+        """Show welcome message when no layer is selected."""
+        welcome_text = Group(
+            "",
+            Align.center(Text("🗂️ Layer Information", style="bold blue")),
+            "",
+            Align.center(Text("Select a layer from the tree to view details", style="dim italic")),
+            "",
+        )
+
+        panel = Panel(
+            welcome_text,
+            title="Layer Details",
+            border_style="blue",
+            box=box.ROUNDED,
+        )
+        self.update(panel)
+
+    def update_layer_details(self, geopackage_path: str, layer_name: str):
+        """Update the panel with details for the selected layer."""
+        self.geopackage_path = geopackage_path
+        self.current_layer = layer_name
+
+        try:
+            # Get layer information using GDAL/OGR
+            layer_info = self._get_layer_info(geopackage_path, layer_name)
+            preview_path = self._generate_preview(geopackage_path, layer_name)
+
+            # Create detailed information display
+            details_table = Table(show_header=False, box=box.SIMPLE, expand=True)
+            details_table.add_column("Property", style="bold cyan", width=15)
+            details_table.add_column("Value", style="white")
+
+            details_table.add_row("Layer Name", layer_name)
+            details_table.add_row("Feature Type", layer_info.get("geometry_type", "Unknown"))
+            details_table.add_row("Feature Count", str(layer_info.get("feature_count", 0)))
+            details_table.add_row("CRS", layer_info.get("crs", "Unknown"))
+            details_table.add_row("Extent", layer_info.get("extent", "Unknown"))
+
+            # Add field information if available
+            if "fields" in layer_info and layer_info["fields"]:
+                fields_text = ", ".join(layer_info["fields"][:5])  # Show first 5 fields
+                if len(layer_info["fields"]) > 5:
+                    fields_text += f" (+{len(layer_info['fields']) - 5} more)"
+                details_table.add_row("Fields", fields_text)
+
+            content_parts = [details_table]
+
+            # Add preview if available
+            if preview_path and Path(preview_path).exists():
+                content_parts.extend(
+                    [
+                        "",
+                        Text("🖼️ Preview:", style="bold green"),
+                        Text(f"Image saved to: {preview_path}", style="dim"),
+                        Text("Use 'feh', 'fim' or image viewer to open", style="dim italic"),
+                    ]
+                )
+
+                # Try to display preview in terminal using chafa
+                terminal_preview = self._get_terminal_preview(preview_path)
+                if terminal_preview:
+                    content_parts.extend(["", terminal_preview])
+
+            content = Group(*content_parts)
+
+            panel = Panel(
+                content,
+                title=f"[bold green]📋 {layer_name}[/]",
+                border_style="green",
+                box=box.ROUNDED,
+            )
+            self.update(panel)
+
+        except Exception as e:
+            error_content = Group(
+                "",
+                Align.center(Text("❌ Error Loading Layer", style="bold red")),
+                "",
+                Align.center(Text(str(e), style="red")),
+                "",
+            )
+
+            panel = Panel(
+                error_content,
+                title="Error",
+                border_style="red",
+                box=box.ROUNDED,
+            )
+            self.update(panel)
+
+    def _get_layer_info(self, geopackage_path: str, layer_name: str) -> dict:
+        """Get detailed information about a layer using GDAL/OGR."""
+        try:
+            from osgeo import gdal, ogr
+
+            # Enable GDAL exceptions
+            gdal.UseExceptions()
+
+            # Open the geopackage
+            ds = ogr.Open(geopackage_path, 0)  # 0 = read-only
+            if not ds:
+                return {"error": "Could not open geopackage"}
+
+            # Get the layer
+            layer = ds.GetLayerByName(layer_name)
+            if not layer:
+                return {"error": f"Layer '{layer_name}' not found"}
+
+            # Get basic information
+            feature_count = layer.GetFeatureCount()
+            layer_defn = layer.GetLayerDefn()
+            geometry_type = ogr.GeometryTypeToName(layer_defn.GetGeomType())
+
+            # Get spatial reference system
+            srs = layer.GetSpatialRef()
+            crs_info = "Unknown"
+            if srs:
+                try:
+                    crs_info = srs.GetAuthorityCode("PROJCS") or srs.GetAuthorityCode("GEOGCS")
+                    if crs_info:
+                        crs_info = f"EPSG:{crs_info}"
+                    else:
+                        crs_info = srs.GetName() or "Custom CRS"
+                except Exception:
+                    crs_info = "Unknown CRS"
+
+            # Get extent
+            extent = layer.GetExtent()
+            extent_str = f"({extent[0]:.2f}, {extent[2]:.2f}) to ({extent[1]:.2f}, {extent[3]:.2f})"
+
+            # Get field information
+            fields = []
+            for i in range(layer_defn.GetFieldCount()):
+                field_defn = layer_defn.GetFieldDefn(i)
+                field_name = field_defn.GetName()
+                field_type = field_defn.GetTypeName()
+                fields.append(f"{field_name} ({field_type})")
+
+            return {
+                "feature_count": feature_count,
+                "geometry_type": geometry_type,
+                "crs": crs_info,
+                "extent": extent_str,
+                "fields": fields,
+            }
+
+        except Exception as e:
+            return {"error": str(e)}
+
+    def _generate_preview(self, geopackage_path: str, layer_name: str) -> str:
+        """Generate a preview image of the layer using GDAL."""
+        try:
+            import tempfile
+
+            # Create temporary output file
+            temp_dir = Path(tempfile.gettempdir()) / "rue_tui_previews"
+            temp_dir.mkdir(exist_ok=True)
+
+            preview_path = temp_dir / f"{layer_name}_preview.png"
+
+            # Use ogr2ogr to create a simple preview with secure temp file
+            import tempfile
+
+            with tempfile.NamedTemporaryFile(suffix=".geojson", delete=False) as temp_file:
+                temp_geojson_path = temp_file.name
+
+            cmd = [
+                "ogr2ogr",
+                "-f",
+                "GeoJSON",
+                temp_geojson_path,
+                geopackage_path,
+                layer_name,
+            ]
+
+            result = subprocess.run(cmd, capture_output=True, text=True)
+
+            try:
+                if result.returncode == 0:
+                    # If ogr2ogr succeeded, we could use a mapping library to create a preview
+                    # For now, just return the path where a preview would be saved
+                    pass
+            finally:
+                # Clean up temporary file
+                try:
+                    Path(temp_geojson_path).unlink()
+                except OSError:
+                    pass
+
+            return str(preview_path) if result.returncode == 0 else None
+
+        except Exception:
+            return None
+
+    def _get_terminal_preview(self, image_path: str) -> Optional[Text]:
+        """Try to get a terminal preview using chafa or similar tool."""
+        try:
+            # Try chafa first
+            if subprocess.run(["which", "chafa"], capture_output=True).returncode == 0:
+                result = subprocess.run(
+                    ["chafa", "--size", "40x20", image_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                if result.returncode == 0 and result.stdout:
+                    return Text(result.stdout)
+
+            # Try fim as fallback (though it won't work in terminal)
+            if subprocess.run(["which", "fim"], capture_output=True).returncode == 0:
+                return Text("Preview available - use 'fim' to view", style="dim italic")
+
+            return None
+
+        except Exception:
+            return None
+
+
+class SetupPanel(Container):
+    """Panel for setup and configuration with file selection and preview."""
+
+    class FileSelected(Message):
+        """Message sent when a file is selected."""
+
+        def __init__(self, file_type: str, file_path: str) -> None:
+            super().__init__()
+            self.file_type = file_type
+            self.file_path = file_path
+
+    class PreviewRequested(Message):
+        """Message sent when a preview is requested."""
+
+        def __init__(self, file_path: str) -> None:
+            super().__init__()
+            self.file_path = file_path
+
+    def __init__(self, config, **kwargs):
+        super().__init__(**kwargs)
+        self.config = config
+
+    def compose(self) -> ComposeResult:
+        """Compose the setup panel."""
+        yield Label("🔧 Project Setup & Configuration", classes="setup-title")
+
+        with Vertical(classes="setup-form"):
+            # File selection section
+            yield Label("📁 Input Files:", classes="config-section")
+
+            with Horizontal(classes="file-row"):
+                yield Label("Site Boundary:", classes="file-label")
+                yield Input(
+                    placeholder="Select site GeoJSON file",
+                    value=self.config.site_path,
+                    id="site_path",
+                )
+                yield Button("📂 Browse", id="browse-site", variant="default")
+                yield Button("👁️ Preview", id="preview-site", variant="default")
+
+            with Horizontal(classes="file-row"):
+                yield Label("Roads Network:", classes="file-label")
+                yield Input(
+                    placeholder="Select roads GeoJSON file",
+                    value=self.config.roads_path,
+                    id="roads_path",
+                )
+                yield Button("📂 Browse", id="browse-roads", variant="default")
+                yield Button("👁️ Preview", id="preview-roads", variant="default")
+
+            # Output settings
+            yield Label("📤 Output Settings:", classes="config-section")
+            yield Input(
+                placeholder="Output directory", value=self.config.output_dir, id="output_dir"
+            )
+
+            # Processing parameters
+            yield Label("⚙️ Processing Parameters:", classes="config-section")
+
+            with Horizontal(classes="config-row"):
+                yield Label("Arterial Road Width (m):")
+                yield Input(placeholder="Width", value="8.0", id="arterial_width")
+                yield Label("Secondary Road Width (m):")
+                yield Input(placeholder="Width", value="6.0", id="secondary_width")
+
+            with Horizontal(classes="config-row"):
+                yield Label("Local Road Width (m):")
+                yield Input(placeholder="Width", value="4.0", id="local_width")
+                yield Label("Sidewalk Width (m):")
+                yield Input(placeholder="Width", value="1.5", id="sidewalk_width")
+
+            # Visualization settings
+            yield Label("🖼️ Visualization:", classes="config-section")
+            with Horizontal(classes="config-row"):
+                yield Label("Image Size:")
+                yield Input(
+                    placeholder="Width", value=str(self.config.image_width), id="image_width"
+                )
+                yield Input(
+                    placeholder="Height", value=str(self.config.image_height), id="image_height"
+                )
+
+            # Options
+            yield Checkbox("Auto-advance steps", value=self.config.auto_advance, id="auto_advance")
+            yield Checkbox(
+                "Save intermediate results",
+                value=self.config.save_intermediate,
+                id="save_intermediate",
+            )
+
+            # File status indicators
+            yield Label("📋 File Status:", classes="config-section")
+            yield Static("", id="file-status")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        button_id = event.button.id
+
+        if button_id == "browse-site":
+            self._browse_file("site")
+        elif button_id == "browse-roads":
+            self._browse_file("roads")
+        elif button_id == "preview-site":
+            site_path = self.query_one("#site_path", Input).value
+            if site_path and Path(site_path).exists():
+                self.post_message(self.PreviewRequested(site_path))
+        elif button_id == "preview-roads":
+            roads_path = self.query_one("#roads_path", Input).value
+            if roads_path and Path(roads_path).exists():
+                self.post_message(self.PreviewRequested(roads_path))
+
+    def _browse_file(self, file_type: str):
+        """Open a simple file browser."""
+        try:
+            import tkinter as tk
+            from tkinter import filedialog
+
+            root = tk.Tk()
+            root.withdraw()  # Hide the main window
+
+            file_path = filedialog.askopenfilename(
+                title=f"Select {file_type} file",
+                filetypes=[("GeoJSON files", "*.geojson"), ("All files", "*.*")],
+            )
+
+            if file_path:
+                if file_type == "site":
+                    self.query_one("#site_path", Input).value = file_path
+                elif file_type == "roads":
+                    self.query_one("#roads_path", Input).value = file_path
+
+                self.post_message(self.FileSelected(file_type, file_path))
+
+            root.destroy()
+
+        except ImportError:
+            # Fallback if tkinter is not available
+            pass
+
+    def on_input_changed(self, event: Input.Changed) -> None:
+        """Handle input changes and update file status."""
+        self._update_file_status()
+
+    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
+        """Handle checkbox changes."""
+        pass
+
+    def _update_file_status(self):
+        """Update the file status display."""
+        site_path = self.query_one("#site_path", Input).value
+        roads_path = self.query_one("#roads_path", Input).value
+
+        status_parts = []
+
+        # Check site file
+        if site_path and Path(site_path).exists():
+            status_parts.append(Text("✅ Site file loaded", style="green"))
+        elif site_path:
+            status_parts.append(Text("❌ Site file not found", style="red"))
+        else:
+            status_parts.append(Text("⏳ Site file not selected", style="yellow"))
+
+        status_parts.append(Text("  ", style="white"))  # Spacing
+
+        # Check roads file
+        if roads_path and Path(roads_path).exists():
+            status_parts.append(Text("✅ Roads file loaded", style="green"))
+        elif roads_path:
+            status_parts.append(Text("❌ Roads file not found", style="red"))
+        else:
+            status_parts.append(Text("⏳ Roads file not selected", style="yellow"))
+
+        # Combine status parts
+        status_text = Text()
+        for part in status_parts:
+            status_text.append_text(part)
+
+        self.query_one("#file-status", Static).update(status_text)
+
+
+class GeojsonPreviewWidget(Static):
+    """Widget for displaying GeoJSON file previews using matplotlib."""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.current_file = None
+
+    def show_preview(self, geojson_path: str):
+        """Generate and display a preview of the GeoJSON file."""
+        self.current_file = geojson_path
+
+        try:
+            preview_image = self._generate_matplotlib_preview(geojson_path)
+            if preview_image:
+                self._display_preview(preview_image)
+            else:
+                self._show_error("Failed to generate preview")
+
+        except Exception as e:
+            self._show_error(f"Preview error: {str(e)}")
+
+    def _generate_matplotlib_preview(self, geojson_path: str) -> Optional[str]:
+        """Generate a preview image using matplotlib."""
+        try:
+            import tempfile
+
+            import geopandas as gpd
+            import matplotlib.pyplot as plt
+
+            # Read the GeoJSON file
+            gdf = gpd.read_file(geojson_path)
+
+            if gdf.empty:
+                return None
+
+            # Create the plot
+            fig, ax = plt.subplots(figsize=(10, 8))
+
+            # Plot the data
+            if gdf.geom_type.iloc[0] in ["Point", "MultiPoint"]:
+                gdf.plot(ax=ax, markersize=50, alpha=0.7, color="red")
+            elif gdf.geom_type.iloc[0] in ["LineString", "MultiLineString"]:
+                gdf.plot(ax=ax, linewidth=2, alpha=0.8, color="blue")
+            else:  # Polygon, MultiPolygon
+                gdf.plot(ax=ax, alpha=0.7, facecolor="lightblue", edgecolor="blue")
+
+            # Style the plot
+            ax.set_title(f"Preview: {Path(geojson_path).name}", fontsize=14, fontweight="bold")
+            ax.set_aspect("equal")
+
+            # Remove axes for cleaner look
+            ax.set_xticks([])
+            ax.set_yticks([])
+
+            # Add feature count
+            feature_count = len(gdf)
+            geom_type = gdf.geom_type.iloc[0] if not gdf.empty else "Unknown"
+            ax.text(
+                0.02,
+                0.98,
+                f"Features: {feature_count}\nType: {geom_type}",
+                transform=ax.transAxes,
+                fontsize=10,
+                verticalalignment="top",
+                bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.8},
+            )
+
+            # Save to temporary file
+            temp_dir = Path(tempfile.gettempdir()) / "rue_tui_previews"
+            temp_dir.mkdir(exist_ok=True)
+
+            preview_path = temp_dir / f"{Path(geojson_path).stem}_preview.png"
+            plt.savefig(
+                preview_path, dpi=150, bbox_inches="tight", facecolor="white", edgecolor="none"
+            )
+            plt.close()
+
+            return str(preview_path)
+
+        except Exception as e:
+            print(f"Preview generation error: {e}")
+            return None
+
+    def _display_preview(self, image_path: str):
+        """Display the preview image using terminal tools."""
+        content_parts = [
+            Text("🖼️ GeoJSON Preview Generated", style="bold green"),
+            "",
+            Text(f"File: {Path(self.current_file).name}", style="bold white"),
+            Text(f"Preview: {image_path}", style="dim"),
+            "",
+        ]
+
+        # Try to show in terminal
+        terminal_preview = self._get_terminal_preview(image_path)
+        if terminal_preview:
+            content_parts.append(terminal_preview)
+        else:
+            content_parts.extend(
+                [
+                    Text("Use one of these commands to view:", style="yellow"),
+                    Text(f"fim {image_path}", style="cyan"),
+                    Text(f"feh {image_path}", style="cyan"),
+                    Text(f"eog {image_path}", style="cyan"),
+                ]
+            )
+
+        content = Group(*content_parts)
+        panel = Panel(
+            content,
+            title="Preview",
+            border_style="green",
+            box=box.ROUNDED,
+        )
+        self.update(panel)
+
+    def _show_error(self, error_msg: str):
+        """Show an error message."""
+        content = Group(
+            "",
+            Align.center(Text("❌ Preview Error", style="bold red")),
+            "",
+            Align.center(Text(error_msg, style="red")),
+            "",
+        )
+        panel = Panel(
+            content,
+            title="Error",
+            border_style="red",
+            box=box.ROUNDED,
+        )
+        self.update(panel)
+
+    def _get_terminal_preview(self, image_path: str) -> Optional[Text]:
+        """Try to get a terminal preview using chafa."""
+        try:
+            if subprocess.run(["which", "chafa"], capture_output=True).returncode == 0:
+                result = subprocess.run(
+                    ["chafa", "--size", "60x30", image_path],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                )
+                if result.returncode == 0 and result.stdout:
+                    return Text(result.stdout)
+            return None
+        except Exception:
+            return None

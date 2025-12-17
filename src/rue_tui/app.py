@@ -10,7 +10,7 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Label, Static, TabbedContent, TabPane
+from textual.widgets import Button, Footer, Header, Input, Label, Static, TabbedContent, TabPane
 
 from rue_lib.cluster.runner import ClusterConfig, generate_clusters
 
@@ -22,7 +22,16 @@ from rue_lib.streets.runner import StreetConfig, generate_streets
 # TUI imports
 from .config import TuiConfig
 from .visualizer import MapVisualizer
-from .widgets import ConfigPanel, LayerBrowser, LogViewer, ProgressDisplay, StepCard
+from .widgets import (
+    GeojsonPreviewWidget,
+    LayerBrowser,
+    LayerDetailPanel,
+    LayerTreeView,
+    LogViewer,
+    ProgressDisplay,
+    SetupPanel,
+    StepCard,
+)
 
 
 class ImageViewerScreen(ModalScreen):
@@ -120,8 +129,8 @@ class RueTuiApp(App):
 
     /* Expanded log viewer for detailed output */
     .log-container {
-        padding: 0;
-        height: 12;
+        padding: 1;
+        height: 1fr;
     }
 
     /* Compact layer browser */
@@ -159,7 +168,66 @@ class RueTuiApp(App):
 
     /* Rounded right edge for final button (viewer button) */
     #btn-view {
-        border-right: round $primary;
+        border: round $primary;
+    }
+
+    /* Results tab layout */
+    .results-main {
+        height: 1fr;
+        padding: 0;
+    }
+
+    .tree-container {
+        width: 1fr;
+        min-width: 30;
+        max-width: 40%;
+        border-right: solid $primary;
+        padding: 0 1 0 0;
+    }
+
+    .detail-container {
+        width: 2fr;
+        padding: 0 0 0 1;
+    }
+
+    .hidden {
+        display: none;
+    }
+
+    /* Setup panel styles */
+    .setup-title {
+        text-align: center;
+        text-style: bold;
+        color: $primary;
+        margin: 1 0;
+    }
+
+    .setup-form {
+        padding: 1;
+    }
+
+    .file-row {
+        height: 2;
+        margin: 0 0 1 0;
+    }
+
+    .file-label {
+        min-width: 16;
+        text-style: bold;
+        color: $accent;
+    }
+
+    /* Setup content area */
+    .setup-content {
+        height: auto;
+        max-height: 20;
+        border: round $primary;
+        margin: 1 0;
+        padding: 1;
+    }
+
+    .setup-content.hidden {
+        display: none;
     }
     """
 
@@ -177,7 +245,7 @@ class RueTuiApp(App):
         )
 
         # State tracking
-        self.step_status = {1: "pending", 2: "pending", 3: "pending"}
+        self.step_status = {0: "pending", 1: "pending", 2: "pending", 3: "pending"}
         self.results = {}  # Store step results
 
         # UI components
@@ -185,6 +253,10 @@ class RueTuiApp(App):
         self.progress_display = None
         self.log_viewer = None
         self.layer_browser = None
+        self.layer_tree = None
+        self.layer_detail_panel = None
+        self.setup_panel = None
+        self.preview_widget = None
 
     def compose(self) -> ComposeResult:
         """Compose the main UI."""
@@ -198,6 +270,11 @@ class RueTuiApp(App):
 
                 # Compact step cards
                 with Vertical(classes="step-container"):
+                    self.step_cards[0] = StepCard(
+                        0, "Setup Project", "Configure inputs and settings", status="pending"
+                    )
+                    yield self.step_cards[0]
+
                     self.step_cards[1] = StepCard(
                         1, "Generate Parcels", "Create ownership parcels", status="pending"
                     )
@@ -213,6 +290,15 @@ class RueTuiApp(App):
                     )
                     yield self.step_cards[3]
 
+                # Step 0 setup content area
+                with Container(id="setup-content", classes="setup-content"):
+                    self.setup_panel = SetupPanel(self.config)
+                    yield self.setup_panel
+
+                    # Preview widget for GeoJSON files
+                    self.preview_widget = GeojsonPreviewWidget()
+                    yield self.preview_widget
+
                 # Compact progress display
                 with Container(classes="progress-container"):
                     self.progress_display = ProgressDisplay()
@@ -220,27 +306,25 @@ class RueTuiApp(App):
 
                 # Compact action buttons
                 with Horizontal(classes="action-bar"):
-                    yield Button("▶️ Step 1", variant="primary", id="btn-step1")
+                    yield Button("▶️ Step 0", variant="primary", id="btn-step0")
+                    yield Button("▶️ Step 1", variant="default", disabled=True, id="btn-step1")
                     yield Button("▶️ Step 2", variant="default", disabled=True, id="btn-step2")
                     yield Button("▶️ Step 3", variant="default", disabled=True, id="btn-step3")
                     yield Button("👁️ View", variant="default", disabled=True, id="btn-view")
 
-            # Configuration tab
-            with TabPane("Config", id="config"):
-                with Container():
-                    yield ConfigPanel(self.config)
-
-            # Results tab
+            # Results tab with split layout
             with TabPane("Results", id="results"):
-                # Compact layer browser
-                with Container(classes="layer-container"):
-                    self.layer_browser = LayerBrowser()
-                    yield self.layer_browser
+                # Main content area with tree view and layer details
+                with Horizontal(classes="results-main"):
+                    # Left 1/3: Tree view
+                    with Container(classes="tree-container"):
+                        self.layer_tree = LayerTreeView()
+                        yield self.layer_tree
 
-                # Compact log viewer
-                with Container(classes="log-container"):
-                    self.log_viewer = LogViewer()
-                    yield self.log_viewer
+                    # Right 2/3: Layer details panel
+                    with Container(classes="detail-container"):
+                        self.layer_detail_panel = LayerDetailPanel()
+                        yield self.layer_detail_panel
 
                 # Compact results actions
                 with Horizontal(classes="action-bar"):
@@ -249,6 +333,17 @@ class RueTuiApp(App):
                     yield Button("📊 S3", id="view-step3", disabled=True)
                     yield Button("📁 Folder", id="open-folder")
                     yield Button("🧹 Clear", id="clear-results")
+
+                # Keep the old layer browser for compatibility (hidden)
+                with Container(classes="hidden"):
+                    self.layer_browser = LayerBrowser()
+                    yield self.layer_browser
+
+            # Logs tab
+            with TabPane("Logs", id="logs"):
+                with Container(classes="log-container"):
+                    self.log_viewer = LogViewer()
+                    yield self.log_viewer
 
         yield Footer()
 
@@ -300,6 +395,9 @@ class RueTuiApp(App):
         self.log_viewer.add_log("Urban planning made beautiful and interactive", "info")
         self.log_viewer.add_log(f"Output directory configured: {self.config.output_dir}", "info")
 
+        # Show setup content initially for Step 0
+        self._update_setup_visibility()
+
         # Check if input files exist with detailed messages
         site_exists = Path(self.config.site_path).exists()
         roads_exists = Path(self.config.roads_path).exists()
@@ -325,7 +423,12 @@ class RueTuiApp(App):
         self.notify(f"Button clicked: {button_id}")
         print(f"DEBUG: Notification sent for button: {button_id}")
 
-        if button_id == "btn-step1":
+        if button_id == "btn-step0":
+            event.button.disabled = True
+            event.button.label = "🔄 Running..."
+            self.log_viewer.add_log("🚀 Step 0 started - Setup and configuration", "step")
+            self.run_worker(self.run_step(0))
+        elif button_id == "btn-step1":
             event.button.disabled = True
             event.button.label = "🔄 Running..."
             self.log_viewer.add_log("🚀 Step 1 started - Generating parcels", "step")
@@ -352,18 +455,36 @@ class RueTuiApp(App):
         elif button_id == "clear-results":
             self.clear_results()
 
-    def on_config_panel_config_changed(self, event: ConfigPanel.ConfigChanged) -> None:
-        """Handle configuration changes."""
-        # Update config object
-        if hasattr(self.config, event.key):
-            if event.key in ["image_width", "image_height", "dpi"]:
-                setattr(self.config, event.key, int(event.value))
-            elif event.key in ["auto_advance", "save_intermediate"]:
-                setattr(self.config, event.key, event.value.lower() == "true")
-            else:
-                setattr(self.config, event.key, event.value)
+    def on_layer_tree_view_layer_selected(self, event: LayerTreeView.LayerSelected) -> None:
+        """Handle layer selection from tree view."""
+        if Path(self.config.geopackage_path).exists():
+            self.layer_detail_panel.update_layer_details(
+                self.config.geopackage_path, event.layer_name
+            )
+            self.log_viewer.add_log(f"🗂️ Selected layer: {event.layer_name}", "info")
 
-        self.log_viewer.add_log(f"⚙️ Updated {event.key} = {event.value}", "info")
+    def on_setup_panel_file_selected(self, event: SetupPanel.FileSelected) -> None:
+        """Handle file selection from setup panel."""
+        self.log_viewer.add_log(f"📁 Selected {event.file_type} file: {event.file_path}", "info")
+
+        # Update config with new file path
+        if event.file_type == "site":
+            self.config.site_path = event.file_path
+        elif event.file_type == "roads":
+            self.config.roads_path = event.file_path
+
+        # Update the setup panel's file status display
+        if self.setup_panel:
+            self.setup_panel._update_file_status()
+
+    def on_setup_panel_preview_requested(self, event: SetupPanel.PreviewRequested) -> None:
+        """Handle preview request from setup panel."""
+        self.log_viewer.add_log(f"🖼️ Generating preview for: {event.file_path}", "info")
+
+        if self.preview_widget:
+            self.preview_widget.show_preview(event.file_path)
+            # The preview will show in the setup content area
+            self.log_viewer.add_log("Preview generated in setup area", "info")
 
     async def run_step(self, step: int):
         """Run a specific step of the analysis."""
@@ -373,7 +494,9 @@ class RueTuiApp(App):
             self.progress_display.start_progress(f"Running Step {step}")
             self.log_viewer.add_log(f"▶️ Starting Step {step}", "info")
 
-            if step == 1:
+            if step == 0:
+                result = await self._run_step0()
+            elif step == 1:
                 result = await self._run_step1()
             elif step == 2:
                 result = await self._run_step2()
@@ -407,13 +530,17 @@ class RueTuiApp(App):
                 view_btn = self.query_one("#btn-view")
                 view_btn.focus()
 
-            # Enable view buttons
-            view_btn = self.query_one("#btn-view")
-            view_btn.disabled = False
-            self.query_one(f"#view-step{step}").disabled = False
+            # Enable view buttons (only for steps 1, 2, 3)
+            if step > 0:
+                view_btn = self.query_one("#btn-view")
+                view_btn.disabled = False
+                self.query_one(f"#view-step{step}").disabled = False
 
             # Update layer browser
             self._update_layer_browser()
+
+            # Update setup visibility
+            self._update_setup_visibility()
 
             # Auto-advance if enabled
             if self.config.auto_advance and step < 3:
@@ -431,6 +558,42 @@ class RueTuiApp(App):
             current_btn.disabled = False
             current_btn.variant = "error"
             current_btn.label = f"❌ Step {step} (retry)"
+
+    async def _run_step0(self) -> str:
+        """Run Step 0: Setup and Configuration."""
+        self.log_viewer.add_log("📋 Validating setup and configuration", "info")
+
+        # Simulate setup process
+        await asyncio.sleep(1)  # Brief delay for UI feedback
+
+        # Check if required files are set and exist
+        site_path = (
+            self.setup_panel.query_one("#site_path", Input).value
+            if self.setup_panel
+            else self.config.site_path
+        )
+        roads_path = (
+            self.setup_panel.query_one("#roads_path", Input).value
+            if self.setup_panel
+            else self.config.roads_path
+        )
+
+        missing_files = []
+        if not site_path or not Path(site_path).exists():
+            missing_files.append("site boundary file")
+        if not roads_path or not Path(roads_path).exists():
+            missing_files.append("roads network file")
+
+        if missing_files:
+            self.log_viewer.add_log(
+                f"⚠️ Missing required files: {', '.join(missing_files)}", "warning"
+            )
+            self.log_viewer.add_log("Demo data will be created automatically when needed", "info")
+        else:
+            self.log_viewer.add_log("✅ All required files are available", "success")
+
+        self.log_viewer.add_log("🔧 Configuration validated successfully", "success")
+        return "setup_complete"
 
     async def _run_step1(self) -> str:
         """Run Step 1: Generate Parcels."""
@@ -621,17 +784,37 @@ class RueTuiApp(App):
         tabbed_content.active = "results"
 
     def _update_layer_browser(self):
-        """Update the layer browser with current data."""
+        """Update the layer browser and tree view with current data."""
         try:
             if Path(self.config.geopackage_path).exists():
                 layer_info = self.visualizer.get_layer_info(self.config.geopackage_path)
+
+                # Update both old layer browser and new tree view
                 self.layer_browser.update_layers(layer_info)
+                self.layer_tree.update_layers(self.config.geopackage_path, layer_info)
+
                 self.log_viewer.add_log(f"📊 Found {len(layer_info)} layers", "info")
             else:
                 self.layer_browser.update_layers([])
+                self.layer_tree.update_layers("", [])
 
         except Exception as e:
             self.log_viewer.add_log(f"❌ Failed to browse layers: {str(e)}", "error")
+
+    def _update_setup_visibility(self):
+        """Show/hide setup content based on current step."""
+        try:
+            setup_content = self.query_one("#setup-content")
+
+            # Show setup content only if Step 0 is not completed
+            if self.step_status.get(0) == "completed":
+                setup_content.add_class("hidden")
+            else:
+                setup_content.remove_class("hidden")
+
+        except Exception:
+            # Setup content might not be mounted yet
+            pass
 
     def open_output_folder(self):
         """Open the output folder in file manager."""
@@ -661,17 +844,23 @@ class RueTuiApp(App):
         """Clear all results and reset the workflow."""
         try:
             # Reset state
-            self.step_status = {1: "pending", 2: "pending", 3: "pending"}
+            self.step_status = {0: "pending", 1: "pending", 2: "pending", 3: "pending"}
             self.results.clear()
 
             # Reset UI
             for _step, card in self.step_cards.items():
                 card.update_status("pending")
 
-            # Disable buttons
-            for step in [2, 3]:
+            # Reset Step 0 button
+            self.query_one("#btn-step0").disabled = False
+            self.query_one("#btn-step0").variant = "primary"
+            self.query_one("#btn-step0").label = "▶️ Step 0"
+
+            # Disable buttons (except step 0)
+            for step in [1, 2, 3]:
                 self.query_one(f"#btn-step{step}").disable()
-                self.query_one(f"#view-step{step}").disabled = True
+                if step < 3:  # Only steps 1 and 2 have view buttons
+                    self.query_one(f"#view-step{step}").disabled = True
 
             self.query_one("#btn-view").disable()
             self.query_one("#btn-browse").disable()
@@ -679,12 +868,17 @@ class RueTuiApp(App):
             # Clear displays
             self.progress_display.update("Ready to start")
             self.layer_browser.update_layers([])
+            self.layer_tree.update_layers("", [])
+            self.layer_detail_panel._show_welcome()
 
             # Clear output directory
             output_path = Path(self.config.output_dir)
             if output_path.exists():
                 shutil.rmtree(output_path)
                 output_path.mkdir(parents=True, exist_ok=True)
+
+            # Update setup visibility
+            self._update_setup_visibility()
 
             self.log_viewer.add_log("🧹 Results cleared, ready to start over", "info")
 
