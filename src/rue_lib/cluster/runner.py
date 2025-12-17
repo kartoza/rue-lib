@@ -108,7 +108,7 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         road_local_width_m=cfg.road_local_width_m,
     )
 
-    # # Warm block generation
+    # Warm block generation
     warm_final_layer_name = generate_warm(
         cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
     )
@@ -117,11 +117,24 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     cold_final_layer_name = generate_cold(
         cfg, output_gpkg, input_blocks_layer_name, input_roads_buffer_layer_name
     )
+
+    input_roads_local_buffer_layer_name = "002_input_roads_buffer"
+    extract_by_expression(
+        output_path,
+        input_roads_buffer_layer_name,
+        "type = 'road_local'",
+        output_path,
+        input_roads_local_buffer_layer_name,
+    )
     print("Final step: Merge all")
     final_layer_name = "300_final"
     merge_gpkg_layers(
         gpkg_path=output_gpkg,
-        layer_names=[warm_final_layer_name, cold_final_layer_name],
+        layer_names=[
+            warm_final_layer_name,
+            cold_final_layer_name,
+            input_roads_local_buffer_layer_name,
+        ],
         output_layer_name=final_layer_name,
     )
     assign_cluster_type(

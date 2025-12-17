@@ -2,6 +2,7 @@ import math
 
 from osgeo import ogr
 
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
 from rue_lib.core.helpers import create_or_replace_layer
 
 
@@ -772,6 +773,7 @@ def subdivide_blocks_by_concave_points(
                 ("concave_y", ogr.OFTReal),
                 ("type", ogr.OFTString),
                 ("block_type", ogr.OFTString),
+                ("color", ogr.OFTString),
             ],
         )
         id = 0
@@ -780,10 +782,16 @@ def subdivide_blocks_by_concave_points(
             feat.SetGeometry(rem_data["geometry"])
             feat.SetField("id", id)
             id += 1
+            _type = (
+                ClusterTypes.CONCAVE_CORNER
+                if rem_data["is_concave"]
+                else ClusterTypes.OFF_GRID_COLD
+            )
             feat.SetField("orig_id", rem_data["orig_id"])
             feat.SetField("is_concave", rem_data["is_concave"])
-            feat.SetField("type", "concave_corner" if rem_data["is_concave"] else "off_grid")
+            feat.SetField("type", _type)
             feat.SetField("block_type", rem_data["block_type"])
+            feat.SetField("color", ColorTypes[_type])
 
             if rem_data["concave_x"] is not None:
                 feat.SetField("concave_x", rem_data["concave_x"])
