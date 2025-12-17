@@ -11,3 +11,4 @@ class SiteConfig:
 
     road_arterial_width_m: float = 20.0
     road_secondary_width_m: float = 15.0
+    road_local_width_m: float = 10.0

@@ -1,6 +1,7 @@
 # src/rue_lib/streets/runner.py
 from pathlib import Path
 
+import geopandas as gpd
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
@@ -20,6 +21,7 @@ from rue_lib.streets.runner_utils import (
     polygons_to_lines_layer,
 )
 
+from ..site.roads import buffer_roads
 from .cell import (
     fix_grid_cells_with_perpendicular_lines,
     merge_small_cells_with_neighbors,
@@ -68,6 +70,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
     roads_layer_name = reproject_layer(
         cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False
     )
+    input_roads_buffer_layer_name = "00_roads_buffer"
+    roads_m = gpd.read_file(output_path, layer=roads_layer_name)
+    roads_buf_m = buffer_roads(
+        roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m, road_type_key="road_type"
+    )
+    roads_buf_m.to_file(output_gpkg, layer=input_roads_buffer_layer_name, driver="GPKG")
 
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(

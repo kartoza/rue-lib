@@ -16,9 +16,18 @@ from rue_lib.cluster.cold.cluster_on_grid import (
     merge_vertices_into_lines_by_angle,
     sample_points_along_front_lines,
 )
+from rue_lib.cluster.cold.clusters import (
+    merge_and_classify_off_grid_clusters,
+    merge_and_classify_on_grid_clusters,
+    merge_final_cold_clusters,
+)
 from rue_lib.cluster.cold.expand_roads_buffer import (
     clip_buffered_lines_to_cold_grid,
     create_buffered_lines_from_boundary_lines,
+)
+from rue_lib.cluster.cold.subdiv_at_convex_corner import (
+    create_clusters_from_convex_points,
+    find_convex_points,
 )
 from rue_lib.cluster.cold.subdiv_block import (
     find_concave_points,
@@ -166,6 +175,30 @@ def generate_cold(
         lines_from_vertices_layer,
     )
 
+    print("\nStep 6b: Find convex points from boundary...")
+    convex_points_layer_name = "208b_convex_points"
+    find_convex_points(
+        output_path,
+        extract_vertices_layer_name,
+        output_path,
+        convex_points_layer_name,
+    )
+
+    print("\nStep 6c: Create clusters from convex points...")
+    convex_clusters_layer = "208c_convex_clusters"
+    max_partition_depth = max(
+        cfg.on_grid_partition_depth_arterial_roads,
+        cfg.on_grid_partition_depth_secondary_roads,
+    )
+    create_clusters_from_convex_points(
+        output_path,
+        convex_points_layer_name,
+        on_grid_block,
+        output_path,
+        convex_clusters_layer,
+        max_partition_depth,
+    )
+
     print("\nStep 7: Sample points along front lines...")
     cold_clusters_points_layer = "210_off_grid_cold_clusters_points"
 
@@ -224,7 +257,38 @@ def generate_cold(
         target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
-    return cold_grid_layer_name
+    print("\nStep 12: Merge and classify off-grid cold clusters...")
+    off_grid_final_layer = "215_final_cold_off_grid_clusters"
+    merge_and_classify_off_grid_clusters(
+        output_path,
+        off_grid_block,
+        clusters_layer,
+        output_path,
+        off_grid_final_layer,
+    )
+
+    print("\nStep 13: Merge and classify on-grid cold clusters...")
+    on_grid_final_layer = "216_final_cold_on_grid_clusters"
+    merge_and_classify_on_grid_clusters(
+        output_path,
+        on_grid_block,
+        convex_clusters_layer,
+        concave_points_layer_name,
+        output_path,
+        on_grid_final_layer,
+    )
+
+    print("\nStep 14: Merge final on-grid and off-grid cold clusters...")
+    final_clusters_layer = "217_final_cold_clusters"
+    merge_final_cold_clusters(
+        output_path,
+        on_grid_final_layer,
+        off_grid_final_layer,
+        output_path,
+        final_clusters_layer,
+    )
+
+    return final_clusters_layer
 
 
 def erase_roads_from_cold_grid(
