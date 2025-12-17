@@ -3,6 +3,7 @@ from pathlib import Path
 
 from osgeo import gdal, ogr
 
+from ..core.geometry import get_utm_zone_from_layer, reproject_layer
 from ..streets.operations import export_layer_to_geojson
 from .config import PublicConfig
 from .financial import FinancialPublic
@@ -37,44 +38,47 @@ def generate_public(cfg: PublicConfig) -> Path:
         ds = None
 
     print("Step 1: Copying input blocks layer...")
-    clusters_layer = "111_warm_block_final"
 
     # Copy input blocks to output geopackage
     input_ds = ogr.Open(cfg.input_path, 0)
     input_layer = input_ds.GetLayer()
-    if input_layer is None:
-        raise ValueError(f"Layer {clusters_layer} not found in {cfg.input_path}")
-
     output_ds = ogr.Open(output_path, 1)
     if output_ds is None:
         raise ValueError(f"Could not open {output_path} for writing")
 
     # Remove layer if it already exists
-    if output_ds.GetLayerByName("00_input_blocks"):
-        output_ds.DeleteLayer("00_input_blocks")
+    input_blocks_layer_name = "00_input_blocks"
+    if output_ds.GetLayerByName(input_blocks_layer_name):
+        output_ds.DeleteLayer(input_blocks_layer_name)
 
-    # Copy the layer
-    output_ds.CopyLayer(input_layer, "00_input_blocks")
-    print(f"  Copied {input_layer.GetFeatureCount()} blocks to output")
+    utm_epsg = get_utm_zone_from_layer(input_layer)
+    reproject_layer(
+        cfg.input_path,
+        output_path,
+        utm_epsg,
+        layer_name=input_blocks_layer_name,
+        is_append_epsg=False,
+    )
 
     # ---------------------------
     # Site
     # ---------------------------
-    site_ds = ogr.Open(cfg.site_path, 0)
-    site_layer = site_ds.GetLayer()
+    input_site_layer_name = "00_input_site"
     # Remove layer if it already exists
-    if output_ds.GetLayerByName("00_site_path"):
-        output_ds.DeleteLayer("00_site_path")
+    if output_ds.GetLayerByName(input_site_layer_name):
+        output_ds.DeleteLayer(input_site_layer_name)
 
-    # Copy the layer
-    output_ds.CopyLayer(site_layer, "00_site_path")
-    print(f"  Copied site layer with {site_layer.GetFeatureCount()} features to output")
+    reproject_layer(
+        cfg.site_path, output_path, utm_epsg, layer_name=input_site_layer_name, is_append_epsg=False
+    )
 
     # Copy the layer
     final_layer_name = "04_final"
     if output_ds.GetLayerByName(final_layer_name):
         output_ds.DeleteLayer(final_layer_name)
-    output_ds.CopyLayer(input_layer, final_layer_name)
+    reproject_layer(
+        cfg.input_path, output_path, utm_epsg, layer_name=final_layer_name, is_append_epsg=False
+    )
 
     input_ds = None
     output_ds = None
@@ -82,9 +86,9 @@ def generate_public(cfg: PublicConfig) -> Path:
     print("\nStep 2: Allocating open spaces...")
 
     open_spaces_layer_name = allocate_open_spaces(
-        input_path=cfg.input_path,
-        parcels_path=cfg.site_path,
         output_gpkg=output_path,
+        parcel_layer_name=input_site_layer_name,
+        block_layer_name=input_blocks_layer_name,
         output_layer_name="02_open_spaces",
         open_percent=cfg.open_percent,
     )
@@ -92,10 +96,10 @@ def generate_public(cfg: PublicConfig) -> Path:
     print("\nStep 3: Allocating amenities...")
 
     amenities_layer_name = allocate_amenities(
-        input_path=cfg.input_path,
-        open_spaces_layer_name=open_spaces_layer_name,
-        parcels_path=cfg.site_path,
         output_gpkg=output_path,
+        parcel_layer_name=input_site_layer_name,
+        block_layer_name=input_blocks_layer_name,
+        open_spaces_layer_name=open_spaces_layer_name,
         output_layer_name="03_amenities",
         amen_percent=cfg.amen_percent,
     )

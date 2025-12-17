@@ -153,6 +153,7 @@ class ClusterTypes(EnumType):
     OFF_GRID0_AMENITY = "off_grid0_am"
     OFF_GRID1_AMENITY = "off_grid1_am"
     OFF_GRID2_AMENITY = "off_grid2_am"
+    CONCAVE_CORNER_AMENITY = "concave_corner_am"
 
     # Green/Open space types
     GREEN0 = "green0"
@@ -167,7 +168,7 @@ class ClusterTypes(EnumType):
     OFF_GRID0_OPEN_SPACE = "off_grid0_os"
     OFF_GRID1_OPEN_SPACE = "off_grid1_os"
     OFF_GRID2_OPEN_SPACE = "off_grid2_os"
-    CORNER_PARK = "corner_park"
+    CONCAVE_CORNER_OPEN_SPACE = "concave_corner_os"
 
     # Path and entrance types
     INTERNAL_PATH = "internal path, any cluster"
@@ -214,6 +215,7 @@ ColorTypes = {
     ClusterTypes.OFF_GRID0_AMENITY: "rgb(217,153,168)",
     ClusterTypes.OFF_GRID1_AMENITY: "rgb(217,153,168)",
     ClusterTypes.OFF_GRID2_AMENITY: "rgb(217,153,168)",
+    ClusterTypes.CONCAVE_CORNER_AMENITY: "rgb(217,153,168)",
     # Green/Open space types
     ClusterTypes.GREEN0: "rgb(219,242,207)",
     ClusterTypes.GREEN1: "rgb(219,242,207)",
@@ -227,7 +229,7 @@ ColorTypes = {
     ClusterTypes.OFF_GRID0_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.OFF_GRID1_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.OFF_GRID2_OPEN_SPACE: "rgb(191,230,171)",
-    ClusterTypes.CORNER_PARK: "rgb(191,230,171)",
+    ClusterTypes.CONCAVE_CORNER_OPEN_SPACE: "rgb(191,230,171)",
     # Path and entrance types
     ClusterTypes.INTERNAL_PATH: "rgb(237,255,230)",
     ClusterTypes.PATH0: "rgb(237,255,230)",
