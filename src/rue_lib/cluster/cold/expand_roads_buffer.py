@@ -85,7 +85,10 @@ def create_buffered_lines_from_boundary_lines(
 
     if buffered_lines:
         gdf_buffered = gpd.GeoDataFrame(buffered_lines, geometry="geometry", crs=gdf_lines.crs)
-        gdf_buffered.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    else:
+        gdf_buffered = gpd.GeoDataFrame([], geometry=[], crs=gdf_lines.crs)
+
+    gdf_buffered.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     print(f"  Created buffered lines layer: {output_layer_name}")
     return output_layer_name
@@ -155,7 +158,11 @@ def clip_buffered_lines_to_cold_grid(
         gdf_clipped = gpd.GeoDataFrame(
             clipped_geometries, geometry="geometry", crs=gdf_buffered.crs
         )
-        gdf_clipped.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    else:
+        # Create empty layer with proper schema
+        gdf_clipped = gpd.GeoDataFrame([], geometry=[], crs=gdf_buffered.crs)
+
+    gdf_clipped.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     print(f"  Created clipped layer: {output_layer_name} ({len(clipped_geometries)} features)")
     return output_layer_name

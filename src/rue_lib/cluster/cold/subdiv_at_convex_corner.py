@@ -80,6 +80,8 @@ def find_convex_points(
 
     if not geoms:
         print("  No convex points found")
+        gdf_out = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+        gdf_out.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     gdf_out = gpd.GeoDataFrame(records, geometry=geoms, crs=gdf_points.crs)
@@ -120,6 +122,13 @@ def create_clusters_from_convex_points(
 
     if gdf_convex.empty or gdf_blocks.empty:
         print("  Warning: one or more input layers are empty")
+        # Create empty layer with proper schema
+        gdf_empty = gpd.GeoDataFrame(
+            [],
+            geometry=[],
+            crs=gdf_blocks.crs if not gdf_blocks.empty else gdf_convex.crs,
+        )
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     blocks_by_id = {}

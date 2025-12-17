@@ -63,6 +63,14 @@ def extract_off_grid_adjacent_lines(
     if not on_grid_geoms:
         print("  Warning: No on-grid geometries found")
         ds = None
+        # Create empty layer
+        out_ds = ogr.Open(output_gpkg, 1)
+        if out_ds is not None:
+            out_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
+            out_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
+            out_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+            out_layer = None
+            out_ds = None
         return output_layer_name
 
     # Create union of on-grid boundaries for intersection checking
@@ -74,6 +82,14 @@ def extract_off_grid_adjacent_lines(
     if on_union is None:
         print("  Warning: Failed to create on-grid union")
         ds = None
+        # Create empty layer
+        out_ds = ogr.Open(output_gpkg, 1)
+        if out_ds is not None:
+            out_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
+            out_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
+            out_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
+            out_layer = None
+            out_ds = None
         return output_layer_name
 
     lines_to_write = []
@@ -313,6 +329,9 @@ def extract_vertices_from_lines(
 
     if gdf_lines.empty:
         print(f"  Warning: {input_layer_name} is empty")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_lines.crs)
+        gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     if "orig_id" not in gdf_lines.columns:
         gdf_lines["orig_id"] = gdf_lines.index
@@ -368,6 +387,9 @@ def extract_vertices_from_lines(
 
     if not points_data:
         print(f"  Warning: No vertices extracted from {input_layer_name}")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_lines.crs)
+        gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     gdf_vertices = gpd.GeoDataFrame(points_data, crs=gdf_lines.crs)
     gdf_vertices.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
@@ -651,6 +673,15 @@ def create_perpendicular_lines_from_front_points(
 
     if gdf_points.empty or gdf_lines.empty or gdf_blocks.empty:
         print("  Warning: one or more input layers are empty")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame(
+            [],
+            geometry=[],
+            crs=gdf_points.crs
+            if not gdf_points.empty
+            else (gdf_lines.crs if not gdf_lines.empty else gdf_blocks.crs),
+        )
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     lines_by_orig = {}
     for _, row in gdf_lines.iterrows():
@@ -747,6 +778,9 @@ def create_perpendicular_lines_from_front_points(
 
     if not perp_lines:
         print("  No perpendicular lines created")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     gdf_perp = gpd.GeoDataFrame(perp_records, geometry=perp_lines, crs=gdf_points.crs)
@@ -1004,6 +1038,9 @@ def create_off_grid_zero_clusters(
             cid += 1
     if not split_geoms:
         print("  Warning: off_grid0 split produced no polygons")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_blocks.crs)
+        gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     gdf_out = gpd.GeoDataFrame(records, geometry=split_geoms, crs=gdf_blocks.crs)
     gdf_out.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
@@ -1048,6 +1085,13 @@ def create_off_grid_cold_clusters(
 
     if gdf_points.empty or gdf_blocks.empty:
         print("  Warning: one or more input layers are empty")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame(
+            [],
+            geometry=[],
+            crs=gdf_points.crs if not gdf_points.empty else gdf_blocks.crs,
+        )
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     line_id_to_block_id = {}
@@ -1395,6 +1439,9 @@ def create_off_grid_cold_clusters(
 
     if not cluster_polygons:
         print("  No clusters created")
+        # Create empty layer
+        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
     print(f"\n  Merging small off_grid1 clusters (area < {target_area_m2} m²)...")

@@ -77,7 +77,6 @@ def find_concave_points(
     gdf_points = gpd.read_file(input_gpkg, layer=boundary_points_layer_name)
     if gdf_points.empty:
         raise ValueError(f"Layer {boundary_points_layer_name} is empty")
-
     points_by_block = {}
     for _, row in gdf_points.iterrows():
         block_id = row["block_id"]
@@ -129,7 +128,10 @@ def find_concave_points(
 
     if concave_points:
         gdf_concave = gpd.GeoDataFrame(concave_points, geometry="geometry", crs=gdf_points.crs)
-        gdf_concave.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+    else:
+        gdf_concave = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+
+    gdf_concave.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     total_concave = len(concave_points)
     print(f"  Found {total_concave} concave points")
