@@ -1,9 +1,11 @@
 import math
 
+import geopandas as gpd
 from osgeo import ogr
 from shapely import LineString
 from shapely import ops as shapely_ops
 from shapely import wkb as shapely_wkb
+from shapely.geometry import Point
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
@@ -239,168 +241,137 @@ def extract_off_grid_adjacent_lines(
     return output_layer_name
 
 
+def _quantize_coord(x: float, y: float, tol: float) -> tuple[int, int]:
+    """Quantize coordinates for deduplication."""
+    return (int(round(x / tol)), int(round(y / tol)))
+
+
+def _calculate_angle_deg(
+    prev_xy: tuple[float, float], cur_xy: tuple[float, float], next_xy: tuple[float, float]
+) -> float:
+    """Calculate angle in degrees at current vertex formed by prev -> cur -> next."""
+    px, py = prev_xy
+    cx, cy = cur_xy
+    nx, ny = next_xy
+
+    ax = px - cx
+    ay = py - cy
+    bx = nx - cx
+    by = ny - cy
+    la = math.hypot(ax, ay)
+    lb = math.hypot(bx, by)
+    if la <= 1e-12 or lb <= 1e-12:
+        return 0.0
+    dot = ax * bx + ay * by
+    c = dot / (la * lb)
+    c = max(-1.0, min(1.0, c))  # Clamp to [-1, 1]
+    return math.degrees(math.acos(c))
+
+
+def _extract_coords_from_linestring(line_geom: LineString, tol: float) -> list[tuple[float, float]]:
+    """Extract and deduplicate coordinates from a LineString geometry."""
+    coords = list(line_geom.coords)
+
+    if len(coords) < 2:
+        return []
+    x0, y0 = coords[0]
+    xn, yn = coords[-1]
+    if abs(x0 - xn) <= tol and abs(y0 - yn) <= tol:
+        coords = coords[:-1]
+    deduped: list[tuple[float, float]] = []
+    for x, y in coords:
+        if not deduped:
+            deduped.append((x, y))
+            continue
+        lx, ly = deduped[-1]
+        if abs(x - lx) <= tol and abs(y - ly) <= tol:
+            continue
+        deduped.append((x, y))
+
+    return deduped
+
+
 def extract_vertices_from_lines(
     input_gpkg: str,
     input_layer_name: str,
     output_layer_name: str,
-    tol: float = 1,
+    tol: float = 0.1,
 ) -> str:
-    ds = ogr.Open(input_gpkg, 0)
-    if ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    """Extract vertices from line geometries with angle calculation and deduplication.
 
-    in_layer = ds.GetLayerByName(input_layer_name)
-    if in_layer is None:
-        raise ValueError(f"Layer {input_layer_name} not found")
+    Args:
+        input_gpkg: Path to input GeoPackage
+        input_layer_name: Name of the input lines layer
+        output_layer_name: Name for the output vertices layer
+        tol: Tolerance for deduplication (default: 1)
 
-    srs = in_layer.GetSpatialRef()
+    Returns:
+        Name of the output layer
+    """
+    gdf_lines = gpd.read_file(input_gpkg, layer=input_layer_name)
 
-    points: list[dict] = []
+    if gdf_lines.empty:
+        print(f"  Warning: {input_layer_name} is empty")
+        return output_layer_name
+    if "orig_id" not in gdf_lines.columns:
+        gdf_lines["orig_id"] = gdf_lines.index
+
+    points_data = []
     line_counter = 0
     seen_by_orig: dict[int, set[tuple[int, int]]] = {}
 
-    def qkey(x: float, y: float) -> tuple[int, int]:
-        return (int(round(x / tol)), int(round(y / tol)))
-
-    def angle_deg(
-        prev_xy: tuple[float, float], cur_xy: tuple[float, float], next_xy: tuple[float, float]
-    ) -> float:
-        px, py = prev_xy
-        cx, cy = cur_xy
-        nx, ny = next_xy
-
-        ax = px - cx
-        ay = py - cy
-        bx = nx - cx
-        by = ny - cy
-
-        la = math.hypot(ax, ay)
-        lb = math.hypot(bx, by)
-        if la <= 1e-12 or lb <= 1e-12:
-            return 0.0
-
-        dot = ax * bx + ay * by
-        c = dot / (la * lb)
-        if c > 1.0:
-            c = 1.0
-        elif c < -1.0:
-            c = -1.0
-
-        return math.degrees(math.acos(c))
-
-    for feat in in_layer:
-        geom = feat.GetGeometryRef()
-        if geom is None or geom.IsEmpty():
+    for idx, row in gdf_lines.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
             continue
 
-        orig_id_idx = feat.GetFieldIndex("orig_id")
-        orig_id_val = feat.GetField(orig_id_idx) if orig_id_idx != -1 else None
-        if orig_id_val is None:
-            orig_id_val = int(feat.GetFID())
+        orig_id = int(row["orig_id"]) if row["orig_id"] is not None else int(idx)
+        seen = seen_by_orig.setdefault(orig_id, set())
+        if geom.geom_type == "LineString":
+            lines_to_process = [geom]
+        elif geom.geom_type == "MultiLineString":
+            lines_to_process = list(geom.geoms)
+        else:
+            continue
 
-        seen = seen_by_orig.setdefault(int(orig_id_val), set())
+        for line_geom in lines_to_process:
+            coords = _extract_coords_from_linestring(line_geom, tol)
 
-        def handle_line(
-            line_geom: ogr.Geometry, *, current_seen: set[tuple[int, int]], current_orig_id: int
-        ):
-            nonlocal line_counter
-
-            n = line_geom.GetPointCount()
-            if n < 2:
+            if len(coords) < 2:
                 line_counter += 1
-                return
+                continue
 
-            coords = [(line_geom.GetX(i), line_geom.GetY(i)) for i in range(n)]
-            x0, y0 = coords[0]
-            xn, yn = coords[-1]
-            if abs(x0 - xn) <= tol and abs(y0 - yn) <= tol:
-                coords = coords[:-1]
-            deduped: list[tuple[float, float]] = []
-            for x, y in coords:
-                if not deduped:
-                    deduped.append((x, y))
-                    continue
-                lx, ly = deduped[-1]
-                if abs(x - lx) <= tol and abs(y - ly) <= tol:
-                    continue
-                deduped.append((x, y))
-
-            m = len(deduped)
             vertex_out_idx = 1
-
-            for i, (x, y) in enumerate(deduped):
-                k = qkey(x, y)
-                if k in current_seen:
-                    continue
-                current_seen.add(k)
-                if i > 0 and i < m - 1:
-                    ang = angle_deg(deduped[i - 1], deduped[i], deduped[i + 1])
+            for i, (x, y) in enumerate(coords):
+                k = _quantize_coord(x, y, tol)
+                seen.add(k)
+                if 0 < i < len(coords) - 1:
+                    ang = _calculate_angle_deg(coords[i - 1], coords[i], coords[i + 1])
                 else:
                     ang = 0.0
 
-                pt_geom = ogr.Geometry(ogr.wkbPoint)
-                pt_geom.AddPoint(x, y)
-                points.append(
+                points_data.append(
                     {
-                        "geometry": pt_geom,
-                        "orig_id": current_orig_id,
+                        "orig_id": orig_id,
                         "line_id": line_counter,
                         "vertex_idx": vertex_out_idx,
                         "x": x,
                         "y": y,
                         "angle_deg": ang,
+                        "geometry": Point(x, y),
                     }
                 )
                 vertex_out_idx += 1
 
             line_counter += 1
 
-        gtype = geom.GetGeometryType()
-        if gtype in (ogr.wkbLineString, ogr.wkbLineString25D):
-            handle_line(geom, current_seen=seen, current_orig_id=int(orig_id_val))
-        elif gtype in (ogr.wkbMultiLineString, ogr.wkbGeometryCollection):
-            for i in range(geom.GetGeometryCount()):
-                sub = geom.GetGeometryRef(i)
-                if sub and sub.GetGeometryType() in (ogr.wkbLineString, ogr.wkbLineString25D):
-                    handle_line(sub, current_seen=seen, current_orig_id=int(orig_id_val))
+    if not points_data:
+        print(f"  Warning: No vertices extracted from {input_layer_name}")
+        return output_layer_name
+    gdf_vertices = gpd.GeoDataFrame(points_data, crs=gdf_lines.crs)
+    gdf_vertices.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
 
-    ds = None
-
-    out_ds = ogr.Open(input_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {input_gpkg} for writing")
-
-    out_layer = create_or_replace_layer(
-        out_ds,
-        output_layer_name,
-        srs,
-        ogr.wkbPoint,
-        [
-            ("orig_id", ogr.OFTInteger),
-            ("line_id", ogr.OFTInteger),
-            ("vertex_idx", ogr.OFTInteger),
-            ("x", ogr.OFTReal),
-            ("y", ogr.OFTReal),
-            ("angle_deg", ogr.OFTReal),
-        ],
-    )
-
-    for pt in points:
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(pt["geometry"])
-        out_feat.SetField("orig_id", pt["orig_id"])
-        out_feat.SetField("line_id", pt["line_id"])
-        out_feat.SetField("vertex_idx", pt["vertex_idx"])
-        out_feat.SetField("x", pt["x"])
-        out_feat.SetField("y", pt["y"])
-        out_feat.SetField("angle_deg", float(pt["angle_deg"]))
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
-
-    out_layer = None
-    out_ds = None
-
-    print(f"  Created vertices layer: {output_layer_name} ({len(points)} points)")
+    print(f"  Created vertices layer: {output_layer_name} ({len(gdf_vertices)} points)")
     return output_layer_name
 
 
