@@ -9,6 +9,7 @@ import geopandas as gpd
 from rue_lib.core.helpers import remove_layer_from_gpkg
 from rue_lib.geo import to_metric_crs
 from rue_lib.site.config import SiteConfig
+from rue_lib.site.financial import FinancialSite
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
 from rue_lib.streets.operations import erase_layer
@@ -36,8 +37,8 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    output_gpkg = out_dir / "outputs.gpkg"
-    gpkg_path = str(output_gpkg)
+    gpkg_path = out_dir / "outputs.gpkg"
+    gpkg_path = str(gpkg_path)
 
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
@@ -101,5 +102,8 @@ def generate_parcels(cfg: SiteConfig) -> Path:
 
     out_geojson = out_dir / "roads.geojson"
     save_geojson(roads_buffer_layer, out_geojson)
+
+    print("Generating financial data")
+    FinancialSite(config=cfg)
 
     return out_geojson

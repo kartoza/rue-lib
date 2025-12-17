@@ -200,7 +200,7 @@ def get_utm_zone_from_layer(layer):
     return epsg_code
 
 
-def reproject_layer(input_path, output_path, target_epsg, layer_name=None):
+def reproject_layer(input_path, output_path, target_epsg, layer_name=None, is_append_epsg=True):
     """Reproject a vector layer to a target CRS using GDAL/OGR.
 
     Args:
@@ -211,6 +211,7 @@ def reproject_layer(input_path, output_path, target_epsg, layer_name=None):
         target_epsg (int): EPSG code for the target CRS (e.g., 32651 for WGS84/
             UTM zone 51N).
         layer_name (str): Optional name for the output layer. If not provided,
+        is_append_epsg (bool): Optional if want to append the epsg to the layer name,
 
     Returns:
         str: The name of the created layer inside the output GeoPackage.
@@ -231,7 +232,8 @@ def reproject_layer(input_path, output_path, target_epsg, layer_name=None):
 
     if not layer_name:
         layer_name = os.path.splitext(os.path.basename(input_path))[0]
-    layer_name += f"_{target_epsg}"
+    if is_append_epsg:
+        layer_name += f"_{target_epsg}"
 
     driver = ogr.GetDriverByName("GPKG")
     if os.path.exists(output_path):

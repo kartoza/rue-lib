@@ -28,6 +28,7 @@ from .cell import (
     remove_dead_end_cells,
 )
 from .config import StreetConfig
+from .financial import FinancialStreet
 from .operations import (
     classify_on_grid_cells_by_setback,
     create_on_grid_cells_from_perpendiculars,
@@ -63,8 +64,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
-    site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg, layer_name="00_site")
-    roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg, layer_name="00_roads")
+    site_layer_name = reproject_layer(
+        cfg.parcel_path, output_path, utm_epsg, layer_name="00_site", is_append_epsg=False
+    )
+    roads_layer_name = reproject_layer(
+        cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False
+    )
     input_roads_buffer_layer_name = "00_roads_buffer"
     roads_m = gpd.read_file(output_path, layer=roads_layer_name)
     roads_buf_m = buffer_roads(
@@ -311,7 +316,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Exporting local roads from off-grid cells as linework...")
-    local_roads_layer_name = "local_roads"
+    local_roads_layer_name = "18_local_roads"
     polygons_to_lines_layer(
         output_gpkg,
         [
@@ -323,10 +328,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 17: Merging all grid layers with grid_type information...")
+    all_grid_layer_name = "17_all_grids_merged"
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
-        "17_all_grids_merged",
+        all_grid_layer_name,
         [
             (cleaned_cells_layer, "off_grid_local_streets"),
             (off_grid_inner_layer, "off_grid"),
@@ -339,6 +345,41 @@ def generate_streets(cfg: StreetConfig) -> Path:
             ("05_secondary_roads", "road_secondary"),
             (local_roads_layer_name, "road_local"),
         ],
+    )
+
+    # --------------------------------------
+    # Extract local roads from merged grids
+    # --------------------------------------
+    local_road_grid_layer_name = "17_local_road_grid"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        (
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'on_grid_sec_local_streets' OR "
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'off_grid_local_streets' "
+        ),
+        output_path,
+        local_road_grid_layer_name,
+    )
+    buildable_zone_layer_name = "17_buildable_zone"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        "zone_type = 'buildable'",
+        output_path,
+        buildable_zone_layer_name,
+    )
+
+    print("Cutting local roads with buildable zone to get roads outside buildable area...")
+    erase_layer(
+        output_path,
+        local_road_grid_layer_name,
+        output_path,
+        buildable_zone_layer_name,
+        output_path,
+        "17_local_roads_buffer",
     )
 
     print("Step 18: Exporting merged grids to GeoJSON...")
@@ -355,5 +396,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
+
+    print("Step 19: Generating financial data")
+    FinancialStreet(config=cfg)
 
     return output_gpkg

@@ -5,6 +5,7 @@ from osgeo import gdal, ogr
 
 from ..streets.operations import export_layer_to_geojson
 from .config import PublicConfig
+from .financial import FinancialPublic
 from .operations import (
     allocate_amenities,
     allocate_open_spaces,
@@ -114,5 +115,8 @@ def generate_public(cfg: PublicConfig) -> Path:
         final_layer_name,
         str(output_geojson),
     )
+
+    print("Step 19: Generating financial data")
+    FinancialPublic(config=cfg)
 
     return output_gpkg
