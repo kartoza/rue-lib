@@ -328,6 +328,7 @@ def generate_cold(
         on_grid_block,
         convex_clusters_layer,
         concave_points_layer_name,
+        "002_input_roads_buffer",
         output_path,
         on_grid_final_layer,
     )
