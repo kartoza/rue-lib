@@ -961,12 +961,14 @@ def create_off_grid_zero_clusters(
     gdf_lines = gpd.read_file(input_gpkg, layer=split_lines_layer_name)
 
     lines_by_group = {}
+    lines_records_by_group = {}
     for _, row in gdf_lines.iterrows():
         group_id = row.get("group_id")
         if group_id is not None:
             if group_id not in lines_by_group:
                 lines_by_group[group_id] = []
             line = row.geometry
+            lines_records_by_group.setdefault(group_id, []).append(row)
             if isinstance(line, LineString):
                 extended_line = extend_line(line, 50)
                 lines_by_group[group_id].append(extended_line)
@@ -1007,10 +1009,22 @@ def create_off_grid_zero_clusters(
             if part.is_empty or part.area <= 0:
                 continue
             split_geoms.append(part)
+
+            # Find closest line record for orig_id
+            min_dist = float("inf")
+            line_id = None
+            for line_record in lines_records_by_group.get(group_id, []):
+                line_geom = line_record.geometry
+                dist = part.distance(line_geom)
+                if dist < min_dist:
+                    min_dist = dist
+                    line_id = line_record.get("id")
+
             records.append(
                 {
                     "id": cid,
                     "orig_id": group_id,
+                    "line_id": line_id,
                     "type": "off_grid0",
                     "area": float(part.area),
                 }
@@ -1079,23 +1093,29 @@ def create_off_grid_cold_clusters(
     gdf_id0_points = gdf_points[gdf_points["id"] == 0].copy()
 
     points_by_block_id = {}
+    id1_points_by_group_id = {}
     for _, row in gdf_id1_points.iterrows():
         point_group_id = row.get("group_id")
         if point_group_id is not None and point_group_id in line_id_to_block_id:
             block_id = line_id_to_block_id[point_group_id]
             if block_id not in points_by_block_id:
                 points_by_block_id[block_id] = []
+            if block_id not in id1_points_by_group_id:
+                id1_points_by_group_id[block_id] = {}
             points_by_block_id[block_id].append(
                 {
                     "geometry": row.geometry,
                     "line_id": point_group_id,
                     "block_id": block_id,
+                    "id": row.get("id"),
                 }
             )
+            id1_points_by_group_id[block_id][point_group_id] = row.geometry
 
     print(f"  Points grouped by block_id: {sorted(points_by_block_id.keys())}")
 
     id0_points_by_block_id = {}
+    id0_points_by_group_id = {}
     for _, row in gdf_id0_points.iterrows():
         point_group_id = row.get("group_id")  # This is the line_id
         if point_group_id is not None and point_group_id in line_id_to_block_id:
@@ -1103,6 +1123,7 @@ def create_off_grid_cold_clusters(
             if block_id not in id0_points_by_block_id:
                 id0_points_by_block_id[block_id] = []
             id0_points_by_block_id[block_id].append(row.geometry)
+            id0_points_by_group_id[point_group_id] = row.geometry
 
     blocks_by_orig_id = {}
     for _, row in gdf_blocks.iterrows():
@@ -1122,12 +1143,20 @@ def create_off_grid_cold_clusters(
 
     print("  Looking for adjacent line_id pairs within each block...")
     total_pairs = 0
+
+    points_no_prev = []
+    points_no_next = []
+    perp_debug_lines = []
+
     for block_id, points_list in points_by_block_id.items():
         if block_id not in blocks_by_orig_id:
             print(f"    Block {block_id} not found in blocks layer")
             continue
 
         points_list_sorted = sorted(points_list, key=lambda p: p["line_id"])
+
+        points_no_prev.append(points_list_sorted[0])
+        points_no_next.append(points_list_sorted[-1])
 
         for i in range(len(points_list_sorted) - 1):
             pt1_data = points_list_sorted[i]
@@ -1136,10 +1165,11 @@ def create_off_grid_cold_clusters(
             line_id_1 = pt1_data["line_id"]
             line_id_2 = pt2_data["line_id"]
             if line_id_2 - line_id_1 != 1:
+                points_no_next.append(pt1_data)
+                points_no_prev.append(pt2_data)
                 continue
 
             total_pairs += 1
-
             pt1 = pt1_data["geometry"]
             pt2 = pt2_data["geometry"]
 
@@ -1147,7 +1177,7 @@ def create_off_grid_cold_clusters(
                 continue
 
             line = LineString([pt1, pt2])
-            split_line = extend_line(line, buffer_distance)
+            split_line = extend_line(line, buffer_distance / 2)
 
             blocks_to_split = blocks_by_orig_id[block_id]
 
@@ -1161,7 +1191,6 @@ def create_off_grid_cold_clusters(
                         parts = list(split_result.geoms)
                     else:
                         parts = [split_result]
-
                     if len(parts) < 2:
                         print(f"      Warning: Split did not produce 2+ parts for block {block_id}")
                         continue
@@ -1206,6 +1235,150 @@ def create_off_grid_cold_clusters(
                     print(f"      Error splitting block {block_id} with line: {e}")
                     continue
 
+    perp_line_points = []
+    if points_no_prev:
+        for pt_data in points_no_prev:
+            curr_pt = pt_data["geometry"]
+            line_id = pt_data.get("line_id")
+            block_id = pt_data.get("block_id")
+            if line_id in perp_line_points:
+                continue
+            perp_line_points.append(line_id)
+            if line_id is None or curr_pt is None or not isinstance(curr_pt, Point):
+                continue
+            start_pt = id0_points_by_group_id.get(line_id)
+            if start_pt is None:
+                continue
+            vec = (curr_pt.x - start_pt.x, curr_pt.y - start_pt.y)
+            vec_len = math.hypot(*vec)
+            if vec_len < 1e-6:
+                continue
+            perp = (-vec[1] / vec_len, vec[0] / vec_len)
+            cand1 = Point(
+                curr_pt.x + perp[0] * buffer_distance * 2, curr_pt.y + perp[1] * buffer_distance * 2
+            )
+            cand2 = Point(
+                curr_pt.x - perp[0] * buffer_distance * 2, curr_pt.y - perp[1] * buffer_distance * 2
+            )
+            endpoints = []
+            next_start = id1_points_by_group_id.get(block_id, {}).get(line_id + 1)
+            if next_start is not None:
+                d1 = cand1.distance(next_start)
+                d2 = cand2.distance(next_start)
+                chosen = cand1 if d1 > d2 else cand2
+                endpoints.append((chosen, 1 if chosen is cand1 else -1))
+            else:
+                endpoints.append((cand1, 1))
+                endpoints.append((cand2, -1))
+
+            for end_pt, dir_sign in endpoints:
+                line = extend_line(LineString([curr_pt, end_pt]), 1)
+                perp_debug_lines.append(
+                    {
+                        "geometry": line,
+                        "block_id": block_id,
+                        "line_id": line_id,
+                        "dir": dir_sign,
+                        "has_next": next_start is not None,
+                    }
+                )
+
+    if points_no_next:
+        for pt_data in points_no_next:
+            curr_pt = pt_data["geometry"]
+            line_id = pt_data.get("line_id")
+            block_id = pt_data.get("block_id")
+
+            if line_id in perp_line_points:
+                continue
+
+            perp_line_points.append(line_id)
+            if line_id is None or curr_pt is None or not isinstance(curr_pt, Point):
+                continue
+            start_pt = id0_points_by_group_id.get(line_id)
+            if start_pt is None:
+                continue
+            vec = (curr_pt.x - start_pt.x, curr_pt.y - start_pt.y)
+            vec_len = math.hypot(*vec)
+            if vec_len < 1e-6:
+                continue
+            perp = (-vec[1] / vec_len, vec[0] / vec_len)
+            cand1 = Point(
+                curr_pt.x + perp[0] * buffer_distance * 2, curr_pt.y + perp[1] * buffer_distance * 2
+            )
+            cand2 = Point(
+                curr_pt.x - perp[0] * buffer_distance * 2, curr_pt.y - perp[1] * buffer_distance * 2
+            )
+            prev_start = id1_points_by_group_id.get(block_id, {}).get(line_id - 1)
+            endpoints = []
+            if prev_start is not None:
+                d1 = cand1.distance(prev_start)
+                d2 = cand2.distance(prev_start)
+                chosen = cand1 if d1 > d2 else cand2
+                endpoints.append((chosen, 1 if chosen is cand1 else -1))
+            else:
+                endpoints.append((cand1, 1))
+                endpoints.append((cand2, -1))
+
+            for end_pt, dir_sign in endpoints:
+                line = extend_line(LineString([curr_pt, end_pt]), 1)
+                perp_debug_lines.append(
+                    {
+                        "geometry": line,
+                        "block_id": block_id,
+                        "line_id": line_id,
+                        "dir": dir_sign,
+                        "has_next": False,
+                    }
+                )
+
+    if perp_debug_lines:
+        for perp_line in perp_debug_lines:
+            line_geom = perp_line["geometry"]
+            for block_row in blocks_by_orig_id.get(perp_line["block_id"], []):
+                block_geom = block_row.geometry
+                try:
+                    split_result = shapely_split(block_geom, line_geom)
+                    if hasattr(split_result, "geoms"):
+                        parts = list(split_result.geoms)
+                    else:
+                        parts = [split_result]
+                    if len(parts) < 2:
+                        continue
+                    else:
+                        parts_with_dist = [
+                            (part, part.distance(line_geom.centroid)) for part in parts
+                        ]
+                        parts_with_dist.sort(key=lambda x: x[1])
+                        for idx, (part, _) in enumerate(parts_with_dist[:2]):
+                            if part.is_empty or part.area <= 0:
+                                continue
+                            part_centroid = part.centroid
+                            is_duplicate = False
+                            for existing_centroid in processed_block_centroids:
+                                if part_centroid.distance(existing_centroid) < 0.1:
+                                    is_duplicate = True
+                                    break
+                            if is_duplicate:
+                                continue
+                            cluster_type = "off_grid1" if idx == 0 else "off_grid2"
+                            cluster_polygons.append(part)
+                            cluster_records.append(
+                                {
+                                    "id": cluster_id,
+                                    "orig_id": block_orig_id,
+                                    "type": cluster_type,
+                                    "area": float(part.area),
+                                }
+                            )
+                            processed_block_centroids.append(part_centroid)
+                            cluster_id += 1
+                            print(f"      Created {cluster_type} cluster (id={cluster_id - 1})")
+                            processed_block_centroids.append(block_geom.centroid)
+                except Exception as e:
+                    print(f"      Error splitting block {block_row.get('id')} with perp line: {e}")
+                    continue
+
     for orig_id, block_rows in blocks_by_orig_id.items():
         for block_row in block_rows:
             block_geom = block_row.geometry
@@ -1247,13 +1420,11 @@ def create_off_grid_cold_clusters(
         temp_gdf["area"] < target_area_m2 * 0.95
     )
     small_cluster_indices = temp_gdf[small_clusters_mask].index.tolist()
-
     small_cluster_indices.sort(key=lambda idx: temp_gdf.loc[idx, "area"])
 
     print(f"    Found {len(small_cluster_indices)} small off_grid1 clusters to merge")
 
     merged_away = set()
-
     for idx in small_cluster_indices:
         if idx in merged_away:
             continue
@@ -1296,7 +1467,6 @@ def create_off_grid_cold_clusters(
         temp_gdf = temp_gdf.reset_index(drop=True)
 
     print(f"    Total merged: {merged_count} small clusters")
-
     gdf_clusters = temp_gdf
     gdf_clusters.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
     print(f"  Created {len(gdf_clusters)} cluster polygons (after merging)")
