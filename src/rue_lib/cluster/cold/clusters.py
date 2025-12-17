@@ -131,7 +131,6 @@ def merge_and_classify_on_grid_clusters(
                     "id": cluster_id,
                     "block_id": int(block_id),
                     "type": _type,
-                    "color": ColorTypes[_type],
                     "area": float(block_geom.area),
                     "block_type": "cold",
                     "on_grid": 1,
@@ -180,6 +179,7 @@ def merge_and_classify_on_grid_clusters(
             else:
                 record["type"] = _get_road_type_priority(road_types, remove=False)
 
+        record["color"] = ColorTypes[record["type"]]
         record["road_types"] = ",".join(road_types)
 
         cluster_id += 1
