@@ -243,7 +243,7 @@ def create_clusters_from_convex_points(
 
             corner_parts_count = 0
 
-            parts.sort(key=lambda g: g.centroid.distance(split_lines_data["convex"].geometry))
+            parts.sort(key=lambda g: g.centroid.distance(lines_union.centroid))
 
             if len(parts) > 2:
                 part = parts[0]
@@ -271,7 +271,7 @@ def create_clusters_from_convex_points(
                 )
                 cluster_id += 1
                 corner_parts_count += 1
-            print(f"    Block {block_id}: created {corner_parts_count} corner clusters")
+            print(f"    Block {split_lines_data['block_id']}: created {corner_parts_count} corner")
 
         except Exception as e:
             print(f"    Warning: Failed to split block {block_id}: {e}")

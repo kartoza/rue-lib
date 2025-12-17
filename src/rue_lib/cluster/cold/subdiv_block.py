@@ -1,6 +1,8 @@
 import math
 
+import geopandas as gpd
 from osgeo import ogr
+from shapely.geometry import Point
 
 from rue_lib.core.helpers import create_or_replace_layer
 
@@ -57,12 +59,13 @@ def find_concave_points(
     """
     Find concave points from the boundary vertices.
 
-    A concave point is a vertex where the interior angle is greater than 180 degrees.
-    This is determined by calculating the cross product of consecutive edge vectors.
+    A concave point is a vertex where the interior angle is between 80 and 100 degrees.
+    This is determined by calculating the angle between vectors formed by
+    prev->current and current->next points.
 
     Args:
         input_gpkg: Path to input GeoPackage
-        erased_grid_layer_name: Name of erased cold grid layer
+        erased_grid_layer_name: Name of erased cold grid layer (not used, kept for compatibility)
         boundary_points_layer_name: Name of boundary points layer
         output_gpkg: Path to output GeoPackage
         output_layer_name: Name for output concave points layer
@@ -70,105 +73,62 @@ def find_concave_points(
     Returns:
         Name of the output layer
     """
-    ds = ogr.Open(input_gpkg, 0)
-    if ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    gdf_points = gpd.read_file(input_gpkg, layer=boundary_points_layer_name)
+    if gdf_points.empty:
+        raise ValueError(f"Layer {boundary_points_layer_name} is empty")
 
-    grid_layer = ds.GetLayerByName(erased_grid_layer_name)
-    if grid_layer is None:
-        raise ValueError(f"Layer {erased_grid_layer_name} not found")
+    points_by_block = {}
+    for _, row in gdf_points.iterrows():
+        block_id = row["block_id"]
+        vertex_id = row["vertex_id"]
+        geom = row.geometry
 
-    points_layer = ds.GetLayerByName(boundary_points_layer_name)
-    if points_layer is None:
-        raise ValueError(f"Layer {boundary_points_layer_name} not found")
-    srs = grid_layer.GetSpatialRef()
+        if block_id not in points_by_block:
+            points_by_block[block_id] = []
 
-    print(f"  Processing {grid_layer.GetFeatureCount()} blocks...")
+        points_by_block[block_id].append(
+            {
+                "x": geom.x,
+                "y": geom.y,
+                "vertex_id": vertex_id,
+            }
+        )
+    for block_id in points_by_block:
+        points_by_block[block_id].sort(key=lambda p: p["vertex_id"])
+    print(f"  Processing {len(points_by_block)} blocks...")
     concave_points = []
-    block_id = 0
-    for grid_feat in grid_layer:
-        block_id += 1
-        grid_geom = grid_feat.GetGeometryRef()
-        if grid_geom is None:
+    for block_id, points in points_by_block.items():
+        num_points = len(points)
+
+        if num_points < 3:
             continue
-        boundary = grid_geom.GetBoundary()
-        if boundary is None:
-            continue
-        if boundary.GetGeometryType() == ogr.wkbLineString:
-            lines = [boundary]
-        elif boundary.GetGeometryType() == ogr.wkbMultiLineString:
-            lines = [boundary.GetGeometryRef(i) for i in range(boundary.GetGeometryCount())]
-        else:
-            continue
-        for line in lines:
-            point_count = line.GetPointCount()
-            if point_count < 3:
-                continue
-            vertices = []
-            for i in range(point_count):
-                x = line.GetX(i)
-                y = line.GetY(i)
-                vertices.append((x, y))
 
-            for i in range(point_count - 1):
-                p0 = vertices[(i - 1) % (point_count - 1)]
-                p1 = vertices[i]
-                p2 = vertices[(i + 1) % (point_count - 1)]
-                v1_x = p1[0] - p0[0]
-                v1_y = p1[1] - p0[1]
-                v2_x = p2[0] - p1[0]
-                v2_y = p2[1] - p1[1]
-                cross = v1_x * v2_y - v1_y * v2_x
-                if cross > 15000:
-                    point_geom = ogr.Geometry(ogr.wkbPoint)
-                    point_geom.AddPoint(p1[0], p1[1])
-                    points_layer.SetSpatialFilter(point_geom.Buffer(0.01))
-                    is_boundary_point = False
-                    for pt_feat in points_layer:
-                        if pt_feat.GetField("block_id") == block_id:
-                            is_boundary_point = True
-                            break
-                    points_layer.ResetReading()
+        for i, current_point in enumerate(points):
+            prev_point = points[(i - 1) % num_points]
+            next_point = points[(i + 1) % num_points]
+            v1_x = current_point["x"] - prev_point["x"]
+            v1_y = current_point["y"] - prev_point["y"]
 
-                    if is_boundary_point:
-                        concave_points.append(
-                            {
-                                "x": p1[0],
-                                "y": p1[1],
-                                "block_id": block_id,
-                                "vertex_id": i,
-                                "cross_product": cross,
-                            }
-                        )
-    grid_layer = None
-    points_layer = None
-    ds = None
-    out_ds = ogr.Open(output_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
-    for i in range(out_ds.GetLayerCount()):
-        layer = out_ds.GetLayerByIndex(i)
-        if layer.GetName() == output_layer_name:
-            out_ds.DeleteLayer(i)
-            break
-    out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint)
-    out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("cross_product", ogr.OFTReal))
-    for point in concave_points:
-        pt_geom = ogr.Geometry(ogr.wkbPoint)
-        pt_geom.AddPoint(point["x"], point["y"])
+            v2_x = next_point["x"] - current_point["x"]
+            v2_y = next_point["y"] - current_point["y"]
+            dot = v1_x * v2_x + v1_y * v2_y
+            cross = v1_x * v2_y - v1_y * v2_x
+            angle_rad = math.atan2(cross, dot)
+            angle_deg = math.degrees(angle_rad)
 
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(pt_geom)
-        out_feat.SetField("block_id", point["block_id"])
-        out_feat.SetField("vertex_id", point["vertex_id"])
-        out_feat.SetField("cross_product", point["cross_product"])
+            if angle_deg < -80:
+                concave_points.append(
+                    {
+                        "geometry": Point(current_point["x"], current_point["y"]),
+                        "block_id": block_id,
+                        "vertex_id": current_point["vertex_id"],
+                        "angle": angle_deg,
+                    }
+                )
 
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
-    out_layer = None
-    out_ds = None
+    if concave_points:
+        gdf_concave = gpd.GeoDataFrame(concave_points, geometry="geometry", crs=gdf_points.crs)
+        gdf_concave.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     total_concave = len(concave_points)
     print(f"  Found {total_concave} concave points")
@@ -210,15 +170,15 @@ def split_buffered_lines_by_subdivided_blocks(
         sdv_by_block.setdefault(block_id_for_line, []).append((_block["geometry"], _block["id"]))
 
     split_buffered_lines = []
+    idx = 0
     for buff_line in buffered_line_features:
         buff_geom = buff_line["geometry"]
         buff_block_id = buff_line["block_id"]
-        buff_road_type = buff_line["road_type"]
         sdv_blocks_for_block = sdv_by_block.get(buff_block_id, [])
         if not sdv_blocks_for_block:
             split_buffered_lines.append(buff_line)
             continue
-        for subdivided_block_geom, subdivided_block_id in sdv_blocks_for_block:
+        for subdivided_block_geom, _subdivided_block_id in sdv_blocks_for_block:
             if not buff_geom.Intersects(subdivided_block_geom):
                 continue
 
@@ -231,10 +191,10 @@ def split_buffered_lines_by_subdivided_blocks(
                             {
                                 "geometry": intersection.Clone(),
                                 "block_id": buff_block_id,
-                                "road_type": buff_road_type,
-                                "id": subdivided_block_id,
+                                "id": idx,
                             }
                         )
+                        idx += 1
                     elif geom_type == ogr.wkbMultiPolygon or geom_type == ogr.wkbMultiPolygon25D:
                         for i in range(intersection.GetGeometryCount()):
                             poly = intersection.GetGeometryRef(i)
@@ -243,12 +203,10 @@ def split_buffered_lines_by_subdivided_blocks(
                                     {
                                         "geometry": poly.Clone(),
                                         "block_id": buff_block_id,
-                                        "road_type": buff_road_type,
-                                        "id": subdivided_block_id,
+                                        "id": idx,
                                     }
                                 )
                     elif geom_type == ogr.wkbGeometryCollection:
-                        # Extract polygons from geometry collection
                         for i in range(intersection.GetGeometryCount()):
                             geom = intersection.GetGeometryRef(i)
                             gt = geom.GetGeometryType()
@@ -266,19 +224,19 @@ def split_buffered_lines_by_subdivided_blocks(
                                                 {
                                                     "geometry": poly.Clone(),
                                                     "block_id": buff_block_id,
-                                                    "road_type": buff_road_type,
-                                                    "id": subdivided_block_id,
+                                                    "id": idx,
                                                 }
                                             )
+                                            idx += 1
                                 else:
                                     split_buffered_lines.append(
                                         {
                                             "geometry": geom.Clone(),
                                             "block_id": buff_block_id,
-                                            "road_type": buff_road_type,
-                                            "id": subdivided_block_id,
+                                            "id": idx,
                                         }
                                     )
+                                    idx += 1
             except RuntimeError as e:
                 print(
                     f"    Warning: Failed to intersect buffered line "
@@ -368,9 +326,8 @@ def subdivide_blocks_by_concave_points(
         boundary_points_by_block[block_id].sort(key=lambda p: p["vertex_id"])
 
     grid_geometries = {}
-    block_id = 0
     for grid_feat in grid_layer:
-        block_id += 1
+        block_id = grid_feat.GetField("id")
         grid_geom = grid_feat.GetGeometryRef()
         if grid_geom:
             grid_geometries[block_id] = grid_geom.Clone()
@@ -534,7 +491,6 @@ def subdivide_blocks_by_concave_points(
                     offset2_x + direction2_x * max(current_length, 1.0),
                     offset2_y + direction2_y * max(current_length, 1.0),
                 )
-
                 cutting_lines_to_write.append(
                     {
                         "line_id": line_id,
@@ -682,11 +638,7 @@ def subdivide_blocks_by_concave_points(
             geom = feat.GetGeometryRef()
             if geom:
                 buffered_line_features.append(
-                    {
-                        "geometry": geom.Clone(),
-                        "block_id": feat.GetField("block_id"),
-                        "road_type": feat.GetField("road_type"),
-                    }
+                    {"geometry": geom.Clone(), "block_id": feat.GetField("id")}
                 )
 
         split_buffered_lines = split_buffered_lines_by_subdivided_blocks(
@@ -700,7 +652,6 @@ def subdivide_blocks_by_concave_points(
 
         split_buffered_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
         split_buffered_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-        split_buffered_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
         split_buffered_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
 
         for buff_data in split_buffered_lines:
@@ -708,7 +659,6 @@ def subdivide_blocks_by_concave_points(
             feat.SetGeometry(buff_data["geometry"])
             feat.SetField("id", buff_data["id"])
             feat.SetField("block_id", buff_data["block_id"])
-            feat.SetField("road_type", buff_data["road_type"])
             feat.SetField("type", "loc_loc")
             split_buffered_layer.CreateFeature(feat)
             feat = None

@@ -1,13 +1,12 @@
-from osgeo import ogr
-from shapely import wkt
+import geopandas as gpd
 
 from rue_lib.cluster.config import ClusterConfig
 
 
 def create_buffered_lines_from_boundary_lines(
     input_gpkg: str,
+    roads_layer_name: str,
     boundary_lines_layer_name: str,
-    _erased_grid_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
     cfg: ClusterConfig,
@@ -18,76 +17,75 @@ def create_buffered_lines_from_boundary_lines(
     Uses the boundary lines layer (e.g. 202_cold_boundary_lines) instead of points
     to generate rectangular buffers per road type.
     """
-    # Read first, then close before writing to avoid overlapping SQLite transactions
-    read_ds = ogr.Open(input_gpkg, 0)
-    if read_ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    gdf_lines = gpd.read_file(input_gpkg, layer=boundary_lines_layer_name)
+    gdf_roads = gpd.read_file(input_gpkg, layer=roads_layer_name)
 
-    lines_layer = read_ds.GetLayerByName(boundary_lines_layer_name)
-    if lines_layer is None:
-        raise ValueError(f"Layer {boundary_lines_layer_name} not found")
-
-    srs = lines_layer.GetSpatialRef()
+    if gdf_lines.empty:
+        raise ValueError(f"Layer {boundary_lines_layer_name} is empty")
 
     buffer_depths = {
         "road_local": cfg.on_grid_partition_depth_local_roads * 2,
-        "road_secondary": cfg.on_grid_partition_depth_secondary_roads * 2,
-        "road_arterial": cfg.on_grid_partition_depth_arterial_roads * 2,
+        "road_sec": cfg.on_grid_partition_depth_secondary_roads * 2,
+        "road_art": cfg.on_grid_partition_depth_arterial_roads * 2,
     }
 
     buffered_lines = []
-    for feat in lines_layer:
-        road_type = feat.GetField("road_type")
-        block_id = feat.GetField("block_id")
-        geom = feat.GetGeometryRef()
-        if geom is None:
+    search_buffer = 1.0  # Small buffer to find intersecting roads
+
+    for _, row in gdf_lines.iterrows():
+        geom = row.geometry
+
+        if geom is None or geom.is_empty or geom.length < 10.0:
             continue
+
+        # Check road type by finding closest road in gdf_roads
+        # Buffer the boundary line geometry slightly and find intersecting roads
+        buffered_search = geom.centroid.buffer(search_buffer)
+
+        # Find roads that intersect with the buffered boundary line
+        road_type = None
+        min_distance = float("inf")
+
+        for _, road_row in gdf_roads.iterrows():
+            road_geom = road_row.geometry
+            if road_geom is None or road_geom.is_empty:
+                continue
+
+            # Check if the buffered boundary intersects with the road
+            if buffered_search.intersects(road_geom):
+                # Calculate distance to find the closest road
+                distance = geom.distance(road_geom)
+                if distance < min_distance:
+                    min_distance = distance
+                    road_type = road_row["road_type"]
+
+        # If no road found by intersection, skip this boundary line
+        if road_type is None:
+            road_type = "road_local"  # Default to local if no road found
 
         depth = buffer_depths.get(road_type, 0)
         if depth <= 0:
             continue
 
-        shapely_geom = wkt.loads(str(geom))
-        shapely_buffered = shapely_geom.buffer(depth / 2.0, join_style=2, cap_style=3)
-        buffered_geom = ogr.CreateGeometryFromWkb(shapely_buffered.wkb)
+        # Buffer with flat caps (cap_style=2) - only sides, no extension at endpoints
+        # join_style=2 is mitered joins for sharp corners
+        # buffered_geom = geom.buffer(depth / 2.0, join_style=2, cap_style=3)
+        buffered_geom = geom
 
-        if buffered_geom and not buffered_geom.IsEmpty():
+        if buffered_geom and not buffered_geom.is_empty:
             buffered_lines.append(
                 {
-                    "geometry": buffered_geom.Clone(),
-                    "block_id": block_id,
+                    "geometry": geom,
                     "road_type": road_type,
+                    "lenght_m": geom.length,
+                    "buffer_depth_m": depth,
+                    "block_id": row.get("block_id", None),
                 }
             )
 
-    lines_layer = None
-    read_ds = None
-
-    out_ds = ogr.Open(output_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
-
-    for i in range(out_ds.GetLayerCount()):
-        layer = out_ds.GetLayerByIndex(i)
-        if layer.GetName() == output_layer_name:
-            out_ds.DeleteLayer(i)
-            break
-
-    out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
-    out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
-
-    for line_data in buffered_lines:
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(line_data["geometry"])
-        out_feat.SetField("block_id", line_data["block_id"])
-        out_feat.SetField("road_type", line_data["road_type"])
-
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
-
-    out_layer = None
-    out_ds = None
+    if buffered_lines:
+        gdf_buffered = gpd.GeoDataFrame(buffered_lines, geometry="geometry", crs=gdf_lines.crs)
+        gdf_buffered.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     print(f"  Created buffered lines layer: {output_layer_name}")
     return output_layer_name
@@ -113,92 +111,51 @@ def clip_buffered_lines_to_cold_grid(
     Returns:
         Name of the output layer
     """
-    # Read input data
-    read_ds = ogr.Open(input_gpkg, 0)
-    if read_ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    # Read input data using geopandas
+    gdf_buffered = gpd.read_file(input_gpkg, layer=buffered_lines_layer_name)
+    gdf_cold_grid = gpd.read_file(input_gpkg, layer=cold_grid_layer_name)
 
-    buffered_layer = read_ds.GetLayerByName(buffered_lines_layer_name)
-    if buffered_layer is None:
-        raise ValueError(f"Layer {buffered_lines_layer_name} not found")
+    if gdf_buffered.empty:
+        raise ValueError(f"Layer {buffered_lines_layer_name} is empty")
+    if gdf_cold_grid.empty:
+        raise ValueError(f"Layer {cold_grid_layer_name} is empty")
 
-    cold_grid_layer = read_ds.GetLayerByName(cold_grid_layer_name)
-    if cold_grid_layer is None:
-        raise ValueError(f"Layer {cold_grid_layer_name} not found")
-
-    srs = buffered_layer.GetSpatialRef()
-
-    # Collect cold grid geometries by block_id
     cold_grid_geoms = {}
-    for feat in cold_grid_layer:
-        geom = feat.GetGeometryRef()
-        if geom:
-            # Try to get block_id or use fid
-            block_id = (
-                feat.GetField("block_id") if feat.GetFieldIndex("block_id") >= 0 else feat.GetFID()
-            )
-            cold_grid_geoms[block_id] = geom.Clone()
+    for idx, row in gdf_cold_grid.iterrows():
+        block_id = row.get("block_id", idx + 1)
+        cold_grid_geoms[block_id] = row.geometry
 
-    # Process buffered lines
     clipped_geometries = []
-    for feat in buffered_layer:
-        buffered_geom = feat.GetGeometryRef()
-        block_id = feat.GetField("block_id")
-        road_type = feat.GetField("road_type")
+    for _, row in gdf_buffered.iterrows():
+        buffered_geom = row.geometry
+        block_id = None
+        road_type = row["road_type"]
 
-        if buffered_geom is None:
+        if buffered_geom is None or buffered_geom.is_empty:
             continue
-
-        # Find the corresponding cold grid block
         cold_grid_geom = cold_grid_geoms.get(block_id)
         if cold_grid_geom is None:
             continue
-
-        # Intersect buffered line with cold grid block
         try:
-            clipped_geom = buffered_geom.Intersection(cold_grid_geom)
-            if clipped_geom and not clipped_geom.IsEmpty():
+            clipped_geom = buffered_geom.intersection(cold_grid_geom)
+            if clipped_geom and not clipped_geom.is_empty:
                 clipped_geometries.append(
                     {
-                        "geometry": clipped_geom.Clone(),
+                        "geometry": clipped_geom,
                         "block_id": block_id,
                         "road_type": road_type,
                     }
                 )
-        except RuntimeError as e:
+        except Exception as e:
             print(f"    Warning: Failed to clip geometry for block {block_id}: {e}")
             continue
 
-    read_ds = None
-
     # Write output
-    out_ds = ogr.Open(output_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
-
-    # Delete existing layer if it exists
-    for i in range(out_ds.GetLayerCount()):
-        layer = out_ds.GetLayerByIndex(i)
-        if layer.GetName() == output_layer_name:
-            out_ds.DeleteLayer(i)
-            break
-
-    # Create output layer
-    out_layer = out_ds.CreateLayer(output_layer_name, srs, ogr.wkbPolygon)
-    out_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("road_type", ogr.OFTString))
-
-    for geom_data in clipped_geometries:
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(geom_data["geometry"])
-        out_feat.SetField("block_id", geom_data["block_id"])
-        out_feat.SetField("road_type", geom_data["road_type"])
-
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
-
-    out_layer = None
-    out_ds = None
+    if clipped_geometries:
+        gdf_clipped = gpd.GeoDataFrame(
+            clipped_geometries, geometry="geometry", crs=gdf_buffered.crs
+        )
+        gdf_clipped.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     print(f"  Created clipped layer: {output_layer_name} ({len(clipped_geometries)} features)")
     return output_layer_name

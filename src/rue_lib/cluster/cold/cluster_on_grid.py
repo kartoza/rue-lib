@@ -1052,7 +1052,6 @@ def create_off_grid_cold_clusters(
 
     print("\nCreating off-grid cold clusters from depth points...")
 
-    # Load layers
     gdf_blocks = gpd.read_file(input_gpkg, layer=off_grid0_clusters_layer)
     gdf_points = gpd.read_file(input_gpkg, layer=depth_points_layer_name)
     gdf_lines = gpd.read_file(input_gpkg, layer=perpendicular_lines_layer_name)
@@ -1065,7 +1064,6 @@ def create_off_grid_cold_clusters(
         print("  Warning: one or more input layers are empty")
         return output_layer_name
 
-    # Create mapping: line id -> line group_id (which is block orig_id)
     line_id_to_block_id = {}
     for _, row in gdf_lines.iterrows():
         line_id = row.get("id")

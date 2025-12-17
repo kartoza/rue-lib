@@ -1124,6 +1124,8 @@ def subtract_layer(
         # Buffer the erase geometry if buffer_distance is specified
         if buffer_distance > 0:
             erase_union = erase_union.buffer(buffer_distance, cap_style=3, join_style=2)
+        else:
+            erase_union = erase_union.buffer(0.1)
         erased_geom = gdf_base.geometry.difference(erase_union)
 
     # Create a new GeoDataFrame with the erased geometry
