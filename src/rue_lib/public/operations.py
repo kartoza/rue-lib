@@ -122,7 +122,6 @@ def allocate_open_spaces(
         off_grid_blocks.sort(key=lambda x: x["distance"])
         central_block = off_grid_blocks[0]
         central_centroid = central_block["centroid"]
-        print([group["type"] for group in off_grid_blocks])
 
         print(f"    Found {len(all_blocks)} blocks, central block identified")
 
@@ -438,7 +437,6 @@ def allocate_amenities(
                 break
             allocated_blocks.append(group["root"])
             current_area += group["root"]["area"]
-            print(group["root"]["type"], len(group["attached"]))
             for attached in group["attached"]:
                 current_area += attached["area"]
                 if current_area >= required_amen_area:
