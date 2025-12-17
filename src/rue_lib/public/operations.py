@@ -5,10 +5,10 @@ from rue_lib.core.definitions import ClusterTypes, ColorTypes
 
 
 def allocate_open_spaces(
-    input_path: str,
-    parcels_path: str,
     output_gpkg: str,
-    output_layer_name: str = "02_open_spaces",
+    parcel_layer_name: str,
+    block_layer_name: str,
+    output_layer_name: str,
     open_percent: float = 4.0,
 ) -> str:
     """
@@ -21,9 +21,9 @@ def allocate_open_spaces(
     4. Sort by distance to central block
 
     Args:
-        input_path: Path to the input layer
-        parcels_path: Path to parcels/sites GeoJSON or GeoPackage
         output_gpkg: Path to output GeoPackage
+        parcel_layer_name: Name for parcel layer
+        block_layer_name: Name for blocks layer
         output_layer_name: Name for output open spaces layer
         open_percent: Percentage of site area to allocate as open space
 
@@ -33,29 +33,12 @@ def allocate_open_spaces(
     print(f"Allocating open spaces ({open_percent}% of site area)...")
 
     # Open input layers
-    blocks_ds = ogr.Open(input_path, 0)
-    blocks_layer = blocks_ds.GetLayer()
-
-    parcels_ds = ogr.Open(parcels_path, 0)
-    if parcels_ds is None:
-        raise ValueError(f"Could not open {parcels_path}")
-
-    parcels_layer = parcels_ds.GetLayer(0)
-
-    # Open output dataset
     output_ds = ogr.Open(output_gpkg, 1)
-    if output_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
+    blocks_layer = output_ds.GetLayerByName(block_layer_name)
+    parcels_layer = output_ds.GetLayerByName(parcel_layer_name)
 
     # Get spatial reference systems
     blocks_srs = blocks_layer.GetSpatialRef()
-    parcels_srs = parcels_layer.GetSpatialRef()
-
-    # Create coordinate transformation
-    transform = None
-    if parcels_srs and blocks_srs:
-        if not parcels_srs.IsSame(blocks_srs):
-            transform = osr.CoordinateTransformation(parcels_srs, blocks_srs)
 
     # Create output layer
     if output_ds.GetLayerByName(output_layer_name):
@@ -86,10 +69,6 @@ def allocate_open_spaces(
     for parcel_feat in parcels_layer:
         site_id += 1
         parcel_geom = parcel_feat.GetGeometryRef().Clone()
-
-        if transform:
-            parcel_geom.Transform(transform)
-
         site_area = parcel_geom.Area()
         required_open_area = site_area * (open_percent / 100.0)
 
@@ -129,7 +108,13 @@ def allocate_open_spaces(
             continue
 
         # Find central block (closest off-grid block to site centroid)
-        off_grid_blocks = [b for b in all_blocks if b["type"] == ClusterTypes.OFF_GRID_WARM]
+        off_grid_blocks = [
+            b
+            for b in all_blocks
+            if b["type"]
+            in [ClusterTypes.OFF_GRID_WARM, ClusterTypes.OFF_GRID_COLD, ClusterTypes.CONCAVE_CORNER]
+        ]
+
         if not off_grid_blocks:
             print(f"    No off-grid blocks found for site {site_id}")
             continue
@@ -144,8 +129,6 @@ def allocate_open_spaces(
         # Similar to reorderParts1 in Mobius
         off_grid_groups = []
         for og_block in off_grid_blocks:
-            if og_block["block_id"] != central_block["block_id"]:
-                continue
             group = {
                 "root": og_block,
                 "attached": [],
@@ -155,13 +138,15 @@ def allocate_open_spaces(
             off_grid_groups.append(group)
 
         # Attach on-grid blocks to nearest off-grid root
-        on_grid_block_types = ["loc", "loc_loc", "sec", "art"]
+        on_grid_block_types = ["loc", "loc_loc", "sec", "art", "off_grid2"]
         on_grid_blocks = [b for b in all_blocks if b["type"] in on_grid_block_types]
         on_grid_blocks.sort(key=lambda x: x["distance"])
         for on_block in on_grid_blocks:
             min_dist = float("inf")
             closest_group = None
             for group in off_grid_groups:
+                if group["root"]["block_id"] != on_block["block_id"]:
+                    continue
                 if not on_block["geometry"].Intersects(group["root"]["geometry"]):
                     continue
                 dist = on_block["centroid"].Distance(group["root"]["centroid"])
@@ -191,6 +176,17 @@ def allocate_open_spaces(
             feat = b["feature"]
             return feat.GetFID()
 
+        # Re-sort on-grid blocks:
+        # 1. Keep first 2
+        # 2. Reverse the remaining
+        # 3. Merge
+        if len(off_grid_groups) > 2:
+            first_two = off_grid_groups[:2]
+            remaining = off_grid_groups[2:]
+            remaining.reverse()
+            off_grid_groups = first_two + remaining
+
+        print([group["root"]["type"] for group in off_grid_groups])
         for i, group in enumerate(off_grid_groups):
             if current_area >= required_open_area:
                 break
@@ -206,8 +202,7 @@ def allocate_open_spaces(
                 allocated_ids.add(key)
                 current_area += root_block["area"]
 
-        if current_area < required_open_area:
-            for _i, group in enumerate(off_grid_groups):
+                # This is for looping attached
                 for attached in group["attached"]:
                     current_area += attached["area"]
                     if current_area >= required_open_area:
@@ -259,8 +254,6 @@ def allocate_open_spaces(
             out_feat = None
 
     # Clean up
-    blocks_ds = None
-    parcels_ds = None
     output_ds = None
 
     print(f"Open spaces saved to layer: {output_layer_name}")
@@ -268,11 +261,11 @@ def allocate_open_spaces(
 
 
 def allocate_amenities(
-    input_path: str,
-    open_spaces_layer_name: str,
-    parcels_path: str,
     output_gpkg: str,
-    output_layer_name: str = "03_amenities",
+    parcel_layer_name: str,
+    block_layer_name: str,
+    open_spaces_layer_name: str,
+    output_layer_name: str,
     amen_percent: float = 10.0,
 ) -> str:
     """
@@ -285,10 +278,10 @@ def allocate_amenities(
     4. Allocate until amenity percentage requirement is met
 
     Args:
-        input_path: Path to the input layer
-        open_spaces_layer_name: Name of the open spaces layer
-        parcels_path: Path to parcels/sites GeoJSON or GeoPackage
         output_gpkg: Path to output GeoPackage
+        parcel_layer_name: Name for parcel layer
+        block_layer_name: Name for blocks layer
+        open_spaces_layer_name: Name of the open spaces layer
         output_layer_name: Name for output amenities layer
         amen_percent: Percentage of site area to allocate as amenities
 
@@ -298,23 +291,13 @@ def allocate_amenities(
     print(f"Allocating amenities ({amen_percent}% of site area)...")
 
     # Open input layers
-    blocks_ds = ogr.Open(input_path, 0)
-    blocks_layer = blocks_ds.GetLayer()
-
-    # Open output dataset
     output_ds = ogr.Open(output_gpkg, 1)
-    if output_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
+    blocks_layer = output_ds.GetLayerByName(block_layer_name)
+    parcels_layer = output_ds.GetLayerByName(parcel_layer_name)
 
     open_spaces_layer = output_ds.GetLayerByName(open_spaces_layer_name)
     if open_spaces_layer is None:
         raise ValueError(f"Layer {open_spaces_layer_name} not found")
-
-    parcels_ds = ogr.Open(parcels_path, 0)
-    if parcels_ds is None:
-        raise ValueError(f"Could not open {parcels_path}")
-
-    parcels_layer = parcels_ds.GetLayer(0)
 
     # Get spatial reference systems
     blocks_srs = blocks_layer.GetSpatialRef()
@@ -402,8 +385,13 @@ def allocate_amenities(
         print(f"    Remaining blocks found for site {site_id} : {len(remaining_blocks)}")
 
         # Filter through parts: get off-grid blocks with their attached on-grid parts
-        off_grid_blocks = [b for b in remaining_blocks if b["type"] == ClusterTypes.OFF_GRID_WARM]
-        on_grid_block_types = ["loc", "loc_loc", "sec", "art"]
+        off_grid_blocks = [
+            b
+            for b in remaining_blocks
+            if b["type"]
+            in [ClusterTypes.OFF_GRID_WARM, ClusterTypes.OFF_GRID_COLD, ClusterTypes.CONCAVE_CORNER]
+        ]
+        on_grid_block_types = ["loc", "loc_loc", "sec", "art", "off_grid2"]
         on_grid_blocks = [b for b in remaining_blocks if b["type"] in on_grid_block_types]
 
         # Group blocks similar to open space allocation
@@ -422,6 +410,10 @@ def allocate_amenities(
             min_dist = float("inf")
             closest_group = None
             for group in off_grid_groups:
+                if group["root"]["block_id"] != on_block["block_id"]:
+                    continue
+                if not on_block["geometry"].Intersects(group["root"]["geometry"]):
+                    continue
                 dist = on_block["centroid"].Distance(group["root"]["centroid"])
                 if dist < min_dist:
                     min_dist = dist
@@ -446,10 +438,10 @@ def allocate_amenities(
             allocated_blocks.append(group["root"])
             current_area += group["root"]["area"]
             for attached in group["attached"]:
+                current_area += attached["area"]
                 if current_area >= required_amen_area:
                     break
                 allocated_blocks.append(attached)
-                current_area += attached["area"]
 
         print(
             f"    Allocated {len(allocated_blocks)} blocks as amenities (area={current_area:.2f})"
@@ -477,8 +469,6 @@ def allocate_amenities(
             out_feat = None
 
     # Clean up
-    blocks_ds = None
-    parcels_ds = None
     output_ds = None
 
     print(f"Amenities saved to layer: {output_layer_name}")
