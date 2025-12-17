@@ -5,6 +5,8 @@ from shapely.geometry import LineString, Point
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
+
 
 def find_convex_points(
     input_gpkg: str,
@@ -258,7 +260,8 @@ def create_clusters_from_convex_points(
                     {
                         "id": cluster_id,
                         "block_id": int(split_lines_data["block_id"]),
-                        "type": "loc_loc",
+                        "type": ClusterTypes.ON_GRID_LOC_LOC,
+                        "color": ColorTypes[ClusterTypes.ON_GRID_LOC_LOC],
                         "on_grid": 1,
                         "block_type": "cold",
                         "area": part_area,

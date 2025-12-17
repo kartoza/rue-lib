@@ -2,6 +2,8 @@ import geopandas as gpd
 import pandas as pd
 from shapely.ops import unary_union
 
+from rue_lib.core.definitions import ClusterTypes, ColorTypes
+
 
 def merge_and_classify_on_grid_clusters(
     input_gpkg: str,
@@ -96,13 +98,15 @@ def merge_and_classify_on_grid_clusters(
                     if part.is_empty or part.area <= 10.0:
                         continue
                     is_concave = _is_concave_point_in_geom(concave_points, part)
+                    _type = is_concave and ClusterTypes.ON_GRID_LOC_LOC or ClusterTypes.ON_GRID_LOC
 
                     result_polygons.append(part)
                     result_records.append(
                         {
                             "id": cluster_id,
                             "block_id": int(block_id),
-                            "type": is_concave and "loc_loc" or "loc",
+                            "type": _type,
+                            "color": ColorTypes[_type],
                             "area": float(part.area),
                             "block_type": "cold",
                             "on_grid": 1,
@@ -117,11 +121,13 @@ def merge_and_classify_on_grid_clusters(
         else:
             result_polygons.append(block_geom)
             is_concave = _is_concave_point_in_geom(concave_points, block_geom)
+            _type = is_concave and ClusterTypes.ON_GRID_LOC_LOC or ClusterTypes.ON_GRID_LOC
             result_records.append(
                 {
                     "id": cluster_id,
                     "block_id": int(block_id),
-                    "type": is_concave and "loc_loc" or "loc",
+                    "type": _type,
+                    "color": ColorTypes[_type],
                     "area": float(block_geom.area),
                     "block_type": "cold",
                     "on_grid": 1,
@@ -212,9 +218,12 @@ def merge_and_classify_off_grid_clusters(
             block_row_dict["id"] = cluster_id
             block_row_dict["block_id"] = int(block_id)
             block_row_dict["type"] = (
-                "concave_corner" if block_row_dict["is_concave"] else "off_grid1"
+                ClusterTypes.CONCAVE_CORNER
+                if block_row_dict["is_concave"]
+                else ClusterTypes.OFF_GRID_COLD
             )
             block_row_dict["on_grid"] = 0
+            block_row_dict["color"] = ColorTypes[block_row_dict["type"]]
             result_records.append(block_row_dict)
             cluster_id += 1
 
