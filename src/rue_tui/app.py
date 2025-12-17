@@ -171,10 +171,6 @@ class RueTuiApp(App):
         margin: 1 0;
     }
 
-    /* Rounded right edge for final button (viewer button) */
-    #btn-view {
-        border: round $primary;
-    }
 
     /* Results tab layout */
     .results-main {
