@@ -87,6 +87,7 @@ class RueTuiApp(App):
     /* Compact step cards */
     .step-container {
         padding: 0;
+        margin: 0;
         height: auto;
     }
 
@@ -102,7 +103,8 @@ class RueTuiApp(App):
     }
 
     .config-section {
-        margin-top: 0;
+        margin: 0;
+        padding: 0;
         text-style: bold;
         color: $primary;
     }
@@ -113,6 +115,8 @@ class RueTuiApp(App):
 
     .config-row {
         height: 2;
+        margin: 0;
+        padding: 0;
     }
 
     /* Compact progress display */
@@ -124,6 +128,7 @@ class RueTuiApp(App):
     /* Compact action buttons */
     .action-bar {
         padding: 0;
+        margin: 0;
         height: 3;
     }
 
@@ -194,36 +199,41 @@ class RueTuiApp(App):
         display: none;
     }
 
-    /* Setup panel styles */
-    .setup-title {
-        text-align: center;
+    /* Qt-style form layout */
+    .form-container {
+        padding: 0;
+        height: auto;
+    }
+
+    .section-header {
         text-style: bold;
         color: $primary;
-        margin: 1 0;
+        margin: 0 0 0 0;
+        height: 1;
     }
 
-    .setup-form {
-        padding: 1;
-    }
-
-    .file-row {
+    .form-row {
         height: 2;
-        margin: 0 0 1 0;
+        margin: 0;
+        padding: 0;
+        align: left middle;
     }
 
-    .file-label {
-        min-width: 16;
+    .form-label {
+        width: 16;
         text-style: bold;
         color: $accent;
+        text-align: right;
+        padding: 0 1 0 0;
     }
 
     /* Setup content area */
     .setup-content {
-        height: auto;
-        max-height: 20;
-        border: round $primary;
-        margin: 1 0;
-        padding: 1;
+        height: 12;
+        max-height: 12;
+        margin: 0;
+        padding: 0;
+        overflow-y: auto;
     }
 
     .setup-content.hidden {
@@ -472,10 +482,6 @@ class RueTuiApp(App):
             self.config.site_path = event.file_path
         elif event.file_type == "roads":
             self.config.roads_path = event.file_path
-
-        # Update the setup panel's file status display
-        if self.setup_panel:
-            self.setup_panel._update_file_status()
 
     def on_setup_panel_preview_requested(self, event: SetupPanel.PreviewRequested) -> None:
         """Handle preview request from setup panel."""

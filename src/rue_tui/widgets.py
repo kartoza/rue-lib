@@ -826,86 +826,54 @@ class SetupPanel(Container):
         self.config = config
 
     def compose(self) -> ComposeResult:
-        """Compose the setup panel."""
-        yield Label("🔧 Project Setup & Configuration", classes="setup-title")
+        """Compose the setup panel in Qt-style form layout."""
 
-        with Vertical(classes="setup-form"):
-            # File selection section
-            yield Label("📁 Input Files:", classes="config-section")
+        with Vertical(classes="form-container"):
+            # Inputs section
+            yield Label("Inputs", classes="section-header")
 
-            with Horizontal(classes="file-row"):
-                yield Label("Site Boundary:", classes="file-label")
+            # Site Boundary
+            with Horizontal(classes="form-row"):
+                yield Label("Site Boundary:", classes="form-label")
                 yield Input(
-                    placeholder="Select site GeoJSON file",
-                    value=self.config.site_path,
-                    id="site_path",
+                    value=self.config.site_path, id="site_path", placeholder="data/site.geojson"
                 )
-                yield Button("📂 Browse", id="browse-site", variant="default")
-                yield Button("👁️ Preview", id="preview-site", variant="default")
+                yield Button("Preview", id="preview-site", variant="default")
 
-            with Horizontal(classes="file-row"):
-                yield Label("Roads Network:", classes="file-label")
+            # Roads
+            with Horizontal(classes="form-row"):
+                yield Label("Roads:", classes="form-label")
                 yield Input(
-                    placeholder="Select roads GeoJSON file",
-                    value=self.config.roads_path,
-                    id="roads_path",
+                    value=self.config.roads_path, id="roads_path", placeholder="data/roads.geojson"
                 )
-                yield Button("📂 Browse", id="browse-roads", variant="default")
-                yield Button("👁️ Preview", id="preview-roads", variant="default")
+                yield Button("Preview", id="preview-roads", variant="default")
 
-            # Output settings
-            yield Label("📤 Output Settings:", classes="config-section")
-            yield Input(
-                placeholder="Output directory", value=self.config.output_dir, id="output_dir"
-            )
+            # Outputs section
+            yield Label("Outputs", classes="section-header")
 
-            # Processing parameters
-            yield Label("⚙️ Processing Parameters:", classes="config-section")
+            # Output folder
+            with Horizontal(classes="form-row"):
+                yield Label("Folder:", classes="form-label")
+                yield Input(value=self.config.output_dir, id="output_dir", placeholder="outputs")
+                yield Button("Browse", id="browse-output", variant="default")
 
-            with Horizontal(classes="config-row"):
-                yield Label("Arterial Road Width (m):")
-                yield Input(placeholder="Width", value="8.0", id="arterial_width")
-                yield Label("Secondary Road Width (m):")
-                yield Input(placeholder="Width", value="6.0", id="secondary_width")
+            # Options section
+            yield Label("Options", classes="section-header")
 
-            with Horizontal(classes="config-row"):
-                yield Label("Local Road Width (m):")
-                yield Input(placeholder="Width", value="4.0", id="local_width")
-                yield Label("Sidewalk Width (m):")
-                yield Input(placeholder="Width", value="1.5", id="sidewalk_width")
-
-            # Visualization settings
-            yield Label("🖼️ Visualization:", classes="config-section")
-            with Horizontal(classes="config-row"):
-                yield Label("Image Size:")
-                yield Input(
-                    placeholder="Width", value=str(self.config.image_width), id="image_width"
+            # Store intermediate results
+            with Horizontal(classes="form-row"):
+                yield Checkbox(
+                    "Store intermediate results",
+                    value=self.config.save_intermediate,
+                    id="save_intermediate",
                 )
-                yield Input(
-                    placeholder="Height", value=str(self.config.image_height), id="image_height"
-                )
-
-            # Options
-            yield Checkbox("Auto-advance steps", value=self.config.auto_advance, id="auto_advance")
-            yield Checkbox(
-                "Save intermediate results",
-                value=self.config.save_intermediate,
-                id="save_intermediate",
-            )
-
-            # File status indicators
-            yield Label("📋 File Status:", classes="config-section")
-            yield Static("", id="file-status")
+                yield Static("")  # Spacer
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """Handle button presses."""
         button_id = event.button.id
 
-        if button_id == "browse-site":
-            self._browse_file("site")
-        elif button_id == "browse-roads":
-            self._browse_file("roads")
-        elif button_id == "preview-site":
+        if button_id == "preview-site":
             site_path = self.query_one("#site_path", Input).value
             if site_path and Path(site_path).exists():
                 self.post_message(self.PreviewRequested(site_path))
@@ -913,74 +881,20 @@ class SetupPanel(Container):
             roads_path = self.query_one("#roads_path", Input).value
             if roads_path and Path(roads_path).exists():
                 self.post_message(self.PreviewRequested(roads_path))
-
-    def _browse_file(self, file_type: str):
-        """Open a simple file browser."""
-        try:
-            import tkinter as tk
-            from tkinter import filedialog
-
-            root = tk.Tk()
-            root.withdraw()  # Hide the main window
-
-            file_path = filedialog.askopenfilename(
-                title=f"Select {file_type} file",
-                filetypes=[("GeoJSON files", "*.geojson"), ("All files", "*.*")],
-            )
-
-            if file_path:
-                if file_type == "site":
-                    self.query_one("#site_path", Input).value = file_path
-                elif file_type == "roads":
-                    self.query_one("#roads_path", Input).value = file_path
-
-                self.post_message(self.FileSelected(file_type, file_path))
-
-            root.destroy()
-
-        except ImportError:
-            # Fallback if tkinter is not available
-            pass
+        elif button_id == "browse-output":
+            # Browse output directory
+            output_path = self.query_one("#output_dir", Input).value
+            self.log_viewer.add_log(f"📁 Output directory: {output_path}", "info") if hasattr(
+                self, "log_viewer"
+            ) else None
 
     def on_input_changed(self, event: Input.Changed) -> None:
-        """Handle input changes and update file status."""
-        self._update_file_status()
+        """Handle input changes."""
+        pass
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Handle checkbox changes."""
         pass
-
-    def _update_file_status(self):
-        """Update the file status display."""
-        site_path = self.query_one("#site_path", Input).value
-        roads_path = self.query_one("#roads_path", Input).value
-
-        status_parts = []
-
-        # Check site file
-        if site_path and Path(site_path).exists():
-            status_parts.append(Text("✅ Site file loaded", style="green"))
-        elif site_path:
-            status_parts.append(Text("❌ Site file not found", style="red"))
-        else:
-            status_parts.append(Text("⏳ Site file not selected", style="yellow"))
-
-        status_parts.append(Text("  ", style="white"))  # Spacing
-
-        # Check roads file
-        if roads_path and Path(roads_path).exists():
-            status_parts.append(Text("✅ Roads file loaded", style="green"))
-        elif roads_path:
-            status_parts.append(Text("❌ Roads file not found", style="red"))
-        else:
-            status_parts.append(Text("⏳ Roads file not selected", style="yellow"))
-
-        # Combine status parts
-        status_text = Text()
-        for part in status_parts:
-            status_text.append_text(part)
-
-        self.query_one("#file-status", Static).update(status_text)
 
 
 class GeojsonPreviewWidget(Static):
