@@ -7,9 +7,9 @@ from ..core.geometry import get_utm_zone_from_layer, reproject_layer
 from ..streets.operations import export_layer_to_geojson
 from .config import PublicConfig
 from .financial import FinancialPublic
+from .open_space import allocate_open_spaces
 from .operations import (
     allocate_amenities,
-    allocate_open_spaces,
     merge,
 )
 
