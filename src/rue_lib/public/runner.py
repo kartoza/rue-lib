@@ -10,6 +10,7 @@ from .financial import FinancialPublic
 from .open_space import allocate_open_spaces
 from .operations import (
     allocate_amenities,
+    allocate_cluster_index,
     merge,
 )
 
@@ -82,6 +83,10 @@ def generate_public(cfg: PublicConfig) -> Path:
 
     input_ds = None
     output_ds = None
+
+    print("\nStep 1: Allocating cluster index for all clusters...")
+    allocate_cluster_index(output_path, input_blocks_layer_name)
+    allocate_cluster_index(output_path, final_layer_name)
 
     print("\nStep 2: Allocating open spaces...")
 

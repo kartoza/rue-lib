@@ -223,8 +223,9 @@ def allocate_open_spaces(
     gdf_blocks = gpd.read_file(output_gpkg, layer=block_layer_name)
     gdf_parcels = gpd.read_file(output_gpkg, layer=parcel_layer_name)
 
-    # Add index column to track original feature IDs
-    gdf_blocks["cluster_index"] = gdf_blocks.index
+    # Ensure we have an id column to track original feature IDs
+    if "cluster_index" not in gdf_blocks.columns:
+        gdf_blocks["cluster_index"] = range(len(gdf_blocks))
 
     all_allocated_blocks = []
     site_centroids = []
