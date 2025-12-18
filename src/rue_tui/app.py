@@ -32,6 +32,7 @@ from rue_lib.streets.runner import StreetConfig, generate_streets
 from .config import TuiConfig
 from .visualizer import MapVisualizer
 from .widgets import (
+    FileBrowserWidget,
     GeojsonPreviewWidget,
     LayerBrowser,
     LayerDetailPanel,
@@ -61,6 +62,38 @@ class ImageViewerScreen(ModalScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "close-viewer":
             self.dismiss()
+
+    def on_key(self, event: events.Key) -> None:
+        if event.key in ("q", "escape"):
+            self.dismiss()
+
+
+class FileBrowserScreen(ModalScreen):
+    """Modal screen for browsing and selecting directories/files."""
+
+    def __init__(self, title: str = "Browse Files", initial_path: str = "."):
+        super().__init__()
+        self.title = title
+        self.initial_path = initial_path
+
+    def compose(self) -> ComposeResult:
+        with Container(id="file-browser-modal"):
+            yield Label(self.title, classes="viewer-title")
+            self.file_browser = FileBrowserWidget(initial_path=self.initial_path)
+            yield self.file_browser
+            with Horizontal(classes="action-bar"):
+                yield Button("Cancel", variant="default", id="cancel-browser")
+                yield Button("Close", variant="primary", id="close-browser")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id in ("close-browser", "cancel-browser"):
+            self.dismiss()
+
+    def on_file_browser_widget_directory_selected(
+        self, event: FileBrowserWidget.DirectorySelected
+    ) -> None:
+        """Handle directory selection."""
+        self.dismiss(event.directory_path)
 
     def on_key(self, event: events.Key) -> None:
         if event.key in ("q", "escape"):
@@ -173,6 +206,16 @@ class RueTuiApp(App):
         border: round $primary;
         width: 90%;
         height: 80%;
+        margin: 1;
+        padding: 1;
+    }
+
+    /* File browser modal */
+    #file-browser-modal {
+        background: $surface;
+        border: round $primary;
+        width: 95%;
+        height: 90%;
         margin: 1;
         padding: 1;
     }
@@ -528,6 +571,46 @@ class RueTuiApp(App):
             self.preview_widget.show_preview(event.file_path)
             # The preview will show in the setup content area
             self.log_viewer.add_log("Preview generated in setup area", "info")
+
+    def on_setup_panel_browse_requested(self, event: SetupPanel.BrowseRequested) -> None:
+        """Handle browse request from setup panel."""
+        self.log_viewer.add_log(f"📁 Opening file browser for: {event.browse_type}", "info")
+
+        # Get current output directory
+        current_output = self.config.output_dir
+
+        def handle_directory_selection(selected_path: str | None = None):
+            if selected_path:
+                # Update the config and UI
+                self.config.output_dir = selected_path
+                self.config.update_output_paths()  # Recalculate paths
+
+                # Update the input field
+                if self.setup_panel:
+                    output_input = self.setup_panel.query_one("#output_dir", Input)
+                    output_input.value = selected_path
+
+                self.log_viewer.add_log(
+                    f"📁 Output directory updated to: {selected_path}", "success"
+                )
+                self.log_viewer.add_log(
+                    f"📁 Updated paths - Step1: {self.config.step1_output}", "info"
+                )
+                self.log_viewer.add_log(
+                    f"📁 Updated paths - Step2: {self.config.step2_output}", "info"
+                )
+                self.log_viewer.add_log(
+                    f"📁 Updated paths - Step3: {self.config.step3_output}", "info"
+                )
+                self.log_viewer.add_log(
+                    f"📁 Updated paths - GeoPackage: {self.config.geopackage_path}", "info"
+                )
+
+        # Show file browser modal
+        self.push_screen(
+            FileBrowserScreen(title="Select Output Directory", initial_path=current_output),
+            handle_directory_selection,
+        )
 
     async def run_step(self, step: int):
         """Run a specific step of the analysis."""
