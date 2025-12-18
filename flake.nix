@@ -1,30 +1,23 @@
 {
-  description = "rue-lib: Python library for the Rapid Urbanisation Explorer project";
+  description =
+    "rue-lib: Python library for the Rapid Urbanisation Explorer project";
 
   inputs = {
     nixpkgs.url = "github:NixOS/nixpkgs/nixos-unstable";
     flake-utils.url = "github:numtide/flake-utils";
   };
 
-  outputs =
-    {
-      self,
-      nixpkgs,
-      flake-utils,
-    }:
-    flake-utils.lib.eachDefaultSystem (
-      system:
+  outputs = { self, nixpkgs, flake-utils, }:
+    flake-utils.lib.eachDefaultSystem (system:
       let
         pkgs = import nixpkgs {
           inherit system;
-          config = {
-            allowUnfree = true;
-          };
+          config = { allowUnfree = true; };
         };
 
         # Python environment with all dependencies
-        pythonEnv = pkgs.python313.withPackages (
-          ps: with ps; [
+        pythonEnv = pkgs.python313.withPackages (ps:
+          with ps; [
             # Core dependencies
             gdal
             geopandas
@@ -46,19 +39,18 @@
             wheel
             build
             twine
-          ]
-        );
+          ]);
 
-      in
-      {
+      in {
         # Development shell
         devShells.default = pkgs.mkShell {
           buildInputs = [
             pythonEnv
             # Image viewers for TUI
-            pkgs.fim  # Frame buffer image viewer
-            pkgs.feh  # X11 image viewer (fallback)
+            pkgs.fim # Frame buffer image viewer
+            pkgs.feh # X11 image viewer (fallback)
 
+            pkgs.dbeaver-bin # Database viewer
             pkgs.chafa
             # Additional tools
             pkgs.gdal
@@ -146,10 +138,7 @@
             shapely
           ];
 
-          nativeBuildInputs = with pkgs.python313Packages; [
-            setuptools
-            wheel
-          ];
+          nativeBuildInputs = with pkgs.python313Packages; [ setuptools wheel ];
 
           nativeCheckInputs = with pkgs.python313Packages; [
             pytest
@@ -165,111 +154,102 @@
         apps = {
           test = {
             type = "app";
-            program = toString (
-              pkgs.writeShellScript "run-tests" ''
-                export PYTHONPATH="${self}/src:$PYTHONPATH"
-                export GDAL_DATA="${pkgs.gdal}/share/gdal"
-                export PROJ_LIB="${pkgs.proj}/share/proj"
-                cd ${self}
-                ${pythonEnv}/bin/pytest tests/ -v
-              ''
-            );
+            program = toString (pkgs.writeShellScript "run-tests" ''
+              export PYTHONPATH="${self}/src:$PYTHONPATH"
+              export GDAL_DATA="${pkgs.gdal}/share/gdal"
+              export PROJ_LIB="${pkgs.proj}/share/proj"
+              cd ${self}
+              ${pythonEnv}/bin/pytest tests/ -v
+            '');
           };
 
           test-cov = {
             type = "app";
-            program = toString (
-              pkgs.writeShellScript "run-tests-coverage" ''
-                export PYTHONPATH="${self}/src:$PYTHONPATH"
-                export GDAL_DATA="${pkgs.gdal}/share/gdal"
-                export PROJ_LIB="${pkgs.proj}/share/proj"
-                cd ${self}
-                ${pythonEnv}/bin/pytest tests/ --cov=rue_lib --cov-report=html --cov-report=term
-              ''
-            );
+            program = toString (pkgs.writeShellScript "run-tests-coverage" ''
+              export PYTHONPATH="${self}/src:$PYTHONPATH"
+              export GDAL_DATA="${pkgs.gdal}/share/gdal"
+              export PROJ_LIB="${pkgs.proj}/share/proj"
+              cd ${self}
+              ${pythonEnv}/bin/pytest tests/ --cov=rue_lib --cov-report=html --cov-report=term
+            '');
           };
 
           rue-tui = {
             type = "app";
-            program = toString (
-              pkgs.writeShellScript "rue-tui" ''
-                export PYTHONPATH="${self}/src:${self}:$PYTHONPATH"
-                export GDAL_DATA="${pkgs.gdal}/share/gdal"
-                export PROJ_LIB="${pkgs.proj}/share/proj"
-                cd ${self}
+            program = toString (pkgs.writeShellScript "rue-tui" ''
+              export PYTHONPATH="${self}/src:${self}:$PYTHONPATH"
+              export GDAL_DATA="${pkgs.gdal}/share/gdal"
+              export PROJ_LIB="${pkgs.proj}/share/proj"
+              cd ${self}
 
-                echo "🏙️ Launching RUE TUI..."
-                echo "======================="
+              echo "🏙️ Launching RUE TUI..."
+              echo "======================="
 
-                # Create demo data if needed
-                if [ ! -f "data/site.geojson" ] || [ ! -f "data/roads.geojson" ]; then
-                  echo "📁 Creating demo data..."
-                  mkdir -p data
-                  ${pythonEnv}/bin/python rue_tui/demo_data.py
-                fi
+              # Create demo data if needed
+              if [ ! -f "data/site.geojson" ] || [ ! -f "data/roads.geojson" ]; then
+                echo "📁 Creating demo data..."
+                mkdir -p data
+                ${pythonEnv}/bin/python rue_tui/demo_data.py
+              fi
 
-                # Launch the TUI
-                ${pythonEnv}/bin/python -m rue_tui
-              ''
-            );
+              # Launch the TUI
+              ${pythonEnv}/bin/python -m rue_tui
+            '');
           };
 
           run-examples = {
             type = "app";
-            program = toString (
-              pkgs.writeShellScript "run-examples" ''
-                export PYTHONPATH="${self}/src:$PYTHONPATH"
-                export GDAL_DATA="${pkgs.gdal}/share/gdal"
-                export PROJ_LIB="${pkgs.proj}/share/proj"
-                cd ${self}
+            program = toString (pkgs.writeShellScript "run-examples" ''
+              export PYTHONPATH="${self}/src:$PYTHONPATH"
+              export GDAL_DATA="${pkgs.gdal}/share/gdal"
+              export PROJ_LIB="${pkgs.proj}/share/proj"
+              cd ${self}
 
-                # Create unique writable output directory
-                OUTPUT_DIR="/tmp/rue-examples-$(date +%Y%m%d-%H%M%S)"
-                mkdir -p "$OUTPUT_DIR"
+              # Create unique writable output directory
+              OUTPUT_DIR="/tmp/rue-examples-$(date +%Y%m%d-%H%M%S)"
+              mkdir -p "$OUTPUT_DIR"
 
-                echo "🌈 Running RUE-lib examples in sequence..."
-                echo "========================================="
-                echo "Output directory: $OUTPUT_DIR"
-                echo ""
+              echo "🌈 Running RUE-lib examples in sequence..."
+              echo "========================================="
+              echo "Output directory: $OUTPUT_DIR"
+              echo ""
 
-                # Step 1: Generate Parcels
-                echo "🏗️  Running Step 1: Generate Parcels"
-                echo "-----------------------------------"
-                ${pythonEnv}/bin/python examples/step1_generate_parcels.py --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+              # Step 1: Generate Parcels
+              echo "🏗️  Running Step 1: Generate Parcels"
+              echo "-----------------------------------"
+              ${pythonEnv}/bin/python examples/step1_generate_parcels.py --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
 
-                # Step 2: Generate Streets
-                echo ""
-                echo "🛣️  Running Step 2: Generate Streets"
-                echo "----------------------------------"
-                ${pythonEnv}/bin/python examples/step2_generate_streets.py --parcels "$OUTPUT_DIR/parcels.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+              # Step 2: Generate Streets
+              echo ""
+              echo "🛣️  Running Step 2: Generate Streets"
+              echo "----------------------------------"
+              ${pythonEnv}/bin/python examples/step2_generate_streets.py --parcels "$OUTPUT_DIR/parcels.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
 
-                # Step 3: Generate Clusters
-                echo ""
-                echo "🏘️  Running Step 3: Generate Clusters"
-                echo "------------------------------------"
-                ${pythonEnv}/bin/python examples/step3_generate_cluster.py --input "$OUTPUT_DIR/all_grids_merged.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
+              # Step 3: Generate Clusters
+              echo ""
+              echo "🏘️  Running Step 3: Generate Clusters"
+              echo "------------------------------------"
+              ${pythonEnv}/bin/python examples/step3_generate_cluster.py --input "$OUTPUT_DIR/all_grids_merged.geojson" --output-dir "$OUTPUT_DIR" --geopackage "$OUTPUT_DIR/output.gpkg"
 
-                # Open output geopackage in QGIS
-                echo ""
-                echo "🗺️  Opening output geopackage in QGIS LTR..."
-                echo "-------------------------------------------"
-                if [ -f "$OUTPUT_DIR/output.gpkg" ]; then
-                  nix run github:qgis/QGIS#qgis-ltr -- --profile RUE "$OUTPUT_DIR/output.gpkg" &
-                  echo "✅ QGIS LTR opened with output.gpkg"
-                else
-                  echo "❌ Output geopackage not found at $OUTPUT_DIR/output.gpkg"
-                  echo "Looking for alternative outputs..."
-                  find "$OUTPUT_DIR" -name "*.gpkg" -type f | head -5
-                fi
+              # Open output geopackage in QGIS
+              echo ""
+              echo "🗺️  Opening output geopackage in QGIS LTR..."
+              echo "-------------------------------------------"
+              if [ -f "$OUTPUT_DIR/output.gpkg" ]; then
+                nix run github:qgis/QGIS#qgis-ltr -- --profile RUE "$OUTPUT_DIR/output.gpkg" &
+                echo "✅ QGIS LTR opened with output.gpkg"
+              else
+                echo "❌ Output geopackage not found at $OUTPUT_DIR/output.gpkg"
+                echo "Looking for alternative outputs..."
+                find "$OUTPUT_DIR" -name "*.gpkg" -type f | head -5
+              fi
 
-                echo ""
-                echo "🎉 All examples completed!"
-                echo "========================="
-                echo "📁 Outputs saved to: $OUTPUT_DIR"
-              ''
-            );
+              echo ""
+              echo "🎉 All examples completed!"
+              echo "========================="
+              echo "📁 Outputs saved to: $OUTPUT_DIR"
+            '');
           };
         };
-      }
-    );
+      });
 }

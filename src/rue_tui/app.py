@@ -10,7 +10,16 @@ from textual.app import App, ComposeResult
 from textual.containers import Container, Horizontal, Vertical
 from textual.reactive import reactive
 from textual.screen import ModalScreen
-from textual.widgets import Button, Footer, Header, Input, Label, Static, TabbedContent, TabPane
+from textual.widgets import (
+    Button,
+    Footer,
+    Header,
+    Input,
+    Label,
+    Static,
+    TabbedContent,
+    TabPane,
+)
 
 from rue_lib.cluster.runner import ClusterConfig, generate_clusters
 
@@ -62,7 +71,19 @@ class RueTuiApp(App):
     """Main RUE TUI application."""
 
     CSS = """
-    /* Compact layout optimized for small screens */
+    /* Full-screen responsive layout */
+    Screen {
+        height: 100vh;
+    }
+
+    TabbedContent {
+        height: 1fr;
+    }
+
+    TabPane {
+        height: 1fr;
+    }
+
     .title {
         text-align: center;
         padding: 0 1;
@@ -84,11 +105,12 @@ class RueTuiApp(App):
         height: 4;
     }
 
-    /* Compact step cards */
+    /* Responsive step container */
     .step-container {
         padding: 0;
         margin: 0;
-        height: auto;
+        height: 1fr;
+        overflow-y: auto;
     }
 
     .step-card {
@@ -138,10 +160,11 @@ class RueTuiApp(App):
         height: 1fr;
     }
 
-    /* Compact layer browser */
+    /* Responsive layer browser */
     .layer-container {
         padding: 0;
-        height: 6;
+        height: 1fr;
+        overflow-y: auto;
     }
 
     /* Compact image viewer modal */
@@ -172,7 +195,7 @@ class RueTuiApp(App):
     }
 
 
-    /* Results tab layout */
+    /* Results tab responsive layout */
     .results-main {
         height: 1fr;
         padding: 0;
@@ -182,13 +205,17 @@ class RueTuiApp(App):
         width: 1fr;
         min-width: 30;
         max-width: 40%;
+        height: 1fr;
         border-right: solid $primary;
         padding: 0 1 0 0;
+        overflow-y: auto;
     }
 
     .detail-container {
         width: 2fr;
+        height: 1fr;
         padding: 0 0 0 1;
+        overflow-y: auto;
     }
 
     .hidden {
@@ -223,10 +250,9 @@ class RueTuiApp(App):
         padding: 0 1 0 0;
     }
 
-    /* Setup content area */
+    /* Setup content area - responsive */
     .setup-content {
-        height: 12;
-        max-height: 12;
+        height: 1fr;
         margin: 0;
         padding: 0;
         overflow-y: auto;
@@ -247,7 +273,9 @@ class RueTuiApp(App):
         super().__init__()
         self.config = TuiConfig()
         self.visualizer = MapVisualizer(
-            width=self.config.image_width, height=self.config.image_height, dpi=self.config.dpi
+            width=self.config.image_width,
+            height=self.config.image_height,
+            dpi=self.config.dpi,
         )
 
         # State tracking
@@ -271,52 +299,65 @@ class RueTuiApp(App):
         with TabbedContent(initial="workflow"):
             # Main workflow tab
             with TabPane("Workflow", id="workflow"):
-                # Compact welcome banner
-                yield self._create_welcome_banner()
+                with Vertical():
+                    # Compact welcome banner
+                    yield self._create_welcome_banner()
 
-                # Compact step cards
-                with Vertical(classes="step-container"):
-                    self.step_cards[0] = StepCard(
-                        0, "Setup Project", "Configure inputs and settings", status="pending"
-                    )
-                    yield self.step_cards[0]
+                    # Step cards and content area
+                    with Vertical(classes="step-container"):
+                        self.step_cards[0] = StepCard(
+                            0,
+                            "Setup Project",
+                            "Configure inputs and settings",
+                            status="pending",
+                        )
+                        yield self.step_cards[0]
 
-                    self.step_cards[1] = StepCard(
-                        1, "Generate Parcels", "Create ownership parcels", status="pending"
-                    )
-                    yield self.step_cards[1]
+                        self.step_cards[1] = StepCard(
+                            1,
+                            "Generate Parcels",
+                            "Create ownership parcels",
+                            status="pending",
+                        )
+                        yield self.step_cards[1]
 
-                    self.step_cards[2] = StepCard(
-                        2, "Generate Streets", "Create street networks", status="pending"
-                    )
-                    yield self.step_cards[2]
+                        self.step_cards[2] = StepCard(
+                            2,
+                            "Generate Streets",
+                            "Create street networks",
+                            status="pending",
+                        )
+                        yield self.step_cards[2]
 
-                    self.step_cards[3] = StepCard(
-                        3, "Generate Clusters", "Design urban clusters", status="pending"
-                    )
-                    yield self.step_cards[3]
+                        self.step_cards[3] = StepCard(
+                            3,
+                            "Generate Clusters",
+                            "Design urban clusters",
+                            status="pending",
+                        )
+                        yield self.step_cards[3]
 
-                # Step 0 setup content area
-                with Container(id="setup-content", classes="setup-content"):
-                    self.setup_panel = SetupPanel(self.config)
-                    yield self.setup_panel
+                        # Step 0 setup content area
+                        with Container(id="setup-content", classes="setup-content"):
+                            self.setup_panel = SetupPanel(self.config)
+                            yield self.setup_panel
 
-                    # Preview widget for GeoJSON files
-                    self.preview_widget = GeojsonPreviewWidget()
-                    yield self.preview_widget
+                            # Preview widget for GeoJSON files
+                            self.preview_widget = GeojsonPreviewWidget()
+                            yield self.preview_widget
 
-                # Compact progress display
-                with Container(classes="progress-container"):
-                    self.progress_display = ProgressDisplay()
-                    yield self.progress_display
+                        # Progress display
+                        with Container(classes="progress-container"):
+                            self.progress_display = ProgressDisplay()
+                            yield self.progress_display
 
-                # Compact action buttons
-                with Horizontal(classes="action-bar"):
-                    yield Button("▶️ Step 0", variant="primary", id="btn-step0")
-                    yield Button("▶️ Step 1", variant="default", disabled=True, id="btn-step1")
-                    yield Button("▶️ Step 2", variant="default", disabled=True, id="btn-step2")
-                    yield Button("▶️ Step 3", variant="default", disabled=True, id="btn-step3")
-                    yield Button("👁️ View", variant="default", disabled=True, id="btn-view")
+                    # Action buttons
+                    with Horizontal(classes="action-bar"):
+                        yield Button("▶️ Step 0", variant="primary", id="btn-step0")
+                        yield Button("▶️ Step 1", variant="default", disabled=True, id="btn-step1")
+                        yield Button("▶️ Step 2", variant="default", disabled=True, id="btn-step2")
+                        yield Button("▶️ Step 3", variant="default", disabled=True, id="btn-step3")
+                        yield Button("👁️ View", variant="default", disabled=True, id="btn-view")
 
             # Results tab with split layout
             with TabPane("Results", id="results"):
@@ -635,7 +676,9 @@ class RueTuiApp(App):
                 roads = read_roads(config.roads_path)
 
                 self.call_from_thread(
-                    self.log_viewer.add_log, "🔧 Converting to metric CRS if needed", "info"
+                    self.log_viewer.add_log,
+                    "🔧 Converting to metric CRS if needed",
+                    "info",
                 )
                 if site.crs and site.crs.is_projected:
                     site_m = site
@@ -662,13 +705,17 @@ class RueTuiApp(App):
                 result = generate_parcels(config)
 
                 self.call_from_thread(
-                    self.log_viewer.add_log, f"✅ Generated parcels saved to: {result}", "success"
+                    self.log_viewer.add_log,
+                    f"✅ Generated parcels saved to: {result}",
+                    "success",
                 )
                 return result
 
             except Exception as e:
                 self.call_from_thread(
-                    self.log_viewer.add_log, f"❌ Error in parcel generation: {str(e)}", "error"
+                    self.log_viewer.add_log,
+                    f"❌ Error in parcel generation: {str(e)}",
+                    "error",
                 )
                 raise
 
@@ -747,7 +794,8 @@ class RueTuiApp(App):
     def view_current_results(self):
         """View results of the latest completed step."""
         latest_step = max(
-            [step for step, status in self.step_status.items() if status == "completed"], default=0
+            [step for step, status in self.step_status.items() if status == "completed"],
+            default=0,
         )
         if latest_step > 0:
             self.view_step_results(latest_step)

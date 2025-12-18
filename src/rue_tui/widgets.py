@@ -16,6 +16,7 @@ from textual.message import Message
 from textual.widgets import (
     Button,
     Checkbox,
+    DirectoryTree,
     Input,
     Label,
     Static,
@@ -309,66 +310,6 @@ class LayerBrowser(Static):
             summary, title="Layers", border_style="dim white", box=box.ROUNDED, padding=(0, 1)
         )
         self.update(panel)
-
-
-class ConfigPanel(Container):
-    """Panel for configuration options."""
-
-    class ConfigChanged(Message):
-        """Message sent when configuration changes."""
-
-        def __init__(self, key: str, value: str) -> None:
-            super().__init__()
-            self.key = key
-            self.value = value
-
-    def __init__(self, config, **kwargs):
-        super().__init__(**kwargs)
-        self.config = config
-
-    def compose(self) -> ComposeResult:
-        """Compose the config panel."""
-        yield Label("Configuration", classes="config-title")
-
-        with Vertical(classes="config-form"):
-            # File paths
-            yield Label("Input Files:", classes="config-section")
-            yield Input(
-                placeholder="Site GeoJSON path", value=self.config.site_path, id="site_path"
-            )
-            yield Input(
-                placeholder="Roads GeoJSON path", value=self.config.roads_path, id="roads_path"
-            )
-
-            # Output settings
-            yield Label("Output Settings:", classes="config-section")
-            yield Input(
-                placeholder="Output directory", value=self.config.output_dir, id="output_dir"
-            )
-
-            # Visualization settings
-            yield Label("Visualization:", classes="config-section")
-            yield Horizontal(
-                Input(placeholder="Width", value=str(self.config.image_width), id="image_width"),
-                Input(placeholder="Height", value=str(self.config.image_height), id="image_height"),
-                classes="config-row",
-            )
-
-            # Options
-            yield Checkbox("Auto-advance steps", value=self.config.auto_advance, id="auto_advance")
-            yield Checkbox(
-                "Save intermediate results",
-                value=self.config.save_intermediate,
-                id="save_intermediate",
-            )
-
-    def on_input_changed(self, event: Input.Changed) -> None:
-        """Handle input changes."""
-        self.post_message(self.ConfigChanged(event.input.id, event.value))
-
-    def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
-        """Handle checkbox changes."""
-        self.post_message(self.ConfigChanged(event.checkbox.id, str(event.value)))
 
 
 class LogViewer(Static):
@@ -821,6 +762,13 @@ class SetupPanel(Container):
             super().__init__()
             self.file_path = file_path
 
+    class BrowseRequested(Message):
+        """Message sent when browse button is pressed."""
+
+        def __init__(self, browse_type: str) -> None:
+            super().__init__()
+            self.browse_type = browse_type
+
     def __init__(self, config, **kwargs):
         super().__init__(**kwargs)
         self.config = config
@@ -882,19 +830,120 @@ class SetupPanel(Container):
             if roads_path and Path(roads_path).exists():
                 self.post_message(self.PreviewRequested(roads_path))
         elif button_id == "browse-output":
-            # Browse output directory
-            output_path = self.query_one("#output_dir", Input).value
-            self.log_viewer.add_log(f"📁 Output directory: {output_path}", "info") if hasattr(
-                self, "log_viewer"
-            ) else None
+            # Request file browser for output directory
+            self.post_message(self.BrowseRequested("output"))
 
     def on_input_changed(self, event: Input.Changed) -> None:
         """Handle input changes."""
-        pass
+        if event.input.id == "output_dir":
+            # Update config when output directory is manually changed
+            new_output_dir = event.value.strip()
+            if new_output_dir and new_output_dir != self.config.output_dir:
+                self.config.output_dir = new_output_dir
+                self.config.update_output_paths()
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Handle checkbox changes."""
         pass
+
+
+class FileBrowserWidget(Container):
+    """File browser widget for selecting directories and files."""
+
+    class DirectorySelected(Message):
+        """Message sent when a directory is selected."""
+
+        def __init__(self, directory_path: str) -> None:
+            super().__init__()
+            self.directory_path = directory_path
+
+    class FileSelected(Message):
+        """Message sent when a file is selected."""
+
+        def __init__(self, file_path: str) -> None:
+            super().__init__()
+            self.file_path = file_path
+
+    def __init__(self, initial_path: str = ".", **kwargs):
+        super().__init__(**kwargs)
+        self.current_path = Path(initial_path).resolve()
+
+    def compose(self) -> ComposeResult:
+        """Compose the file browser interface."""
+        with Vertical():
+            # Current path display and navigation
+            with Horizontal(classes="form-row"):
+                yield Label("Current Path:", classes="form-label")
+                yield Input(value=str(self.current_path), id="current-path", readonly=True)
+                yield Button("↑", id="up-dir", variant="default")
+                yield Button("🏠", id="home-dir", variant="default")
+
+            # Directory tree browser
+            yield DirectoryTree(str(self.current_path), id="directory-tree")
+
+            # Action buttons
+            with Horizontal(classes="form-row"):
+                yield Button("Select Directory", id="select-dir", variant="primary")
+                yield Button("Create New Dir", id="create-dir", variant="default")
+                yield Input(placeholder="New directory name", id="new-dir-name")
+
+    def on_mount(self) -> None:
+        """Initialize the file browser."""
+        self._update_current_path_display()
+
+    def on_directory_tree_directory_selected(self, event: DirectoryTree.DirectorySelected) -> None:
+        """Handle directory selection in the tree."""
+        self.current_path = Path(event.path)
+        self._update_current_path_display()
+
+    def on_directory_tree_file_selected(self, event: DirectoryTree.FileSelected) -> None:
+        """Handle file selection in the tree."""
+        self.post_message(self.FileSelected(event.path))
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        """Handle button presses."""
+        button_id = event.button.id
+
+        if button_id == "up-dir":
+            if self.current_path.parent != self.current_path:  # Not at root
+                self.current_path = self.current_path.parent
+                self._update_directory_tree()
+                self._update_current_path_display()
+
+        elif button_id == "home-dir":
+            self.current_path = Path.home()
+            self._update_directory_tree()
+            self._update_current_path_display()
+
+        elif button_id == "select-dir":
+            self.post_message(self.DirectorySelected(str(self.current_path)))
+
+        elif button_id == "create-dir":
+            new_dir_input = self.query_one("#new-dir-name", Input)
+            new_dir_name = new_dir_input.value.strip()
+            if new_dir_name:
+                try:
+                    new_dir_path = self.current_path / new_dir_name
+                    new_dir_path.mkdir(exist_ok=True)
+                    new_dir_input.value = ""
+                    self._update_directory_tree()
+                except Exception:
+                    # Could show an error message here
+                    pass
+
+    def _update_current_path_display(self) -> None:
+        """Update the current path display."""
+        path_input = self.query_one("#current-path", Input)
+        path_input.value = str(self.current_path)
+
+    def _update_directory_tree(self) -> None:
+        """Update the directory tree with the current path."""
+        try:
+            directory_tree = self.query_one("#directory-tree", DirectoryTree)
+            directory_tree.path = str(self.current_path)
+        except Exception:
+            # Tree might not be mounted yet
+            pass
 
 
 class GeojsonPreviewWidget(Static):

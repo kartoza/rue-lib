@@ -39,6 +39,10 @@ class TuiConfig:
 
     def __post_init__(self):
         """Initialize computed file paths."""
+        self.update_output_paths()
+
+    def update_output_paths(self):
+        """Update all output paths based on current output_dir."""
         output_path = Path(self.output_dir)
         self.step1_output = str(output_path / "step1_parcels")
         self.step2_output = str(output_path / "step2_streets")
