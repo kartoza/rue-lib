@@ -71,7 +71,7 @@ def generate_cold(
     print("==============================================================")
     print("COLD BLOCK")
     print("==============================================================")
-    print("Step 1: Extract cold grid blocks...")
+    print("Step 1: Generate inner part of off grid blocks...")
     cold_grid_layer_name = "200_cold_grid"
     extract_by_expression(
         output_path,
@@ -83,11 +83,11 @@ def generate_cold(
     # Convert from PolygonZ to Polygon
     convert_polygonz_to_polygon(output_path, cold_grid_layer_name)
 
+    print("\nStep 2: Erase roads buffer from cold grid...")
     erased_layer_name = cold_grid_layer_name
 
-    print("\nStep 2: Extract boundary lines adjacent to roads...")
+    print("\nStep 3: Extract boundary lines adjacent to roads...")
     boundary_points_layer_name = "202_cold_boundary_points"
-    boundary_lines_layer_name = "202_cold_boundary_lines"
     boundary_points_layer_name, boundary_lines_layer_name = extract_road_adjacent_vertices(
         output_path,
         erased_layer_name,
@@ -96,18 +96,15 @@ def generate_cold(
         boundary_points_layer_name,
     )
 
-    print("\nStep 3: Subtract local road buffer from cold grid...")
-    cold_grid_updated_layer_name = "203_cold_grid_updated"
     subtract_layer(
         output_gpkg,
-        cold_grid_layer_name,
-        boundary_lines_layer_name,
+        "200_cold_grid",
+        "202_cold_boundary_lines",
         output_gpkg,
-        cold_grid_updated_layer_name,
+        "200_cold_grid_updated",
         cfg.on_grid_partition_depth_local_roads,
     )
 
-    print("\nStep 4: Extract and subtract secondary road buffer...")
     extract_by_expression(
         output_path,
         "002_input_roads_buffer",
@@ -118,14 +115,13 @@ def generate_cold(
 
     subtract_layer(
         output_gpkg,
-        cold_grid_updated_layer_name,
+        "200_cold_grid_updated",
         "002_input_roads_buffer_sec",
         output_gpkg,
-        cold_grid_updated_layer_name,
+        "200_cold_grid_updated",
         cfg.on_grid_partition_depth_secondary_roads,
     )
 
-    print("\nStep 5: Extract and subtract arterial road buffer...")
     extract_by_expression(
         output_path,
         "002_input_roads_buffer",
@@ -136,15 +132,14 @@ def generate_cold(
 
     subtract_layer(
         output_gpkg,
-        cold_grid_updated_layer_name,
+        "200_cold_grid_updated",
         "002_input_roads_buffer_art",
         output_gpkg,
-        cold_grid_updated_layer_name,
+        "200_cold_grid_updated",
         cfg.on_grid_partition_depth_arterial_roads,
     )
 
-    print("\nStep 6: Merge boundary vertices into lines by angle...")
-    boundary_lines_from_vertices = "204_boundary_lines_from_vertices"
+    boundary_lines_from_vertices = "202_boundary_lines_from_vertices"
     merge_vertices_into_lines_by_angle(
         output_path,
         boundary_points_layer_name,
@@ -152,8 +147,8 @@ def generate_cold(
         boundary_lines_from_vertices,
     )
 
-    print("\nStep 7: Create buffered lines from boundary lines...")
-    buffered_lines_layer_name = "205_buffered_lines"
+    print("\nStep 6: Create buffered lines from boundary lines...")
+    buffered_lines_layer_name = "206_buffered_lines"
     create_buffered_lines_from_boundary_lines(
         output_path,
         "002_input_roads_buffer",
@@ -163,12 +158,12 @@ def generate_cold(
         cfg,
     )
 
-    print("\nStep 8: Clip buffered lines to cold grid...")
+    print("\nStep 7: Clip buffered lines to cold grid...")
     clipped_lines_layer_name = "207_clipped_buffered_lines"
     subtract_layer(
         output_gpkg,
-        cold_grid_layer_name,
-        cold_grid_updated_layer_name,
+        "200_cold_grid",
+        "200_cold_grid_updated",
         output_gpkg,
         clipped_lines_layer_name,
         0,
@@ -182,8 +177,8 @@ def generate_cold(
     #     clipped_lines_layer_name,
     # )
 
-    print("\nStep 9: Find concave points from boundary...")
-    concave_points_layer_name = "208_concave_points"
+    print("\nStep 4: Find concave points from boundary...")
+    concave_points_layer_name = "203_concave_points"
     find_concave_points(
         output_path,
         erased_layer_name,
@@ -192,8 +187,8 @@ def generate_cold(
         concave_points_layer_name,
     )
 
-    print("\nStep 10: Subdivide blocks at concave corners...")
-    cutting_lines_layer_name = "209_subdivided"
+    print("\nStep 5: Subdivide blocks at concave corners...")
+    cutting_lines_layer_name = "204_subdivided"
     subdivide_blocks_by_concave_points(
         output_path,
         erased_layer_name,
@@ -205,11 +200,12 @@ def generate_cold(
         clipped_lines_layer_name,
     )
 
-    print("\nStep 11: Extract off-grid boundaries adjacent to on-grid blocks...")
-    off_grid_block = "209_subdivided_blocks_off_grid"
-    on_grid_block = "209_subdivided_blocks_on_grid"
+    print("\nStep 6: Create cluster on on-grid parts...")
+    off_grid_block = "204_subdivided_blocks_off_grid"
+    on_grid_block = "204_subdivided_blocks_on_grid"
 
-    adjacent_off_grid_lines = "210_off_grid_adjacent_lines"
+    print("  Extracting off-grid boundaries adjacent to on-grid blocks...")
+    adjacent_off_grid_lines = "205_off_grid_adjacent_lines"
     extract_off_grid_adjacent_lines(
         output_path,
         off_grid_block,
@@ -218,16 +214,14 @@ def generate_cold(
         adjacent_off_grid_lines,
     )
 
-    print("\nStep 12: Extract vertices from off-grid adjacent lines...")
-    extract_vertices_layer_name = "211_off_grid_adjacent_vertices"
+    extract_vertices_layer_name = "208_off_grid_adjacent_vertices"
     extract_vertices_from_lines(
         output_path,
         adjacent_off_grid_lines,
         extract_vertices_layer_name,
     )
 
-    print("\nStep 13: Merge off-grid vertices into lines by angle...")
-    lines_from_vertices_layer = "212_lines_from_vertices"
+    lines_from_vertices_layer = "209_lines_from_vertices"
     merge_vertices_into_lines_by_angle(
         output_path,
         extract_vertices_layer_name,
@@ -235,8 +229,8 @@ def generate_cold(
         lines_from_vertices_layer,
     )
 
-    print("\nStep 14: Find convex points from boundary...")
-    convex_points_layer_name = "213_convex_points"
+    print("\nStep 6b: Find convex points from boundary...")
+    convex_points_layer_name = "208b_convex_points"
     find_convex_points(
         output_path,
         extract_vertices_layer_name,
@@ -244,8 +238,8 @@ def generate_cold(
         convex_points_layer_name,
     )
 
-    print("\nStep 15: Create clusters from convex points...")
-    convex_clusters_layer = "214_convex_clusters"
+    print("\nStep 6c: Create clusters from convex points...")
+    convex_clusters_layer = "208c_convex_clusters"
     max_partition_depth = max(
         cfg.on_grid_partition_depth_arterial_roads,
         cfg.on_grid_partition_depth_secondary_roads,
@@ -259,8 +253,8 @@ def generate_cold(
         max_partition_depth,
     )
 
-    print("\nStep 16: Sample points along front lines...")
-    cold_clusters_points_layer = "215_off_grid_cold_clusters_points"
+    print("\nStep 7: Sample points along front lines...")
+    cold_clusters_points_layer = "210_off_grid_cold_clusters_points"
     sample_points_along_front_lines(
         output_path,
         lines_from_vertices_layer,
@@ -270,8 +264,8 @@ def generate_cold(
         width_m=float(cfg.off_grid_cluster_width),
     )
 
-    print("\nStep 17: Create perpendicular lines from front line points...")
-    perpendicular_lines_layer = "216_off_grid_perpendicular_lines"
+    print("\nStep 8: Create perpendicular lines from front line points...")
+    perpendicular_lines_layer = "211_off_grid_perpendicular_lines"
 
     create_perpendicular_lines_from_front_points(
         output_path,
@@ -282,8 +276,8 @@ def generate_cold(
         perpendicular_lines_layer,
     )
 
-    print("\nStep 18: Add depth points to perpendicular lines...")
-    depth_points_layer = "217_off_grid_depth_points"
+    print("\nStep 9: Add depth points to perpendicular lines for off-grid clustering...")
+    depth_points_layer = "212_off_grid_depth_points"
     sample_points_along_front_lines(
         output_path,
         perpendicular_lines_layer,
@@ -294,8 +288,8 @@ def generate_cold(
         max_depth=1,
     )
 
-    print("\nStep 19: Split off-grid blocks into preliminary clusters (off_grid0)...")
-    off_grid0_layer = "218_off_grid0_clusters"
+    print("\nStep 10: Split off-grid blocks into preliminary clusters (off_grid0)...")
+    off_grid0_layer = "213_off_grid0_clusters"
     create_off_grid_zero_clusters(
         output_path,
         off_grid_block,
@@ -303,8 +297,8 @@ def generate_cold(
         off_grid0_layer,
     )
 
-    print("\nStep 20: Create cluster polygons from depth points...")
-    clusters_layer = "219_off_grid_cold_clusters"
+    print("\nStep 11: Create cluster polygons from depth points...")
+    clusters_layer = "214_off_grid_cold_clusters"
     create_off_grid_cold_clusters(
         output_path,
         off_grid0_layer,
@@ -316,8 +310,8 @@ def generate_cold(
         target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
-    print("\nStep 21: Merge and classify off-grid cold clusters...")
-    off_grid_final_layer = "220_final_cold_off_grid_clusters"
+    print("\nStep 12: Merge and classify off-grid cold clusters...")
+    off_grid_final_layer = "215_final_cold_off_grid_clusters"
     merge_and_classify_off_grid_clusters(
         output_path,
         off_grid_block,
@@ -326,8 +320,8 @@ def generate_cold(
         off_grid_final_layer,
     )
 
-    print("\nStep 22: Merge and classify on-grid cold clusters...")
-    on_grid_final_layer = "221_final_cold_on_grid_clusters"
+    print("\nStep 13: Merge and classify on-grid cold clusters...")
+    on_grid_final_layer = "216_final_cold_on_grid_clusters"
     merge_and_classify_on_grid_clusters(
         output_path,
         on_grid_block,
@@ -338,8 +332,8 @@ def generate_cold(
         on_grid_final_layer,
     )
 
-    print("\nStep 23: Merge final on-grid and off-grid cold clusters...")
-    final_clusters_layer = "222_final_cold_clusters"
+    print("\nStep 14: Merge final on-grid and off-grid cold clusters...")
+    final_clusters_layer = "217_final_cold_clusters"
     merge_final_cold_clusters(
         output_path,
         on_grid_final_layer,

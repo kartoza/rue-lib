@@ -56,4 +56,6 @@ class MainConfig:
     off_grid_local_clusters_width: int = 3
 
     # Neighborhood / public spaces
+    open_percent: float = 6.0
+    amen_percent: float = 8.0
     sidewalk_width_m: float = 3.0

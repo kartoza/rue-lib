@@ -3,7 +3,7 @@ from pathlib import Path
 from typing import Optional
 
 import geopandas as gpd
-from osgeo import ogr
+import pandas as pd
 from shapely import LineString, Point, unary_union
 from shapely.errors import TopologicalError
 from shapely.geometry import MultiLineString
@@ -11,7 +11,6 @@ from shapely.geometry import MultiLineString
 from rue_lib.core.geometry import buffer_layer
 
 from .operations import (
-    _ogr_to_shapely,  # reuse existing helper for validation
     clip_layer,
 )
 
@@ -94,11 +93,21 @@ def polygons_to_lines_layer(
     input_layer_names: str | list[str],
     output_path: Path,
     output_layer_name: str = "polygon_boundaries",
+    dedupe_distance: float = 0.01,
 ) -> str:
     """Extract polygon boundaries from one or more layers and write them as LineStrings.
 
     This preserves individual polygon edges; shared edges are kept from both polygons
     instead of dissolving the polygons into a single union.
+
+    Lines that are within dedupe_distance of each other are deduplicated.
+
+    Args:
+        input_path: Path to input GeoPackage
+        input_layer_names: Layer name(s) to extract boundaries from
+        output_path: Path to output GeoPackage
+        output_layer_name: Name for output layer
+        dedupe_distance: Distance threshold for removing duplicate lines (default: 0.01)
     """
     input_path = str(input_path)
     output_path = str(output_path)
@@ -109,95 +118,153 @@ def polygons_to_lines_layer(
     if not layer_names:
         raise RuntimeError("No input layer names provided for polygons_to_lines_layer")
 
-    ds = ogr.Open(input_path)
-    if ds is None:
-        raise RuntimeError(f"Cannot open dataset: {input_path}")
+    # Read all layers and combine
+    all_gdfs = []
+    for layer_name in layer_names:
+        try:
+            gdf = gpd.read_file(input_path, layer=layer_name)
+            all_gdfs.append(gdf)
+        except Exception as e:
+            print(f"  Warning: cannot read layer '{layer_name}': {e}")
+            return
 
-    srs = None
-    ring_records = []
+    if not all_gdfs:
+        raise RuntimeError("No layers could be read")
+
+    gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True))
+    crs = gdf_combined.crs
+
+    # Extract all boundary lines from polygons
+    line_records = []
     feature_idx = 1
 
-    for layer_name in layer_names:
-        layer = ds.GetLayerByName(layer_name)
-        if layer is None:
-            ds = None
-            raise RuntimeError(f"Cannot find layer: {layer_name}")
-
-        if srs is None:
-            srs = layer.GetSpatialRef()
-
-        for feat in layer:
-            geom = feat.GetGeometryRef()
-            if geom is None:
-                continue
-
-            geom = geom.Clone()
-            if not geom.IsValid():
-                geom = geom.Buffer(0)
-
-            shapely_geom = _ogr_to_shapely(geom)
-            if shapely_geom is None or shapely_geom.is_empty:
-                continue
-
-            if shapely_geom.geom_type == "Polygon":
-                polygons = [shapely_geom]
-            elif shapely_geom.geom_type == "MultiPolygon":
-                polygons = list(shapely_geom.geoms)
-            elif shapely_geom.geom_type == "GeometryCollection":
-                polygons = [
-                    g for g in shapely_geom.geoms if g.geom_type in ("Polygon", "MultiPolygon")
-                ]
-                expanded = []
-                for g in polygons:
-                    if g.geom_type == "Polygon":
-                        expanded.append(g)
-                    elif g.geom_type == "MultiPolygon":
-                        expanded.extend(list(g.geoms))
-                polygons = expanded
-            else:
-                polygons = []
-
-            for poly in polygons:
-                rings = [poly.exterior, *poly.interiors]
-                ring_id = 1
-                for ring in rings:
-                    if ring.is_empty:
-                        continue
-                    ring_records.append((feature_idx, ring_id, ring.wkb))
-                    ring_id += 1
-                feature_idx += 1
-
-    ds = None
-
-    if not ring_records:
-        raise RuntimeError(f"No geometries found to convert in layers: {', '.join(layer_names)}")
-
-    driver = ogr.GetDriverByName("GPKG")
-    out_ds = driver.Open(output_path, 1)
-    if out_ds is None:
-        out_ds = driver.CreateDataSource(output_path)
-    if out_ds.GetLayerByName(output_layer_name):
-        out_ds.DeleteLayer(output_layer_name)
-    out_layer = out_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbLineString25D)
-
-    out_layer.CreateField(ogr.FieldDefn("src_id", ogr.OFTInteger))
-    out_layer.CreateField(ogr.FieldDefn("ring_id", ogr.OFTInteger))
-
-    for src_id, ring_id, ring_wkb in ring_records:
-        line_geom = ogr.CreateGeometryFromWkb(ring_wkb)
-        if line_geom is None or line_geom.IsEmpty():
+    for row in gdf_combined.itertuples():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
             continue
 
-        out_feat = ogr.Feature(out_layer.GetLayerDefn())
-        out_feat.SetGeometry(line_geom)
-        out_feat.SetField("src_id", src_id)
-        out_feat.SetField("ring_id", ring_id)
-        out_layer.CreateFeature(out_feat)
-        out_feat = None
+        if not geom.is_valid:
+            geom = geom.buffer(0)
 
-    if out_ds is not None:
-        out_ds.FlushCache()
-    out_ds = None
+        # Handle different geometry types
+        if geom.geom_type == "Polygon":
+            polygons = [geom]
+        elif geom.geom_type == "MultiPolygon":
+            polygons = list(geom.geoms)
+        else:
+            continue
+
+        # Extract rings from each polygon
+        for poly in polygons:
+            rings = [poly.exterior] + list(poly.interiors)
+            ring_id = 1
+            for ring in rings:
+                if ring.is_empty:
+                    continue
+                line_records.append(
+                    {
+                        "src_id": feature_idx,
+                        "ring_id": ring_id,
+                        "geometry": LineString(ring.coords),
+                    }
+                )
+                ring_id += 1
+            feature_idx += 1
+
+    if not line_records:
+        raise RuntimeError(f"No geometries found to convert in layers: {', '.join(layer_names)}")
+
+    # Create GeoDataFrame of all lines
+    gdf_lines = gpd.GeoDataFrame(line_records, geometry="geometry", crs=crs)
+
+    # Deduplicate by removing close points, then reconstructing lines
+    if dedupe_distance > 0:
+        print(
+            f"  Deduplicating points from {len(gdf_lines)} lines "
+            f"(distance threshold: {dedupe_distance})..."
+        )
+
+        # Extract all unique points from all lines (normalize to 2D)
+        all_points = []
+        point_to_lines = {}  # Map points to the lines they belong to
+
+        for idx, row in gdf_lines.iterrows():
+            line_coords = list(row.geometry.coords)
+            for coord in line_coords:
+                # Normalize to 2D (take only x, y)
+                coord_2d = (coord[0], coord[1])
+                point_key = (round(coord_2d[0], 10), round(coord_2d[1], 10))  # Round for grouping
+                if point_key not in point_to_lines:
+                    all_points.append(coord_2d)
+                    point_to_lines[point_key] = []
+                point_to_lines[point_key].append(idx)
+
+        print(f"  Extracted {len(all_points)} unique points")
+
+        # Create GeoDataFrame of points for spatial indexing
+        gdf_points = gpd.GeoDataFrame(geometry=[Point(coord) for coord in all_points], crs=crs)
+
+        spatial_index = gdf_points.sindex
+        keep_point_indices = set(range(len(all_points)))
+        point_mapping = {}
+
+        for idx in range(len(all_points)):
+            if idx not in keep_point_indices:
+                continue
+
+            point = gdf_points.iloc[idx].geometry
+
+            buffer_geom = point.buffer(dedupe_distance)
+            possible_matches_idx = list(spatial_index.intersection(buffer_geom.bounds))
+
+            for candidate_idx in possible_matches_idx:
+                if candidate_idx <= idx or candidate_idx not in keep_point_indices:
+                    continue
+
+                candidate_point = gdf_points.iloc[candidate_idx].geometry
+
+                if point.distance(candidate_point) < dedupe_distance:
+                    point_mapping[candidate_idx] = idx
+                    keep_point_indices.discard(candidate_idx)
+
+        kept_points = [all_points[i] for i in sorted(keep_point_indices)]
+        old_to_new_idx = {
+            old_idx: new_idx for new_idx, old_idx in enumerate(sorted(keep_point_indices))
+        }
+
+        for removed_idx, kept_idx in point_mapping.items():
+            old_to_new_idx[removed_idx] = old_to_new_idx[kept_idx]
+
+        print(f"  After deduplication: {len(kept_points)} points")
+        new_line_records = []
+        for _idx, row in gdf_lines.iterrows():
+            line_coords = list(row.geometry.coords)
+            new_coords = []
+            for coord in line_coords:
+                coord_2d = (coord[0], coord[1])
+                for point_idx, pt in enumerate(all_points):
+                    if abs(pt[0] - coord_2d[0]) < 1e-9 and abs(pt[1] - coord_2d[1]) < 1e-9:
+                        new_idx = old_to_new_idx.get(point_idx, point_idx)
+                        if new_idx < len(kept_points):
+                            new_coord = kept_points[new_idx]
+                            if not new_coords or new_coords[-1] != new_coord:
+                                new_coords.append(new_coord)
+                        break
+
+            if len(new_coords) >= 2:
+                new_line_records.append(
+                    {
+                        "src_id": row["src_id"],
+                        "ring_id": row["ring_id"],
+                        "geometry": LineString(new_coords),
+                    }
+                )
+
+        gdf_lines = gpd.GeoDataFrame(new_line_records, geometry="geometry", crs=crs)
+        print(f"  After reconstruction: {len(gdf_lines)} lines")
+
+    # Write output
+    gdf_lines.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
     return output_layer_name
 
@@ -208,13 +275,13 @@ def create_dead_end_boundary_lines(
     site_boundary_lines_layer: str,
     output_layer_name: str = "09_dead_end_lines",
     diff_buffer: float = 0.05,
+    buffer_distance: float = 10.0,
 ) -> str:
     """Create dead-end boundary lines"""
     gdf_site = gpd.read_file(output_path, layer=site_minus_setbacks_layer)
     gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
 
-    if gdf_site.empty:
-        raise RuntimeError(f"Layer {site_minus_setbacks_layer} is empty")
+    dead_end_lines_buffered_layer = f"{output_layer_name}_buffered"
 
     # Convert polygons to exterior lines
     line_geoms = []
@@ -254,11 +321,19 @@ def create_dead_end_boundary_lines(
                 expanded.append(g)
         line_parts = expanded
 
+    line_parts_extended = []
+    for line_part in line_parts:
+        line_parts_extended.append(line_part.buffer(buffer_distance))
+
     if not line_parts:
         raise RuntimeError("No dead-end boundary lines found after subtraction")
 
     gdf_out = gpd.GeoDataFrame(geometry=line_parts, crs=gdf_site.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    gdf_out = gpd.GeoDataFrame(geometry=line_parts_extended, crs=gdf_site.crs)
+    gdf_out.to_file(output_path, layer=dead_end_lines_buffered_layer, driver="GPKG")
+
     return output_layer_name
 
 
@@ -958,4 +1033,111 @@ def create_perpendicular_lines_from_guide_points(
     print(f"  Created {len(lines)} perpendicular lines from guide points")
     print(f"  Saved to layer: {output_layer_name}")
 
+    return output_layer_name
+
+
+try:
+    # Shapely 2.x
+    from shapely import make_valid as _make_valid
+except Exception:
+    _make_valid = None
+
+
+def _fix_geom(g):
+    """Fix invalid geometries, returning None if empty/invalid."""
+    if g is None or g.is_empty:
+        return None
+    try:
+        if _make_valid is not None:
+            g2 = _make_valid(g)
+        else:
+            # classic "buffer(0)" fix
+            g2 = g.buffer(0)
+        if g2 is None or g2.is_empty:
+            return None
+        return g2
+    except Exception:
+        # last resort: try buffer(0)
+        try:
+            g2 = g.buffer(0)
+            if g2 is None or g2.is_empty:
+                return None
+            return g2
+        except Exception:
+            return None
+
+
+def subtract_layer(
+    input_gpkg: str,
+    base_layer_name: str,
+    erase_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    buffer_distance: float = 0.0,
+) -> str:
+    """
+    Subtract one layer from another using geometric difference (GeoPandas/Shapely).
+
+    Subtracts the geometries from erase_layer (optionally buffered) from base_layer.
+    Both layers must be in the same input GeoPackage.
+
+    Args:
+        input_gpkg: Path to input GeoPackage containing both layers
+        base_layer_name: Name of the layer to subtract from
+        erase_layer_name: Name of the layer to subtract
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for the output layer
+        buffer_distance: Optional buffer distance to apply to erase layer before subtraction
+
+    Returns:
+        Name of the output layer
+    """
+    gdf_base = gpd.read_file(input_gpkg, layer=base_layer_name)
+    gdf_erase = gpd.read_file(input_gpkg, layer=erase_layer_name)
+
+    if gdf_base.empty:
+        raise ValueError(f"Layer '{base_layer_name}' is empty")
+    if gdf_erase.empty:
+        print("  Erase layer is empty. Writing base layer unchanged...")
+
+    if gdf_erase.crs is not None and gdf_base.crs is not None and gdf_erase.crs != gdf_base.crs:
+        gdf_erase = gdf_erase.to_crs(gdf_base.crs)
+
+    gdf_base = gdf_base.copy()
+    gdf_erase = gdf_erase.copy()
+
+    gdf_base["geometry"] = gdf_base.geometry.apply(_fix_geom)
+    gdf_erase["geometry"] = gdf_erase.geometry.apply(_fix_geom)
+
+    gdf_base = gdf_base[gdf_base.geometry.notnull()].reset_index(drop=True)
+    gdf_erase = gdf_erase[gdf_erase.geometry.notnull()].reset_index(drop=True)
+
+    print(f"  Processing {len(gdf_base)} features from base layer...")
+
+    erase_union = None
+    if not gdf_erase.empty:
+        erase_union = unary_union(list(gdf_erase.geometry))
+
+    if erase_union is None:
+        erased_geom = gdf_base.geometry
+    else:
+        # Buffer the erase geometry if buffer_distance is specified
+        if buffer_distance > 0:
+            erase_union = erase_union.buffer(buffer_distance, cap_style=3, join_style=2)
+        else:
+            erase_union = erase_union.buffer(0.001, cap_style=3, join_style=2)
+        erased_geom = gdf_base.geometry.difference(erase_union)
+
+    # Create a new GeoDataFrame with the erased geometry
+    out = gdf_base.copy()
+    out["geometry"] = erased_geom
+
+    out["geometry"] = out.geometry.apply(_fix_geom)
+    out = out[out.geometry.notnull()].reset_index(drop=True)
+
+    # Ensure it's a GeoDataFrame before writing
+    out = gpd.GeoDataFrame(out, geometry="geometry", crs=gdf_base.crs)
+    out.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Created layer: {output_layer_name}")
     return output_layer_name

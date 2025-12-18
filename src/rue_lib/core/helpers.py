@@ -83,6 +83,45 @@ def remove_layer_from_gpkg(gpkg_path: Path, layer_name: str) -> None:
         ds = None
 
 
+def create_or_replace_layer(
+    ds,
+    layer_name: str,
+    srs: ogr.osr.SpatialReference,
+    geom_type: int,
+    fields: list[(str, ogr.FieldDefn)] | None = None,
+) -> ogr.Layer:
+    """Create a fresh OGR layer, deleting an existing one if present.
+
+    Args:
+        ds: OGR DataSource opened in update mode.
+        layer_name: Name of the layer to create.
+        srs: Spatial reference to assign to the layer.
+        geom_type: OGR geometry type (e.g. ogr.wkbPolygon).
+
+    Returns:
+        The newly created OGR layer.
+
+    Raises:
+        ValueError: If the layer cannot be created.
+    """
+    for idx in range(ds.GetLayerCount()):
+        lyr = ds.GetLayerByIndex(idx)
+        if lyr is not None and lyr.GetName() == layer_name:
+            ds.DeleteLayer(idx)
+            break
+
+    new_layer = ds.CreateLayer(layer_name, srs, geom_type)
+    if new_layer is None:
+        raise ValueError(f"Could not create layer '{layer_name}'")
+
+    if fields:
+        for field_name, field_type in fields:
+            new_field = ogr.FieldDefn(field_name, field_type)
+            new_layer.CreateField(new_field)
+
+    return new_layer
+
+
 def merge_gpkg_layers(
     gpkg_path: Path,
     layer_names: list[str],

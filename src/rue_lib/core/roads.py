@@ -56,8 +56,9 @@ def extract_roads_buffer(
         # Get buffer width based on road type
         buffer_width = width_mapping.get(road_type, road_local_width_m)
 
-        # Create buffered polygon (buffer distance is half-width on each side)
-        buffered_geom = geometry.buffer(buffer_width / 2.0)
+        # Create buffered polygon with sharp corners (mitered joins)
+        # join_style=2 creates sharp corners instead of rounded
+        buffered_geom = geometry.buffer(buffer_width / 2.0, join_style=2, cap_style=3)
 
         # Keep all properties and update geometry
         row_dict = row.to_dict()

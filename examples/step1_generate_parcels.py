@@ -48,6 +48,7 @@ def main():
         geopackage_path=geopackage_path,
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,
+        road_local_width_m=MainConfig.road_local_width_m,
     )
 
     # Generate parcels

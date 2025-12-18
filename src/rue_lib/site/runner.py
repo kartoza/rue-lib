@@ -9,6 +9,7 @@ import geopandas as gpd
 from rue_lib.core.helpers import remove_layer_from_gpkg
 from rue_lib.geo import to_metric_crs
 from rue_lib.site.config import SiteConfig
+from rue_lib.site.financial import FinancialSite
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
 from rue_lib.streets.operations import erase_layer
@@ -37,6 +38,9 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
+    gpkg_path = out_dir / "outputs.gpkg"
+    gpkg_path = str(gpkg_path)
+
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
 
@@ -54,11 +58,17 @@ def generate_parcels(cfg: SiteConfig) -> Path:
 
     # Prepare geopackage with template (creates from template if needed)
     prepare_geopackage(gpkg_path)
-
     site_m.to_file(gpkg_path, layer="site", driver="GPKG")
     roads_m.to_file(gpkg_path, layer="roads", driver="GPKG")
 
-    roads_buf_m = buffer_roads(roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m)
+    roads_buffer_layer = buffer_roads(
+        roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m
+    )
+    roads_buf_m = buffer_roads(
+        roads_m,
+        cfg.road_arterial_width_m - cfg.road_local_width_m,
+        cfg.road_secondary_width_m - cfg.road_local_width_m,
+    )
 
     if not roads_buf_m.empty:
         roads_buf_m.to_file(gpkg_path, layer="roads_buffered", driver="GPKG")
@@ -88,7 +98,17 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         parcels_exploded.to_crs(4326) if not parcels_exploded.empty else parcels_exploded
     )
 
-    out_geojson = out_dir / "parcels.geojson"
+    out_geojson = out_dir / "outputs.geojson"
     save_geojson(parcels_final, out_geojson)
+
+    roads_buffer_layer = (
+        roads_buffer_layer.to_crs(4326) if not roads_buffer_layer.empty else roads_buffer_layer
+    )
+
+    out_geojson = out_dir / "roads.geojson"
+    save_geojson(roads_buffer_layer, out_geojson)
+
+    print("Generating financial data")
+    FinancialSite(config=cfg)
 
     return out_geojson

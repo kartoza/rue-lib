@@ -1,6 +1,7 @@
 # src/rue_lib/streets/runner.py
 from pathlib import Path
 
+import geopandas as gpd
 from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
@@ -18,15 +19,18 @@ from rue_lib.streets.runner_utils import (
     create_perpendicular_lines_from_guide_points,
     create_perpendicular_lines_inside_buffer_from_points,
     polygons_to_lines_layer,
+    subtract_layer,
 )
 from rue_lib.utils.io import prepare_geopackage
 
+from ..site.roads import buffer_roads
 from .cell import (
     fix_grid_cells_with_perpendicular_lines,
     merge_small_cells_with_neighbors,
     remove_dead_end_cells,
 )
 from .config import StreetConfig
+from .financial import FinancialStreet
 from .operations import (
     classify_on_grid_cells_by_setback,
     create_on_grid_cells_from_perpendiculars,
@@ -66,8 +70,18 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"Using UTM EPSG: {utm_epsg}")
 
     print("Step 2: Reprojecting layers to UTM...")
-    site_layer_name = reproject_layer(cfg.parcel_path, output_path, utm_epsg)
-    roads_layer_name = reproject_layer(cfg.roads_path, output_path, utm_epsg)
+    site_layer_name = reproject_layer(
+        cfg.parcel_path, output_path, utm_epsg, layer_name="00_site", is_append_epsg=False
+    )
+    roads_layer_name = reproject_layer(
+        cfg.roads_path, output_path, utm_epsg, layer_name="00_roads", is_append_epsg=False
+    )
+    input_roads_buffer_layer_name = "00_roads_buffer"
+    roads_m = gpd.read_file(output_path, layer=roads_layer_name)
+    roads_buf_m = buffer_roads(
+        roads_m, cfg.road_arterial_width_m, cfg.road_secondary_width_m, road_type_key="road_type"
+    )
+    roads_buf_m.to_file(output_gpkg, layer=input_roads_buffer_layer_name, driver="GPKG")
 
     print("Step 4: Extracting arterial roads...")
     extract_by_expression(
@@ -168,7 +182,11 @@ def generate_streets(cfg: StreetConfig) -> Path:
         output_gpkg,
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
-        output_layer_name="09_dead_end_lines",
+        output_layer_name="13a_dead_end_lines",
+        buffer_distance=min(
+            cfg.on_grid_partition_depth_arterial_roads, cfg.on_grid_partition_depth_secondary_roads
+        )
+        * 0.4,
     )
 
     print("Step 14: Generating off-grid blocks...")
@@ -217,10 +235,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print("Step 14e: Removing dead end cells")
     cleaned_cells_layer = remove_dead_end_cells(
-        output_gpkg,
-        fixed_cells_layer,
-        "13_site_boundary_lines",
-        "09_site_minus_all_setbacks",
+        output_gpkg, fixed_cells_layer, "13a_dead_end_lines_buffered"
     )
 
     print("Step 14f: Merging small cells with neighbors")
@@ -229,15 +244,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
         cleaned_cells_layer,
         target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
         area_threshold_ratio=0.5,
-    )
-
-    create_cold_boundaries(
-        output_gpkg,
-        site_layer_name,
-        cleaned_cells_layer,
-        arterial_setback_layer="10a_arterial_setback_clipped",
-        secondary_setback_layer="10b_secondary_setback_clipped",
-        output_layer_name="14_cold_boundaries",
     )
 
     print("Step 15: Generating on-grid cells")
@@ -279,7 +285,12 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "16_on_grid_cells",
     )
 
-    print("Step 16a: Classifying on-grid cells by road type (arterial vs secondary)...")
+    print("Step 16a: Remove dead-end on-grid cells")
+    cleaned_on_grid_cells_layer = remove_dead_end_cells(
+        output_gpkg, _on_grid_cells_layer, "13a_dead_end_lines_buffered"
+    )
+
+    print("Step 16b: Classifying on-grid cells by road type (arterial vs secondary)...")
     buffer_layer(
         output_path,
         "04_arterial_roads",
@@ -290,11 +301,20 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
     arterial_cells_layer, secondary_cells_layer = classify_on_grid_cells_by_setback(
         output_gpkg,
-        "16_on_grid_cells",
+        cleaned_on_grid_cells_layer,
         "06_arterial_buffer_for_classification",
         output_gpkg,
         "16a_on_grid_arterial_cells",
         "16b_on_grid_secondary_cells",
+    )
+
+    print("Step 17: Creating cold boundaries...")
+    create_cold_boundaries(
+        output_gpkg,
+        site_layer_name,
+        cleaned_cells_layer,
+        cleaned_on_grid_cells_layer,
+        output_layer_name="14_cold_boundaries",
     )
 
     on_grid_arterial_outer_layer, on_grid_arterial_inner_layer = generate_local_streets(
@@ -308,38 +328,126 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Exporting local roads from off-grid cells as linework...")
-    local_roads_layer_name = "local_roads"
+    local_roads_layer_name = "18_local_roads"
     polygons_to_lines_layer(
         output_gpkg,
         [
-            "14_off_grid_cells_fixed_by_perp_lines_no_dead_ends",
-            "16_on_grid_cells",
+            cleaned_cells_layer,
+            cleaned_on_grid_cells_layer,
         ],
         output_gpkg,
         local_roads_layer_name,
     )
 
+    # Remove cold boundaries from local roads
+    subtract_layer(
+        output_gpkg,
+        "14_cold_boundaries",
+        cleaned_on_grid_cells_layer,
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        cfg.road_locals_width_m / 2.0,
+    )
+
+    subtract_layer(
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        cleaned_cells_layer,
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        cfg.road_locals_width_m / 2.0,
+    )
+
+    subtract_layer(
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        "05_secondary_roads",
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        cfg.road_secondary_width_m / 2.0,
+    )
+
+    subtract_layer(
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        "04_arterial_roads",
+        output_gpkg,
+        "14a_local_roads_minus_cold_boundaries",
+        cfg.road_arterial_width_m / 2.0,
+    )
+
+    subtract_layer(
+        output_gpkg,
+        local_roads_layer_name,
+        "05_secondary_roads",
+        output_gpkg,
+        local_roads_layer_name,
+        cfg.road_secondary_width_m / 2.0,
+    )
+
+    subtract_layer(
+        output_gpkg,
+        local_roads_layer_name,
+        "04_arterial_roads",
+        output_gpkg,
+        local_roads_layer_name,
+        cfg.road_arterial_width_m / 2.0,
+    )
+
     print("Step 17: Merging all grid layers with grid_type information...")
+    all_grid_layer_name = "17_all_grids_merged"
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
-        "17_all_grids_merged",
+        all_grid_layer_name,
         [
-            (cleaned_cells_layer, "off_grid_local_streets"),
             (off_grid_inner_layer, "off_grid"),
-            ("16a_on_grid_arterial_cells", "on_grid_art_local_streets"),
             (on_grid_arterial_inner_layer, "on_grid_art"),
-            ("16b_on_grid_secondary_cells", "on_grid_sec_local_streets"),
             (on_grid_secondary_inner_layer, "on_grid_sec"),
-            ("14_cold_boundaries", "cold_boundaries"),
+            ("14a_local_roads_minus_cold_boundaries", "cold_boundaries"),
             ("04_arterial_roads", "road_arterial"),
             ("05_secondary_roads", "road_secondary"),
             (local_roads_layer_name, "road_local"),
         ],
     )
 
+    # --------------------------------------
+    # Extract local roads from merged grids
+    # --------------------------------------
+    local_road_grid_layer_name = "17_local_road_grid"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        (
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'on_grid_sec_local_streets' OR "
+            "type = 'on_grid_art_local_streets' OR "
+            "type = 'off_grid_local_streets' "
+        ),
+        output_path,
+        local_road_grid_layer_name,
+    )
+    buildable_zone_layer_name = "17_buildable_zone"
+    extract_by_expression(
+        output_path,
+        all_grid_layer_name,
+        "zone_type = 'buildable'",
+        output_path,
+        buildable_zone_layer_name,
+    )
+
+    print("Cutting local roads with buildable zone to get roads outside buildable area...")
+    erase_layer(
+        output_path,
+        local_road_grid_layer_name,
+        output_path,
+        buildable_zone_layer_name,
+        output_path,
+        "17_local_roads_buffer",
+    )
+
     print("Step 18: Exporting merged grids to GeoJSON...")
-    output_geojson = output_dir / "all_grids_merged.geojson"
+    output_geojson = output_dir / "outputs.geojson"
     export_layer_to_geojson(
         str(output_gpkg),
         "17_all_grids_merged",
@@ -352,5 +460,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
+
+    print("Step 19: Generating financial data")
+    FinancialStreet(config=cfg)
 
     return output_gpkg

@@ -16,7 +16,6 @@ class StreetConfig:
     off_grid_partitions_preferred_width: float = 140.0
     perpendicular_line_length: float = 1000.0  # Length of perpendicular lines
     output_dir: str = "outputs/streets"
-    geopackage_path: str = f"{output_dir}/streets.gpkg"
     optimize_grid_rotation: bool = True
     grid_rotation_angle_step: float = 5.0
     use_ternary_search: bool = False
