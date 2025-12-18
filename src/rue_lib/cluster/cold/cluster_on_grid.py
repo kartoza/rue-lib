@@ -9,9 +9,9 @@ from shapely.geometry import Point
 from shapely.ops import split as shapely_split
 from shapely.ops import unary_union
 
-from rue_lib.core.definitions import ClusterTypes, ColorTypes
-from rue_lib.core.geometry_sampling import extend_line, points_along_line
-from rue_lib.core.helpers import create_or_replace_layer
+from ...core.definitions import ClusterTypes, ColorTypes
+from ...core.geometry_sampling import extend_line, points_along_line
+from ...core.helpers import create_or_replace_layer
 
 
 def extract_off_grid_adjacent_lines(
@@ -330,7 +330,9 @@ def extract_vertices_from_lines(
     if gdf_lines.empty:
         print(f"  Warning: {input_layer_name} is empty")
         # Create empty layer
-        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_lines.crs)
+        from ...io import safe_geodataframe
+
+        gdf_empty = safe_geodataframe([], geometry=[], crs=gdf_lines.crs)
         gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     if "orig_id" not in gdf_lines.columns:
@@ -388,7 +390,9 @@ def extract_vertices_from_lines(
     if not points_data:
         print(f"  Warning: No vertices extracted from {input_layer_name}")
         # Create empty layer
-        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_lines.crs)
+        from ...io import safe_geodataframe
+
+        gdf_empty = safe_geodataframe([], geometry=[], crs=gdf_lines.crs)
         gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     gdf_vertices = gpd.GeoDataFrame(points_data, crs=gdf_lines.crs)
@@ -779,7 +783,9 @@ def create_perpendicular_lines_from_front_points(
     if not perp_lines:
         print("  No perpendicular lines created")
         # Create empty layer
-        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+        from ...io import safe_geodataframe
+
+        gdf_empty = safe_geodataframe([], geometry=[], crs=gdf_points.crs)
         gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
@@ -1039,7 +1045,9 @@ def create_off_grid_zero_clusters(
     if not split_geoms:
         print("  Warning: off_grid0 split produced no polygons")
         # Create empty layer
-        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_blocks.crs)
+        from ...io import safe_geodataframe
+
+        gdf_empty = safe_geodataframe([], geometry=[], crs=gdf_blocks.crs)
         gdf_empty.to_file(input_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
     gdf_out = gpd.GeoDataFrame(records, geometry=split_geoms, crs=gdf_blocks.crs)
@@ -1440,7 +1448,9 @@ def create_off_grid_cold_clusters(
     if not cluster_polygons:
         print("  No clusters created")
         # Create empty layer
-        gdf_empty = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
+        from ...io import safe_geodataframe
+
+        gdf_empty = safe_geodataframe([], geometry=[], crs=gdf_points.crs)
         gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 

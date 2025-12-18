@@ -416,13 +416,19 @@ def generate_art_sec_parts_no_offgrid(
                     "color": color,
                 }
             )
-    # Create GeoDataFrame
-    gdf_out = gpd.GeoDataFrame(edges_for_blocks, crs=blocks_layer.crs)
-    gdf_out.to_file(output_path, layer=output_layer_name + "-edges", driver="GPKG")
-    gdf_out = gpd.GeoDataFrame(edges_for_parts, crs=blocks_layer.crs)
-    gdf_out.to_file(output_path, layer=output_layer_name + "-edges-parts", driver="GPKG")
+    # Create GeoDataFrame using safe function
+    from .io import safe_geodataframe
 
-    # Create GeoDataFrame
-    gdf_out = gpd.GeoDataFrame(all_parts, crs=blocks_layer.crs)
-    gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    gdf_out = safe_geodataframe(edges_for_blocks, crs=blocks_layer.crs)
+    if not gdf_out.empty and "geometry" in gdf_out.columns:
+        gdf_out.to_file(output_path, layer=output_layer_name + "-edges", driver="GPKG")
+
+    gdf_out = safe_geodataframe(edges_for_parts, crs=blocks_layer.crs)
+    if not gdf_out.empty and "geometry" in gdf_out.columns:
+        gdf_out.to_file(output_path, layer=output_layer_name + "-edges-parts", driver="GPKG")
+
+    # Create GeoDataFrame using safe function
+    gdf_out = safe_geodataframe(all_parts, crs=blocks_layer.crs)
+    if not gdf_out.empty and "geometry" in gdf_out.columns:
+        gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
     return output_layer_name

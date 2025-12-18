@@ -8,20 +8,6 @@ from pathlib import Path
 import geopandas as gpd
 from shapely.geometry import LineString, Point
 
-from rue_lib.cluster.cold.cluster_on_grid import (
-    create_off_grid_cold_clusters,
-    create_off_grid_zero_clusters,
-    create_perpendicular_lines_from_front_points,
-    extract_off_grid_adjacent_lines,
-    extract_vertices_from_lines,
-    merge_vertices_into_lines_by_angle,
-    sample_points_along_front_lines,
-)
-from rue_lib.cluster.cold.clusters import (
-    merge_and_classify_off_grid_clusters,
-    merge_and_classify_on_grid_clusters,
-    merge_final_cold_clusters,
-)
 from rue_lib.cluster.cold.expand_roads_buffer import (
     create_buffered_lines_from_boundary_lines,
 )
@@ -38,6 +24,21 @@ from rue_lib.cluster.helpers import convert_polygonz_to_polygon
 from rue_lib.core.definitions import BlockTypes
 from rue_lib.streets.operations import extract_by_expression
 from rue_lib.streets.runner_utils import subtract_layer
+
+from .cold.cluster_on_grid import (
+    create_off_grid_cold_clusters,
+    create_off_grid_zero_clusters,
+    create_perpendicular_lines_from_front_points,
+    extract_off_grid_adjacent_lines,
+    extract_vertices_from_lines,
+    merge_vertices_into_lines_by_angle,
+    sample_points_along_front_lines,
+)
+from .cold.clusters import (
+    merge_and_classify_off_grid_clusters,
+    merge_and_classify_on_grid_clusters,
+    merge_final_cold_clusters,
+)
 
 
 def generate_cold(

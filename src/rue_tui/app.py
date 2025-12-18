@@ -674,10 +674,21 @@ class RueTuiApp(App):
                 await self.run_step(step + 1)
 
         except Exception as e:
+            import traceback
+
+            # Get full traceback as a string
+            full_traceback = traceback.format_exc()
+
+            # Short error message for progress display
+            short_error = str(e)
+
+            # Full error with traceback for log
+            error_msg = f"{short_error}\n\nFull traceback:\n{full_traceback}"
+
             self.step_status[step] = "error"
             self.step_cards[step].update_status("error")
-            self.progress_display.error_progress(f"Step {step} failed: {str(e)}")
-            self.log_viewer.add_log(f"❌ Step {step} failed: {str(e)}", "error")
+            self.progress_display.error_progress(f"Step {step} failed: {short_error}")
+            self.log_viewer.add_log(f"❌ Step {step} failed: {error_msg}", "error")
 
             # Restore button state on error
             current_btn = self.query_one(f"#btn-step{step}")

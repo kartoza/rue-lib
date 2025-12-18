@@ -1,6 +1,5 @@
 # src/rue_lib/streets/financial.py
 
-from pathlib import Path
 
 import geopandas as gpd
 
@@ -26,9 +25,7 @@ class FinancialStreet(FinancialModel):
 
     def __init__(self, config: StreetConfig):
         """Initialize a FinancialStreet object."""
-        out_dir = Path(config.output_dir)
-        output_path = out_dir / "outputs.gpkg"
-        output_path = str(output_path)
+        output_path = config.geopackage_path
 
         roads = gpd.read_file(output_path, layer="00_roads")
         roads_local = gpd.read_file(output_path, layer="18_local_roads")

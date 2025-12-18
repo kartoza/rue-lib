@@ -215,6 +215,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "14a_site_boundary_inner_buffer",
     )
     fixed_cells_layer = None
+    perp_inside_layer = None
     if lines_layer is not None:
         perp_inside_layer = create_perpendicular_lines_inside_buffer_from_points(
             output_gpkg,

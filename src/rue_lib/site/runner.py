@@ -38,9 +38,6 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     out_dir = Path(cfg.output_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    gpkg_path = out_dir / "outputs.gpkg"
-    gpkg_path = str(gpkg_path)
-
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
 

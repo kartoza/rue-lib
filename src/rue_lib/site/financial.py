@@ -1,6 +1,5 @@
 # src/rue_lib/streets/financial.py
 
-from pathlib import Path
 
 import geopandas as gpd
 
@@ -16,9 +15,7 @@ class FinancialSite(FinancialModel):
 
     def __init__(self, config: SiteConfig):
         """Initialize a Site object."""
-        out_dir = Path(config.output_dir)
-        gpkg_path = out_dir / "outputs.gpkg"
-        gpkg_path = str(gpkg_path)
+        gpkg_path = config.geopackage_path
 
         site_gdf = gpd.read_file(gpkg_path, layer="site")
         roads_buffer_gdf = gpd.read_file(gpkg_path, layer="roads_buffered")

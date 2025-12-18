@@ -874,7 +874,7 @@ class FileBrowserWidget(Container):
             # Current path display and navigation
             with Horizontal(classes="form-row"):
                 yield Label("Current Path:", classes="form-label")
-                yield Input(value=str(self.current_path), id="current-path", readonly=True)
+                yield Input(value=str(self.current_path), id="current-path", disabled=True)
                 yield Button("↑", id="up-dir", variant="default")
                 yield Button("🏠", id="home-dir", variant="default")
 

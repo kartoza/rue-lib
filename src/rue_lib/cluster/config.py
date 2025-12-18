@@ -24,7 +24,7 @@ class ClusterConfig:
     # Input paths
     roads_path: str  # Path to roads network
     input_path: str  # Path to streets output, or previous step output
-    output_dir: str  # Path to output directory
+    output_dir: str = "outputs"  # Path to output directory
     geopackage_path: str = "outputs/output.gpkg"  # Path to output geopackage
 
     # Fixed data
