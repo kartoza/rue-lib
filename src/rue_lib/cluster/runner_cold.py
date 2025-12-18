@@ -344,6 +344,7 @@ def generate_cold(
         output_path,
         on_grid_final_layer,
         off_grid_final_layer,
+        "209_subdivided_blocks",
         output_path,
         final_clusters_layer,
     )
