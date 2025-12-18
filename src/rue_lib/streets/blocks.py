@@ -20,13 +20,13 @@ def explode_multipolygon(geom):
     polygons = []
     geom_type = ogr.GT_Flatten(geom.GetGeometryType())
 
-    if geom_type == ogr.wkbPolygon:
+    if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         polygons.append(geom.Clone())
-    elif geom_type == ogr.wkbMultiPolygon:
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
         for i in range(geom.GetGeometryCount()):
             sub_geom = geom.GetGeometryRef(i)
             sub_geom_type = ogr.GT_Flatten(sub_geom.GetGeometryType())
-            if sub_geom_type == ogr.wkbPolygon:
+            if sub_geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
                 polygons.append(sub_geom.Clone())
     return polygons
 
@@ -233,12 +233,15 @@ def polygonize_and_classify_blocks(
     if poly_geom is not None:
         geom_type = ogr.GT_Flatten(poly_geom.GetGeometryType())
 
-        if geom_type == ogr.wkbPolygon:
+        if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
             polygons.append(poly_geom.Clone())
-        elif geom_type == ogr.wkbMultiPolygon or geom_type == ogr.wkbGeometryCollection:
+        elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D, ogr.wkbGeometryCollection):
             for i in range(poly_geom.GetGeometryCount()):
                 sub_geom = poly_geom.GetGeometryRef(i)
-                if ogr.GT_Flatten(sub_geom.GetGeometryType()) == ogr.wkbPolygon:
+                if ogr.GT_Flatten(sub_geom.GetGeometryType()) in (
+                    ogr.wkbPolygon,
+                    ogr.wkbPolygon25D,
+                ):
                     polygons.append(sub_geom.Clone())
 
     print(f"Created {len(polygons)} polygons from lines")

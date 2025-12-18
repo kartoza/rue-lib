@@ -19,13 +19,13 @@ def explode_multipolygon(geom):
     polygons = []
     geom_type = ogr.GT_Flatten(geom.GetGeometryType())
 
-    if geom_type == ogr.wkbPolygon:
+    if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         polygons.append(geom.Clone())
-    elif geom_type == ogr.wkbMultiPolygon:
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
         for i in range(geom.GetGeometryCount()):
             sub_geom = geom.GetGeometryRef(i)
             sub_geom_type = ogr.GT_Flatten(sub_geom.GetGeometryType())
-            if sub_geom_type == ogr.wkbPolygon:
+            if sub_geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
                 polygons.append(sub_geom.Clone())
     return polygons
 
@@ -224,9 +224,9 @@ def clip_layer(
     geom_type = input_layer.GetGeomType()
 
     # Convert to 3D geometry type for layer compatibility
-    if geom_type == ogr.wkbPolygon:
+    if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         geom_type = ogr.wkbPolygon25D
-    elif geom_type == ogr.wkbMultiPolygon:
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
         geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbLineString:
         geom_type = ogr.wkbLineString25D
@@ -362,9 +362,9 @@ def erase_layer(
     geom_type = input_layer.GetGeomType()
 
     # Convert to 3D geometry type for layer compatibility
-    if geom_type == ogr.wkbPolygon:
+    if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         geom_type = ogr.wkbPolygon25D
-    elif geom_type == ogr.wkbMultiPolygon:
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
         geom_type = ogr.wkbPolygon25D
     elif geom_type == ogr.wkbLineString:
         geom_type = ogr.wkbLineString25D
@@ -440,7 +440,12 @@ def erase_layer(
             # Additional check: remove tiny fragments
             # For linestrings, check length; for polygons, check area
             if not erased_geom.IsEmpty():
-                if geom_type in (ogr.wkbLineString, ogr.wkbMultiLineString):
+                if geom_type in (
+                    ogr.wkbLineString,
+                    ogr.wkbLineString25D,
+                    ogr.wkbMultiLineString,
+                    ogr.wkbMultiLineString25D,
+                ):
                     # Remove line segments shorter than threshold
                     if erased_geom.Length() > buffer_distance * 2:
                         erased_features.append((erased_geom, field_values))
@@ -1155,11 +1160,18 @@ def export_geometry_vertices(
             continue
 
         # Extract vertices based on geometry type
-        if geom.GetGeometryName() in ["POLYGON", "MULTIPOLYGON"]:
+        if geom.GetGeometryName() in [
+            "POLYGON",
+            "POLYGON Z",
+            "POLYGON25D",
+            "MULTIPOLYGON",
+            "MULTIPOLYGON Z",
+            "MULTIPOLYGON25D",
+        ]:
             # Get all rings from polygon(s)
             for i in range(geom.GetGeometryCount()):
                 ring = geom.GetGeometryRef(i)
-                if ring.GetGeometryName() == "POLYGON":
+                if ring.GetGeometryName() in ("POLYGON", "POLYGON Z", "POLYGON25D"):
                     # MultiPolygon case
                     for j in range(ring.GetGeometryCount()):
                         linear_ring = ring.GetGeometryRef(j)
@@ -1190,7 +1202,7 @@ def export_geometry_vertices(
     points_layer = output_ds.CreateLayer(output_layer_name, srs, ogr.wkbPoint25D)
     points_layer.CreateField(ogr.FieldDefn("vertex_id", ogr.OFTInteger))
     for idx, (x, y) in enumerate(vertices):
-        point = ogr.Geometry(ogr.wkbPoint)
+        point = ogr.Geometry(ogr.wkbPoint25D)
         point.AddPoint(x, y)
 
         feature = ogr.Feature(points_layer.GetLayerDefn())
@@ -1466,12 +1478,12 @@ def break_multipart_features(input_path, input_layer_name, output_path, output_l
     geom_type = input_layer.GetGeomType()
 
     # Get base geometry type (without Multi prefix)
-    if geom_type == ogr.wkbMultiPoint:
-        base_geom_type = ogr.wkbPoint
-    elif geom_type == ogr.wkbMultiLineString:
-        base_geom_type = ogr.wkbLineString
-    elif geom_type == ogr.wkbMultiPolygon:
-        base_geom_type = ogr.wkbPolygon
+    if geom_type in (ogr.wkbMultiPoint, ogr.wkbMultiPoint25D):
+        base_geom_type = ogr.wkbPoint25D
+    elif geom_type in (ogr.wkbMultiLineString, ogr.wkbMultiLineString25D):
+        base_geom_type = ogr.wkbLineString25D
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
+        base_geom_type = ogr.wkbPolygon25D
     else:
         # If not multipart, use original type
         base_geom_type = geom_type
@@ -1685,7 +1697,7 @@ def create_arterial_setback_grid(
             point_y = y1 + t * (y2 - y1)
 
             # Create point geometry
-            point_geom = ogr.Geometry(ogr.wkbPoint)
+            point_geom = ogr.Geometry(ogr.wkbPoint25D)
             point_geom.AddPoint(point_x, point_y)
 
             division_points.append((point_geom, setback_id, current_distance, distance_to_road))
@@ -1694,7 +1706,7 @@ def create_arterial_setback_grid(
 
         # Always add the end point if not already included
         if current_distance - grid_width < total_length:
-            point_geom = ogr.Geometry(ogr.wkbPoint)
+            point_geom = ogr.Geometry(ogr.wkbPoint25D)
             point_geom.AddPoint(edge_geom.GetX(n - 1), edge_geom.GetY(n - 1))
             division_points.append((point_geom, setback_id, total_length, distance_to_road))
 
@@ -1861,7 +1873,7 @@ def create_grid_from_division_points(
             perp_dy = edge_dx
 
             # Create perpendicular line
-            perp_line = ogr.Geometry(ogr.wkbLineString)
+            perp_line = ogr.Geometry(ogr.wkbLineString25D)
             perp_line.AddPoint(point_x - max_extent * perp_dx, point_y - max_extent * perp_dy)
             perp_line.AddPoint(point_x + max_extent * perp_dx, point_y + max_extent * perp_dy)
 
@@ -1885,9 +1897,13 @@ def create_grid_from_division_points(
                         continue
 
                     # Handle both single and multipart results
-                    if difference.GetGeometryName() == "POLYGON":
+                    if difference.GetGeometryName() in ("POLYGON", "POLYGON Z", "POLYGON25D"):
                         new_polys.append(difference)
-                    elif difference.GetGeometryName() == "MULTIPOLYGON":
+                    elif difference.GetGeometryName() in (
+                        "MULTIPOLYGON",
+                        "MULTIPOLYGON Z",
+                        "MULTIPOLYGON25D",
+                    ):
                         for j in range(difference.GetGeometryCount()):
                             part = difference.GetGeometryRef(j).Clone()
                             if not part.IsEmpty() and part.Area() > 0.1:  # Filter tiny fragments
@@ -2134,9 +2150,9 @@ def create_grid_from_on_grid(
             # Get the closest intersected setback for this setback_id
             # We need to find which setback geometry this edge belongs to
             # For now, find the closest intersected geometry to either endpoint
-            start_point = ogr.Geometry(ogr.wkbPoint)
+            start_point = ogr.Geometry(ogr.wkbPoint25D)
             start_point.AddPoint(edge_geom.GetX(0), edge_geom.GetY(0))
-            end_point = ogr.Geometry(ogr.wkbPoint)
+            end_point = ogr.Geometry(ogr.wkbPoint25D)
             end_point.AddPoint(edge_geom.GetX(n - 1), edge_geom.GetY(n - 1))
 
             min_start_dist = float("inf")
@@ -2271,7 +2287,7 @@ def create_grid_from_on_grid(
     feature_id = 1
     for setback_id, points in points_by_setback.items():
         for point_x, point_y, distance in points:
-            point_geom = ogr.Geometry(ogr.wkbPoint)
+            point_geom = ogr.Geometry(ogr.wkbPoint25D)
             point_geom.AddPoint(point_x, point_y)
 
             out_feature = ogr.Feature(points_debug_layer.GetLayerDefn())
@@ -2339,7 +2355,7 @@ def create_grid_from_on_grid(
             perp_dy = edge_dx
 
             # Create perpendicular line
-            perp_line = ogr.Geometry(ogr.wkbLineString)
+            perp_line = ogr.Geometry(ogr.wkbLineString25D)
             perp_line.AddPoint(point_x - max_extent * perp_dx, point_y - max_extent * perp_dy)
             perp_line.AddPoint(point_x + max_extent * perp_dx, point_y + max_extent * perp_dy)
 
@@ -2362,9 +2378,13 @@ def create_grid_from_on_grid(
                         continue
 
                     # Handle both single and multipart results
-                    if difference.GetGeometryName() == "POLYGON":
+                    if difference.GetGeometryName() in ("POLYGON", "POLYGON Z", "POLYGON25D"):
                         new_polys.append(difference)
-                    elif difference.GetGeometryName() == "MULTIPOLYGON":
+                    elif difference.GetGeometryName() in (
+                        "MULTIPOLYGON",
+                        "MULTIPOLYGON Z",
+                        "MULTIPOLYGON25D",
+                    ):
                         for j in range(difference.GetGeometryCount()):
                             part = difference.GetGeometryRef(j).Clone()
                             if not part.IsEmpty() and part.Area() > 0.1:
@@ -2527,16 +2547,38 @@ def cleanup_grid_blocks(
             shared_length = 0
             if not intersection.IsEmpty():
                 geom_name = intersection.GetGeometryName()
-                if geom_name in ("LINESTRING", "MULTILINESTRING"):
+                if geom_name in (
+                    "LINESTRING",
+                    "LINESTRING Z",
+                    "LINESTRING25D",
+                    "MULTILINESTRING",
+                    "MULTILINESTRING Z",
+                    "MULTILINESTRING25D",
+                ):
                     shared_length = intersection.Length()
-                elif geom_name in ("POLYGON", "MULTIPOLYGON"):
+                elif geom_name in (
+                    "POLYGON",
+                    "POLYGON Z",
+                    "POLYGON25D",
+                    "MULTIPOLYGON",
+                    "MULTIPOLYGON Z",
+                    "MULTIPOLYGON25D",
+                ):
                     # If intersection is a polygon, they overlap
                     # Use the perimeter of the intersection as shared boundary
                     boundary = intersection.Boundary()
                     if boundary is not None:
-                        if boundary.GetGeometryName() == "LINESTRING":
+                        if boundary.GetGeometryName() in (
+                            "LINESTRING",
+                            "LINESTRING Z",
+                            "LINESTRING25D",
+                        ):
                             shared_length = boundary.Length()
-                        elif boundary.GetGeometryName() == "MULTILINESTRING":
+                        elif boundary.GetGeometryName() in (
+                            "MULTILINESTRING",
+                            "MULTILINESTRING Z",
+                            "MULTILINESTRING25D",
+                        ):
                             for k in range(boundary.GetGeometryCount()):
                                 shared_length += boundary.GetGeometryRef(k).Length()
 
@@ -2596,7 +2638,11 @@ def cleanup_grid_blocks(
                     merged_geom = merged_geom.Buffer(0)
 
                 # If still multipolygon, take largest
-                if merged_geom.GetGeometryName() == "MULTIPOLYGON":
+                if merged_geom.GetGeometryName() in (
+                    "MULTIPOLYGON",
+                    "MULTIPOLYGON Z",
+                    "MULTIPOLYGON25D",
+                ):
                     largest_area = 0
                     largest_poly = None
                     for k in range(merged_geom.GetGeometryCount()):

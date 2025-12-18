@@ -85,7 +85,7 @@ def break_linestring_by_angle(linestring, angle_threshold=60.0):
         end_idx = break_indices[i + 1]
 
         # Create new linestring
-        new_line = ogr.Geometry(ogr.wkbLineString)
+        new_line = ogr.Geometry(ogr.wkbLineString25D)
         for j in range(start_idx, end_idx + 1):
             new_line.AddPoint(linestring.GetX(j), linestring.GetY(j))
 
@@ -112,7 +112,7 @@ def edges_from_ring(ring):
     for i in range(n - 1):
         x1, y1 = ring.GetX(i), ring.GetY(i)
         x2, y2 = ring.GetX(i + 1), ring.GetY(i + 1)
-        line = ogr.Geometry(ogr.wkbLineString)
+        line = ogr.Geometry(ogr.wkbLineString25D)
         line.AddPoint(x1, y1)
         line.AddPoint(x2, y2)
         edges.append(line)
@@ -136,13 +136,13 @@ def extract_edges_from_geom(geom):
 
     gname = geom.GetGeometryName().upper()
 
-    if gname == "POLYGON":
+    if gname in ("POLYGON", "POLYGON Z", "POLYGON25D"):
         # outer + inner rings
         for i in range(geom.GetGeometryCount()):
             ring = geom.GetGeometryRef(i)
             edges.extend(edges_from_ring(ring))
 
-    elif gname == "MULTIPOLYGON":
+    elif gname in ("MULTIPOLYGON", "MULTIPOLYGON Z", "MULTIPOLYGON25D"):
         for p in range(geom.GetGeometryCount()):
             poly = geom.GetGeometryRef(p)
             if poly is None:
@@ -164,9 +164,9 @@ def extract_edges_from_geom(geom):
             boundary = geom.GetBoundary()
             if boundary is not None:
                 bname = boundary.GetGeometryName().upper()
-                if bname == "LINESTRING":
+                if bname in ("LINESTRING", "LINESTRING Z", "LINESTRING25D"):
                     edges.extend(edges_from_ring(boundary))
-                elif bname == "MULTILINESTRING":
+                elif bname in ("MULTILINESTRING", "MULTILINESTRING Z", "MULTILINESTRING25D"):
                     for i in range(boundary.GetGeometryCount()):
                         ring = boundary.GetGeometryRef(i)
                         edges.extend(edges_from_ring(ring))
@@ -291,7 +291,7 @@ def merge_connected_edges(edges_with_info):
 
         # Create merged linestrings from chains
         for chain in chains:
-            merged_line = ogr.Geometry(ogr.wkbLineString)
+            merged_line = ogr.Geometry(ogr.wkbLineString25D)
 
             # Add points from first edge
             first_geom = chain[0]["geom"]

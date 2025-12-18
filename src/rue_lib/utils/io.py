@@ -33,7 +33,12 @@ def save_json(path: Path, data: dict[str, Any]) -> None:
 
 def to_feature(geom: BaseGeometry, props: dict[str, Any] | None = None) -> dict:
     """Convert a Shapely geometry to a GeoJSON feature."""
-    return {"type": "Feature", "properties": props or {}, "geometry": mapping(geom)}
+    geometry = mapping(geom)
+    # Ensure coordinates are lists, not tuples (GeoJSON spec requirement)
+    coordinates = geometry.get("coordinates")
+    if isinstance(coordinates, tuple):
+        geometry["coordinates"] = list(coordinates)
+    return {"type": "Feature", "properties": props or {}, "geometry": geometry}
 
 
 def prepare_geopackage(output_path: str | Path, template_path: str | Path | None = None) -> Path:

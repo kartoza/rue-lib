@@ -119,6 +119,11 @@
             echo "  scripts/start_qgis_ltr.sh"
             echo "  scripts/start_qgis_master.sh"
             echo ""
+            echo -e "$RESET$ORANGE \n__________________________________________________________________\n"
+            echo "To run the RUE text user interface wizard:"
+            echo -e "$RESET$ORANGE \n__________________________________________________________________\n"
+            echo ""
+            echo "  scripts/rue_tui.py"
 
           '';
         };
@@ -169,8 +174,13 @@
               export PYTHONPATH="${self}/src:$PYTHONPATH"
               export GDAL_DATA="${pkgs.gdal}/share/gdal"
               export PROJ_LIB="${pkgs.proj}/share/proj"
-              cd ${self}
+              # Create a writable temp directory for coverage data
+              TEMP_DIR=$(mktemp -d)
+              cp -r ${self}/* "$TEMP_DIR/" 2>/dev/null || true
+              cd "$TEMP_DIR"
+              export COVERAGE_FILE="$TEMP_DIR/.coverage"
               ${pythonEnv}/bin/pytest tests/ --cov=rue_lib --cov-report=html --cov-report=term
+              echo "Coverage report written to $TEMP_DIR/htmlcov/"
             '');
           };
 

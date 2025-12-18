@@ -69,6 +69,11 @@ addopts = [
     "--strict-markers",
     "--strict-config",
     "--verbose",
+    "--cov=src/rue_lib",
+    "--cov-report=term-missing",
+    "--cov-report=html",
+    "--cov-branch",
+    "--tb=short",
 ]
 
 [tool.ruff]
@@ -90,19 +95,30 @@ ignore = []
 [tool.ruff.lint.per-file-ignores]
 "__init__.py" = ["F401"]
 
-[tool.bandit]
-exclude_dirs = ["tests", "test_*.py", "viewer/"]
-skips = ["B101", "B404", "B603", "B607", "B110", "B112"]
-
 [tool.coverage.run]
-source = ["rue_lib"]
-omit = ["*/tests/*"]
+source = ["src/rue_lib"]
+branch = true
+omit = [
+    "tests/*",
+    "*/test_*.py",
+    "*/viewer/*",
+]
 
 [tool.coverage.report]
+show_missing = true
+precision = 2
 exclude_lines = [
     "pragma: no cover",
     "def __repr__",
     "raise AssertionError",
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
 ]
+
+[tool.coverage.html]
+directory = "htmlcov"
+
+[tool.bandit]
+exclude_dirs = ["tests", "test_*.py", "viewer/"]
+skips = ["B101", "B404", "B603", "B607", "B110", "B112"]

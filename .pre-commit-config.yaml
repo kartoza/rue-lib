@@ -48,3 +48,7 @@ repos:
       - id: python-check-blanket-type-ignore
       - id: python-no-eval
       - id: python-use-type-annotations
+
+  # Note: Tests are run via nix commands (nix run .#test or nix run .#test-cov)
+  # Pre-commit focuses on code quality checks above.
+  # Run 'nix run .#test' before committing to ensure tests pass.

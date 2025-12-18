@@ -73,7 +73,7 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     extract_by_geometry_type(
         output_path,
         input_layer_name,
-        ["POLYGON", "MULTIPOLYGON"],
+        ["POLYGON", "POLYGON Z", "POLYGON25D", "MULTIPOLYGON", "MULTIPOLYGON Z", "MULTIPOLYGON25D"],
         output_path,
         input_blocks_layer_name,
     )
@@ -94,7 +94,14 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
     extract_by_geometry_type(
         output_path,
         input_layer_name,
-        ["LINESTRING", "MULTILINESTRING"],
+        [
+            "LINESTRING",
+            "LINESTRING Z",
+            "LINESTRING25D",
+            "MULTILINESTRING",
+            "MULTILINESTRING Z",
+            "MULTILINESTRING25D",
+        ],
         output_path,
         input_roads_layer_name,
     )

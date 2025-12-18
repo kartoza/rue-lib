@@ -44,7 +44,7 @@ def allocate_open_spaces(
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon)
+    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon25D)
 
     # Create fields (copy from blocks layer plus type)
     layer_defn = blocks_layer.GetLayerDefn()
@@ -321,7 +321,7 @@ def allocate_amenities(
     if output_ds.GetLayerByName(output_layer_name):
         output_ds.DeleteLayer(output_layer_name)
 
-    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon)
+    output_layer = output_ds.CreateLayer(output_layer_name, blocks_srs, ogr.wkbPolygon25D)
 
     # Create fields (copy from blocks layer plus type)
     layer_defn = blocks_layer.GetLayerDefn()

@@ -27,7 +27,7 @@ class TestCreateLocalStreetsZone:
             srs.ImportFromEPSG(32633)
 
             # Create test layer with grid blocks
-            layer = ds.CreateLayer("test_grid", srs, ogr.wkbPolygon)
+            layer = ds.CreateLayer("test_grid", srs, ogr.wkbPolygon25D)
 
             # Create a simple square grid block (100m x 100m)
             feature = ogr.Feature(layer.GetLayerDefn())
@@ -37,7 +37,7 @@ class TestCreateLocalStreetsZone:
             ring.AddPoint(100, 100)
             ring.AddPoint(0, 100)
             ring.AddPoint(0, 0)
-            poly = ogr.Geometry(ogr.wkbPolygon)
+            poly = ogr.Geometry(ogr.wkbPolygon25D)
             poly.AddGeometry(ring)
             feature.SetGeometry(poly)
             layer.CreateFeature(feature)
@@ -50,7 +50,7 @@ class TestCreateLocalStreetsZone:
             ring2.AddPoint(250, 100)
             ring2.AddPoint(150, 100)
             ring2.AddPoint(150, 0)
-            poly2 = ogr.Geometry(ogr.wkbPolygon)
+            poly2 = ogr.Geometry(ogr.wkbPolygon25D)
             poly2.AddGeometry(ring2)
             feature2.SetGeometry(poly2)
             layer.CreateFeature(feature2)

@@ -16,7 +16,7 @@ def line_end_intersects_buffer(line: ogr.Geometry, buffer_geom: ogr.Geometry) ->
     if n_points < 2:
         return False
     end_x, end_y, _ = line.GetPoint(n_points - 1)
-    end_pt = ogr.Geometry(ogr.wkbPoint)
+    end_pt = ogr.Geometry(ogr.wkbPoint25D)
     end_pt.AddPoint(end_x, end_y)
     return end_pt.Intersects(buffer_geom)
 
@@ -37,12 +37,12 @@ def split_polygon_by_line(poly: ogr.Geometry, line: ogr.Geometry, buffer_width: 
     result_polys = []
 
     gtype = diff.GetGeometryType()
-    if gtype == ogr.wkbPolygon:
+    if gtype in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         result_polys.append(diff.Clone())
-    elif gtype in (ogr.wkbMultiPolygon, ogr.wkbGeometryCollection):
+    elif gtype in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D, ogr.wkbGeometryCollection):
         for i in range(diff.GetGeometryCount()):
             g = diff.GetGeometryRef(i)
-            if g is not None and g.GetGeometryType() == ogr.wkbPolygon:
+            if g is not None and g.GetGeometryType() in (ogr.wkbPolygon, ogr.wkbPolygon25D):
                 result_polys.append(g.Clone())
     if not result_polys:
         result_polys.append(poly.Clone())
@@ -378,7 +378,7 @@ def subdivide_blocks_by_concave_points(
             next_x = next_point["x"]
             next_y = next_point["y"]
 
-            concave_point_geom = ogr.Geometry(ogr.wkbPoint)
+            concave_point_geom = ogr.Geometry(ogr.wkbPoint25D)
             concave_point_geom.AddPoint(point_x, point_y)
 
             dir1_x = prev_x - point_x
@@ -408,11 +408,11 @@ def subdivide_blocks_by_concave_points(
             perp1_x = -dir1_y
             perp1_y = dir1_x
 
-            test_line1_pos = ogr.Geometry(ogr.wkbLineString)
+            test_line1_pos = ogr.Geometry(ogr.wkbLineString25D)
             test_line1_pos.AddPoint(offset1_x, offset1_y)
             test_line1_pos.AddPoint(offset1_x + perp1_x * 5.0, offset1_y + perp1_y * 5.0)
 
-            test_line1_neg = ogr.Geometry(ogr.wkbLineString)
+            test_line1_neg = ogr.Geometry(ogr.wkbLineString25D)
             test_line1_neg.AddPoint(offset1_x, offset1_y)
             test_line1_neg.AddPoint(offset1_x - perp1_x * 5.0, offset1_y - perp1_y * 5.0)
 
@@ -425,7 +425,7 @@ def subdivide_blocks_by_concave_points(
             if direction1_x is not None:
                 current_length = 1.0
                 while current_length < 1000.0:
-                    test_line = ogr.Geometry(ogr.wkbLineString)
+                    test_line = ogr.Geometry(ogr.wkbLineString25D)
                     test_line.AddPoint(offset1_x, offset1_y)
                     test_line.AddPoint(
                         offset1_x + direction1_x * current_length,
@@ -437,7 +437,7 @@ def subdivide_blocks_by_concave_points(
 
                     current_length += 5.0
 
-                line1 = ogr.Geometry(ogr.wkbLineString)
+                line1 = ogr.Geometry(ogr.wkbLineString25D)
                 line1.AddPoint(offset1_x, offset1_y)
                 line1.AddPoint(
                     offset1_x + direction1_x * max(current_length, 1.0),
@@ -459,11 +459,11 @@ def subdivide_blocks_by_concave_points(
             perp2_x = -dir2_y
             perp2_y = dir2_x
 
-            test_line2_pos = ogr.Geometry(ogr.wkbLineString)
+            test_line2_pos = ogr.Geometry(ogr.wkbLineString25D)
             test_line2_pos.AddPoint(offset2_x, offset2_y)
             test_line2_pos.AddPoint(offset2_x + perp2_x * 5.0, offset2_y + perp2_y * 5.0)
 
-            test_line2_neg = ogr.Geometry(ogr.wkbLineString)
+            test_line2_neg = ogr.Geometry(ogr.wkbLineString25D)
             test_line2_neg.AddPoint(offset2_x, offset2_y)
             test_line2_neg.AddPoint(offset2_x - perp2_x * 5.0, offset2_y - perp2_y * 5.0)
 
@@ -476,7 +476,7 @@ def subdivide_blocks_by_concave_points(
             if direction2_x is not None:
                 current_length = 1.0
                 while current_length < 200.0:
-                    test_line = ogr.Geometry(ogr.wkbLineString)
+                    test_line = ogr.Geometry(ogr.wkbLineString25D)
                     test_line.AddPoint(offset2_x, offset2_y)
                     test_line.AddPoint(
                         offset2_x + direction2_x * current_length,
@@ -488,7 +488,7 @@ def subdivide_blocks_by_concave_points(
 
                     current_length += 5.0
 
-                line2 = ogr.Geometry(ogr.wkbLineString)
+                line2 = ogr.Geometry(ogr.wkbLineString25D)
                 line2.AddPoint(offset2_x, offset2_y)
                 line2.AddPoint(
                     offset2_x + direction2_x * max(current_length, 1.0),
@@ -508,7 +508,7 @@ def subdivide_blocks_by_concave_points(
 
     concave_points_by_block = {}
     for c_block_id, concave_x, concave_y in concave_points_set:
-        pt = ogr.Geometry(ogr.wkbPoint)
+        pt = ogr.Geometry(ogr.wkbPoint25D)
         pt.AddPoint(concave_x, concave_y)
         concave_points_by_block.setdefault(c_block_id, []).append(
             {"geom": pt, "x": concave_x, "y": concave_y}
@@ -525,7 +525,7 @@ def subdivide_blocks_by_concave_points(
         concave_x = line_data["concave_x"]
         concave_y = line_data["concave_y"]
 
-        conc_pt = ogr.Geometry(ogr.wkbPoint)
+        conc_pt = ogr.Geometry(ogr.wkbPoint25D)
         conc_pt.AddPoint(concave_x, concave_y)
 
         keys_for_block = [k for k in working_blocks.keys() if k[0] == block_id_for_line]
@@ -581,7 +581,7 @@ def subdivide_blocks_by_concave_points(
     if out_ds is None:
         raise ValueError(f"Could not open {output_gpkg} for writing")
 
-    lines_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
+    lines_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString25D)
 
     lines_layer.CreateField(ogr.FieldDefn("line_id", ogr.OFTInteger))
     lines_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
@@ -601,7 +601,7 @@ def subdivide_blocks_by_concave_points(
         out_feat = None
 
     blocks_layer_name = f"{output_layer_name}_blocks"
-    blocks_layer = create_or_replace_layer(out_ds, blocks_layer_name, srs, ogr.wkbPolygon)
+    blocks_layer = create_or_replace_layer(out_ds, blocks_layer_name, srs, ogr.wkbPolygon25D)
 
     blocks_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
     blocks_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))

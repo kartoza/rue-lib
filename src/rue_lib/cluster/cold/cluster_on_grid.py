@@ -141,7 +141,7 @@ def extract_off_grid_adjacent_lines(
         orig_id_val = feat.GetField(orig_id_idx) if orig_id_idx != -1 else None
         geom_type = shared_boundary.GetGeometryType()
         if geom_type not in (
-            ogr.wkbLineString,
+            ogr.wkbLineString25D,
             ogr.wkbLineString25D,
             ogr.wkbMultiLineString,
             ogr.wkbGeometryCollection,
@@ -152,12 +152,11 @@ def extract_off_grid_adjacent_lines(
                 continue
             wkt = line_part.ExportToWkt()
             if wkt:
-                wkt_2d = wkt.replace(" Z ", " ").replace("LINESTRING Z", "LINESTRING")
-                line_2d = ogr.CreateGeometryFromWkt(wkt_2d)
-                if line_2d and not line_2d.IsEmpty() and line_2d.Length() > 0.01:
+                line_geom = ogr.CreateGeometryFromWkt(wkt)
+                if line_geom and not line_geom.IsEmpty() and line_geom.Length() > 0.01:
                     lines_to_write.append(
                         {
-                            "geometry": line_2d,
+                            "geometry": line_geom,
                             "orig_id": orig_id_val if orig_id_val is not None else next_id,
                         }
                     )
@@ -506,7 +505,7 @@ def merge_vertices_into_lines_by_angle(
             target_angle = b["angle_deg"]
             is_break = 1 if target_angle <= angle_threshold_deg else 0
 
-            line = ogr.Geometry(ogr.wkbLineString)
+            line = ogr.Geometry(ogr.wkbLineString25D)
             line.AddPoint(a["x"], a["y"])
             line.AddPoint(b["x"], b["y"])
 
@@ -554,7 +553,7 @@ def merge_vertices_into_lines_by_angle(
             coords.append((geom.GetX(1), geom.GetY(1)))
 
         # Create merged LineString
-        merged_line = ogr.Geometry(ogr.wkbLineString)
+        merged_line = ogr.Geometry(ogr.wkbLineString25D)
         for x, y in coords:
             merged_line.AddPoint(x, y)
 
@@ -582,7 +581,7 @@ def merge_vertices_into_lines_by_angle(
         out_ds,
         output_layer_name,
         srs,
-        ogr.wkbLineString,
+        ogr.wkbLineString25D,
         [
             ("orig_id", ogr.OFTInteger),
             ("line_id", ogr.OFTInteger),
@@ -935,7 +934,7 @@ def sample_points_along_front_lines(
         out_ds,
         f"{output_layer_name}",
         srs,
-        ogr.wkbPoint,
+        ogr.wkbPoint25D,
         [
             ("id", ogr.OFTInteger),
             ("group_id", ogr.OFTInteger),

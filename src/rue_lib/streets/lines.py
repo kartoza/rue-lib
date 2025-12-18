@@ -69,7 +69,7 @@ def extract_arterial_edge_lines(
 
         points = []
         for i in range(exterior_ring.GetPointCount()):
-            pt = ogr.Geometry(ogr.wkbPoint)
+            pt = ogr.Geometry(ogr.wkbPoint25D)
             pt.AddPoint(exterior_ring.GetX(i), exterior_ring.GetY(i))
             points.append(pt)
 
@@ -115,7 +115,7 @@ def extract_arterial_edge_lines(
         result_lines = []
         for seq in sequences:
             if len(seq) >= 3:
-                line = ogr.Geometry(ogr.wkbLineString)
+                line = ogr.Geometry(ogr.wkbLineString25D)
                 for idx in seq:
                     line.AddPoint(exterior_ring.GetX(idx), exterior_ring.GetY(idx))
                 result_lines.append(line)
@@ -125,11 +125,11 @@ def extract_arterial_edge_lines(
     result_lines = []
     geom_type = ogr.GT_Flatten(clipped_geom.GetGeometryType())
 
-    if geom_type == ogr.wkbPolygon:
+    if geom_type in (ogr.wkbPolygon, ogr.wkbPolygon25D):
         lines = process_polygon(clipped_geom)
         if lines:
             result_lines.extend(lines)
-    elif geom_type == ogr.wkbMultiPolygon:
+    elif geom_type in (ogr.wkbMultiPolygon, ogr.wkbMultiPolygon25D):
         for i in range(clipped_geom.GetGeometryCount()):
             lines = process_polygon(clipped_geom.GetGeometryRef(i))
             if lines:
@@ -349,7 +349,7 @@ def create_perpendicular_lines(
                 x2 = x - perp_dx * perpendicular_length
                 y2 = y - perp_dy * perpendicular_length
 
-                perp_line = ogr.Geometry(ogr.wkbLineString)
+                perp_line = ogr.Geometry(ogr.wkbLineString25D)
                 perp_line.AddPoint(x2, y2)
                 perp_line.AddPoint(x1, y1)
 
@@ -362,7 +362,7 @@ def create_perpendicular_lines(
                 if not clipped_line.IsEmpty():
                     geom_type = ogr.GT_Flatten(clipped_line.GetGeometryType())
 
-                    if geom_type == ogr.wkbLineString:
+                    if geom_type in (ogr.wkbLineString, ogr.wkbLineString25D):
                         if clipped_line.GetPointCount() >= 2:
                             out_feature = ogr.Feature(output_layer.GetLayerDefn())
                             out_feature.SetGeometry(clipped_line)
@@ -371,7 +371,7 @@ def create_perpendicular_lines(
                             output_layer.CreateFeature(out_feature)
                             out_feature = None
                             perp_count += 1
-                    elif geom_type == ogr.wkbMultiLineString:
+                    elif geom_type in (ogr.wkbMultiLineString, ogr.wkbMultiLineString25D):
                         for i in range(clipped_line.GetGeometryCount()):
                             line_part = clipped_line.GetGeometryRef(i)
                             if line_part.GetPointCount() >= 2:

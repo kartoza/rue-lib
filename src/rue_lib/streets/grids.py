@@ -653,8 +653,8 @@ def grids_from_site(
 
             geom = ogr.CreateGeometryFromWkt(cell.wkt)
             # Ensure polygon is converted to multipolygon for compatibility
-            if geom.GetGeometryType() == ogr.wkbPolygon:
-                multi_geom = ogr.Geometry(ogr.wkbMultiPolygon)
+            if geom.GetGeometryType() in (ogr.wkbPolygon, ogr.wkbPolygon25D):
+                multi_geom = ogr.Geometry(ogr.wkbMultiPolygon25D)
                 multi_geom.AddGeometry(geom)
                 feat.SetGeometry(multi_geom)
             else:
