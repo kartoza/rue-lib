@@ -1,5 +1,4 @@
 import geopandas as gpd
-import pandas as pd
 from shapely.ops import unary_union
 
 from rue_lib.core.definitions import ClusterTypes, ColorTypes
@@ -289,16 +288,19 @@ def merge_final_cold_clusters(
     input_gpkg: str,
     on_grid_clusters_layer_name: str,
     off_grid_clusters_layer_name: str,
+    subdivided_blocks_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
 ) -> str:
     """
     Merge final on-grid and off-grid cold clusters into a single layer.
+    Assigns block_id based on subdivided_blocks_layer using spatial relationship.
 
     Args:
         input_gpkg: Path to input GeoPackage
         on_grid_clusters_layer_name: Name of the on-grid clusters layer
         off_grid_clusters_layer_name: Name of the off-grid clusters layer
+        subdivided_blocks_layer_name: Name of the subdivided blocks layer
         output_gpkg: Path to output GeoPackage
         output_layer_name: Name for merged output layer
 
@@ -310,9 +312,11 @@ def merge_final_cold_clusters(
     # Load both layers
     gdf_on_grid = gpd.read_file(input_gpkg, layer=on_grid_clusters_layer_name)
     gdf_off_grid = gpd.read_file(input_gpkg, layer=off_grid_clusters_layer_name)
+    gdf_subdivided = gpd.read_file(input_gpkg, layer=subdivided_blocks_layer_name)
 
     print(f"  Loaded {len(gdf_on_grid)} on-grid clusters")
     print(f"  Loaded {len(gdf_off_grid)} off-grid clusters")
+    print(f"  Loaded {len(gdf_subdivided)} subdivided blocks")
 
     if gdf_on_grid.empty and gdf_off_grid.empty:
         print("  Warning: both input layers are empty")
@@ -321,15 +325,43 @@ def merge_final_cold_clusters(
         gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
 
-    if gdf_on_grid.empty:
-        gdf_merged = gdf_off_grid.copy()
-    elif gdf_off_grid.empty:
-        gdf_merged = gdf_on_grid.copy()
-    else:
-        gdf_merged = gpd.GeoDataFrame(
-            pd.concat([gdf_on_grid, gdf_off_grid], ignore_index=True),
-            crs=gdf_on_grid.crs,
-        )
+    all_clusters = []
+
+    for gdf, cluster_type in [(gdf_on_grid, "on_grid"), (gdf_off_grid, "off_grid")]:
+        if gdf.empty:
+            continue
+
+        for idx, cluster in gdf.iterrows():
+            cluster_dict = cluster.to_dict()
+
+            touching_blocks = gdf_subdivided[gdf_subdivided.intersects(cluster.geometry.centroid)]
+
+            if not touching_blocks.empty:
+                subdivided_block_id = touching_blocks.iloc[0]["id"]
+                cluster_dict["block_id"] = int(subdivided_block_id) + 100
+                print(
+                    f"  {cluster_type} cluster {idx} touches "
+                    f"subdivided block {subdivided_block_id}, "
+                    f"assigned block_id {cluster_dict['block_id']}"
+                )
+            elif "block_id" in cluster_dict:
+                print(
+                    f"  {cluster_type} cluster {idx} does not touch any subdivided block, "
+                    f"keeping original block_id {cluster_dict.get('block_id')}"
+                )
+
+            all_clusters.append(cluster_dict)
+
+    if not all_clusters:
+        print("  Warning: no clusters to merge")
+        gdf_empty = gpd.GeoDataFrame([], geometry=[])
+        gdf_empty.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
+
+    gdf_merged = gpd.GeoDataFrame(
+        all_clusters,
+        crs=gdf_on_grid.crs if not gdf_on_grid.empty else gdf_off_grid.crs,
+    )
 
     gdf_merged["id"] = range(len(gdf_merged))
     gdf_merged.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")

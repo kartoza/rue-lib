@@ -1,9 +1,11 @@
 # src/rue_lib/public/operations.py
+
 import geopandas as gpd
 import pandas as pd
 from osgeo import ogr
 
-from rue_lib.core.definitions import ClusterTypes, ColorTypes
+from rue_lib.core.definitions import BlockTypes, ClusterTypes, ColorTypes
+from rue_lib.public.open_space import find_adjacent_blocks
 
 
 def allocate_cluster_index(
@@ -28,6 +30,8 @@ def allocate_cluster_index(
     Returns:
         The updated layer name.
     """
+    # Prefer reading with pyogrio (if available) so we can use the layer FID as
+    # a stable fallback identifier when no explicit unique `id` column exists.
     gdf = gpd.read_file(output_gpkg, layer=layer_name)
     if gdf.empty:
         gdf[id_field] = pd.Series(dtype="int64")
@@ -41,7 +45,7 @@ def allocate_cluster_index(
             id_field not in gdf.columns or gdf[id_field].isna().any() or not gdf[id_field].is_unique
         )
         if needs_reassign:
-            if gdf.index.name == "fid":
+            if getattr(gdf.index, "name", None) == "fid":
                 fid_min = int(gdf.index.min())
                 gdf[id_field] = (gdf.index.astype("int64") - fid_min + start_at).astype("int64")
             else:
@@ -53,6 +57,215 @@ def allocate_cluster_index(
     return layer_name
 
 
+def _allocate_single_amenity(
+    row,
+    *,
+    all_rows: list,
+    allocated: set,
+    current_area: float,
+    group_id: int,
+    site_id: int,
+    group_rank: int,
+    parcel_centroid,
+    is_root: int = 0,
+) -> float:
+    """Allocate a single cluster as amenity and return updated area."""
+    idx = row.name
+    if idx in allocated:
+        return current_area
+
+    out = row.copy()
+    out["allocation"] = "amenity"
+    out["group_id"] = group_id
+    out["is_root"] = is_root
+    out["site_id"] = site_id
+    out["group_rank"] = group_rank
+    out["dist_to_center"] = row["centroid"].distance(parcel_centroid)
+
+    out["type"] = f"{out['type']}_am"
+    if "cluster_type" in out:
+        out["cluster_type"] = f"{out['cluster_type']}_am"
+    try:
+        out["color"] = ColorTypes[out["type"]]
+    except KeyError:
+        # Keep the existing color if we don't have a mapping for this type.
+        pass
+
+    all_rows.append(out)
+    allocated.add(idx)
+    return current_area + row["block_area"]
+
+
+def _order_block_ids_by_distance(
+    block_ids: list[int], blocks_in_site_without_os: gpd.GeoDataFrame
+) -> list[int]:
+    """Order block_ids by the distance of their closest off_grid0 (fallback: closest any)."""
+    scored: list[tuple[float, int]] = []
+    for bid in block_ids:
+        subset = blocks_in_site_without_os[blocks_in_site_without_os["block_id"] == bid]
+        off0 = subset[subset["type"] == ClusterTypes.OFF_GRID_WARM]
+        if not off0.empty:
+            score = float(off0["distance"].min())
+        else:
+            score = float(subset["distance"].min())
+        scored.append((score, bid))
+    scored.sort(key=lambda t: t[0])
+    return [bid for _, bid in scored]
+
+
+def _allocate_in_block(
+    block_id: int,
+    cluster_type_start: ClusterTypes,
+    *,
+    blocks_in_site_without_os: gpd.GeoDataFrame,
+    allocated: set,
+    all_allocated_blocks: list,
+    current_area: float,
+    group_rank: int,
+    required_amen_area: float,
+    site_id: int,
+    parcel_centroid,
+) -> tuple[float, int]:
+    """Allocate amenities within a specific block.
+
+    Returns:
+        Tuple of (updated_current_area, updated_group_rank)
+    """
+    in_block = blocks_in_site_without_os[blocks_in_site_without_os["block_id"] == block_id].copy()
+    if in_block.empty:
+        return current_area, group_rank
+
+    budget_area = 0.3 * sum(in_block["block_area"])
+    allocated_area_in_block = sum(in_block.loc[in_block.index.isin(allocated), "block_area"])
+
+    allocated_in_block = set(in_block.index).intersection(allocated)
+
+    if allocated_area_in_block > budget_area:
+        return current_area, group_rank
+
+    off0_candidates = in_block[
+        (in_block["type"] == cluster_type_start) & ~in_block.index.isin(allocated)
+    ].copy()
+    if off0_candidates.empty:
+        return current_area, group_rank
+
+    group_rank += 1
+    group_id = int(block_id) if block_id != -1 else group_rank
+
+    off0_candidates = off0_candidates.sort_values("distance")
+    seed_off_grid0 = off0_candidates.iloc[0]
+    seed_loc = None
+
+    if current_area < required_amen_area and allocated_area_in_block < budget_area:
+        current_area = _allocate_single_amenity(
+            seed_off_grid0,
+            all_rows=all_allocated_blocks,
+            allocated=allocated,
+            current_area=current_area,
+            group_id=group_id,
+            site_id=site_id,
+            group_rank=group_rank,
+            parcel_centroid=parcel_centroid,
+            is_root=1,
+        )
+        allocated_area_in_block += seed_off_grid0["block_area"]
+
+    if current_area < required_amen_area and allocated_area_in_block < budget_area:
+        loc_adj = find_adjacent_blocks(seed_off_grid0, in_block, ClusterTypes.ON_GRID_LOC)
+        loc_adj = loc_adj[~loc_adj.index.isin(allocated)]
+        if not loc_adj.empty:
+            loc_adj = loc_adj.copy()
+            loc_adj["d_seed"] = loc_adj["centroid"].distance(seed_off_grid0["centroid"])
+            seed_loc = loc_adj.sort_values("d_seed").iloc[0]
+            current_area = _allocate_single_amenity(
+                seed_loc,
+                all_rows=all_allocated_blocks,
+                allocated=allocated,
+                current_area=current_area,
+                group_id=group_id,
+                site_id=site_id,
+                group_rank=group_rank,
+                parcel_centroid=parcel_centroid,
+            )
+            allocated_area_in_block += seed_loc["block_area"]
+
+    if current_area < required_amen_area and allocated_area_in_block < budget_area:
+        off0_adj = find_adjacent_blocks(seed_off_grid0, in_block, cluster_type_start)
+        off0_adj = off0_adj[~off0_adj.index.isin(allocated)]
+        if not off0_adj.empty:
+            current_area = _allocate_single_amenity(
+                off0_adj.iloc[0],
+                all_rows=all_allocated_blocks,
+                allocated=allocated,
+                current_area=current_area,
+                group_id=group_id,
+                site_id=site_id,
+                group_rank=group_rank,
+                parcel_centroid=parcel_centroid,
+            )
+            allocated_in_block.add(off0_adj.iloc[0].name)
+            allocated_area_in_block += off0_adj.iloc[0]["block_area"]
+
+    while current_area < required_amen_area and allocated_area_in_block < budget_area:
+        next_off_grid0 = None
+        for allocated_idx in list(allocated_in_block):
+            adj = find_adjacent_blocks(in_block.loc[allocated_idx], in_block, cluster_type_start)
+            adj = adj[~adj.index.isin(allocated)]
+            if not adj.empty:
+                next_off_grid0 = adj.sort_values("distance").iloc[0]
+                break
+
+        if next_off_grid0 is None:
+            break
+
+        if allocated_area_in_block >= budget_area:
+            break
+
+        current_area = _allocate_single_amenity(
+            next_off_grid0,
+            all_rows=all_allocated_blocks,
+            allocated=allocated,
+            current_area=current_area,
+            group_id=group_id,
+            site_id=site_id,
+            group_rank=group_rank,
+            parcel_centroid=parcel_centroid,
+        )
+        allocated_area_in_block += next_off_grid0["block_area"]
+
+        if current_area >= required_amen_area or allocated_area_in_block >= budget_area:
+            break
+
+        locs = find_adjacent_blocks(next_off_grid0, in_block, ClusterTypes.ON_GRID_LOC)
+        locs = locs[~locs.index.isin(allocated)]
+        if locs.empty:
+            continue
+
+        if seed_loc is not None:
+            locs = locs.copy()
+            locs["d_loc"] = locs["centroid"].distance(seed_loc["centroid"])
+            chosen_loc = locs.sort_values("d_loc", ascending=False).iloc[0]
+        else:
+            chosen_loc = locs.sort_values("distance").iloc[0]
+
+        if allocated_area_in_block >= budget_area:
+            break
+
+        current_area = _allocate_single_amenity(
+            chosen_loc,
+            all_rows=all_allocated_blocks,
+            allocated=allocated,
+            current_area=current_area,
+            group_id=group_id,
+            site_id=site_id,
+            group_rank=group_rank,
+            parcel_centroid=parcel_centroid,
+        )
+        allocated_area_in_block += chosen_loc["block_area"]
+
+    return current_area, group_rank
+
+
 def allocate_amenities(
     output_gpkg: str,
     parcel_layer_name: str,
@@ -61,46 +274,34 @@ def allocate_amenities(
     output_layer_name: str,
     amen_percent: float = 10.0,
 ) -> str:
-    """
-    Allocate amenities from remaining blocks after open space allocation.
+    """Allocate amenities from the remaining (non-open-space) clusters.
 
-    Implements Mobius logic:
-    1. Get remaining blocks (not allocated as open space)
-    2. Filter through parts (off_grid blocks and their attached on-grid parts)
-    3. Sort by distance to site center
-    4. Allocate until amenity percentage requirement is met
-
-    Args:
-        output_gpkg: Path to output GeoPackage
-        parcel_layer_name: Name for parcel layer
-        block_layer_name: Name for blocks layer
-        open_spaces_layer_name: Name of the open spaces layer
-        output_layer_name: Name for output amenities layer
-        amen_percent: Percentage of site area to allocate as amenities
-
-    Returns:
-        Name of the output layer
+    Strategy (mirrors the intent of `allocate_open_spaces`, but for amenities):
+    - For each parcel/site, allocate amenities by `block_id` groups.
+    - Seed a block with: center `off_grid0` + exactly one adjacent `loc` (never `loc_loc`).
+    - If still under the required area, add one adjacent `off_grid0` (no extra loc required).
+    - If still under the required area, keep expanding inside that same `block_id` by:
+      `off_grid0` adjacent to an already allocated cluster, then choose a `loc` adjacent to it
+      that is furthest from the initial `loc` (to spread allocation).
+    - Stop expanding that `block_id` after ~30% of its clusters are allocated, then move to
+      another `block_id` (prefer blocks with no open space).
     """
     print(f"Allocating amenities ({amen_percent}% of site area)...")
 
-    # Load input layers
     gdf_blocks = gpd.read_file(output_gpkg, layer=block_layer_name)
     gdf_parcels = gpd.read_file(output_gpkg, layer=parcel_layer_name)
     gdf_open_spaces = gpd.read_file(output_gpkg, layer=open_spaces_layer_name)
 
-    # Ensure we have an id column to track original feature IDs
     if "cluster_index" not in gdf_blocks.columns:
         gdf_blocks["cluster_index"] = range(len(gdf_blocks))
 
-    # Get all open space block IDs to exclude them
-    open_space_ids = set()
+    open_space_ids: set[int] = set()
     if "cluster_index" in gdf_open_spaces.columns:
         open_space_ids = set(gdf_open_spaces["cluster_index"].dropna().astype(int))
 
-    all_allocated_blocks = []
+    all_allocated_blocks: list = []
     site_id = 0
 
-    # Process each parcel/site
     for _, parcel_row in gdf_parcels.iterrows():
         site_id += 1
         parcel_geom = parcel_row.geometry
@@ -109,98 +310,136 @@ def allocate_amenities(
 
         print(f"  Site {site_id}: area={site_area:.2f}, required_amen={required_amen_area:.2f}")
 
-        # Get all blocks that intersect this parcel (excluding open spaces)
-        blocks_in_site = gdf_blocks[
-            gdf_blocks.intersects(parcel_geom) & ~gdf_blocks["cluster_index"].isin(open_space_ids)
-        ].copy()
+        blocks_in_site = gdf_blocks[gdf_blocks.intersects(parcel_geom)].copy()
+        warm_blocks = blocks_in_site[blocks_in_site["cluster_type"] != BlockTypes.COLD_GRID]
+        cold_blocks = blocks_in_site[blocks_in_site["cluster_type"] == BlockTypes.COLD_GRID]
+        blocks_in_site_without_os = blocks_in_site.copy()
+        if open_space_ids:
+            blocks_in_site_without_os = blocks_in_site[
+                ~blocks_in_site["cluster_index"].isin(open_space_ids)
+            ].copy()
 
-        if blocks_in_site.empty:
+        if blocks_in_site_without_os.empty:
             print(f"    No remaining blocks found for site {site_id}")
             continue
 
-        print(f"    Remaining blocks found for site {site_id}: {len(blocks_in_site)}")
-
+        print(f"    Remaining blocks found for site {site_id}: {len(blocks_in_site_without_os)}")
         parcel_centroid = parcel_geom.centroid
-        blocks_in_site["centroid"] = blocks_in_site.geometry.centroid
-        blocks_in_site["distance"] = blocks_in_site["centroid"].distance(parcel_centroid)
-        blocks_in_site["block_area"] = blocks_in_site.geometry.area
+        blocks_in_site_without_os["centroid"] = blocks_in_site_without_os.geometry.centroid
+        blocks_in_site_without_os["distance"] = blocks_in_site_without_os["centroid"].distance(
+            parcel_centroid
+        )
+        blocks_in_site_without_os["block_area"] = blocks_in_site_without_os.geometry.area
 
-        off_grid_types = [
-            ClusterTypes.OFF_GRID_WARM,
-            ClusterTypes.OFF_GRID_COLD,
-            ClusterTypes.CONCAVE_CORNER,
-        ]
-        off_grid_blocks = blocks_in_site[blocks_in_site["type"].isin(off_grid_types)].copy()
+        open_space_block_ids: set[int] = set()
+        if "block_id" in gdf_open_spaces.columns and not gdf_open_spaces.empty:
+            open_space_block_ids = set(
+                gdf_open_spaces[gdf_open_spaces.intersects(parcel_geom)]["block_id"]
+                .dropna()
+                .astype(int)
+            )
 
-        on_grid_block_types = ["loc", "loc_loc", "sec", "art", "off_grid2"]
-        on_grid_blocks = blocks_in_site[blocks_in_site["type"].isin(on_grid_block_types)].copy()
-
-        off_grid_groups = []
-        for idx, og_block in off_grid_blocks.iterrows():
-            group = {
-                "root_idx": idx,
-                "root": og_block,
-                "attached_indices": [],
-                "total_area": og_block["block_area"],
-                "distance": og_block["distance"],
-            }
-            off_grid_groups.append(group)
-
-        for idx, on_block in on_grid_blocks.iterrows():
-            min_dist = float("inf")
-            closest_group = None
-
-            for group in off_grid_groups:
-                root_block = group["root"]
-                if root_block["block_id"] != on_block["block_id"]:
-                    continue
-                if not on_block.geometry.intersects(root_block.geometry):
-                    continue
-
-                dist = on_block["centroid"].distance(root_block["centroid"])
-                if dist < min_dist:
-                    min_dist = dist
-                    closest_group = group
-
-            if closest_group is not None:
-                closest_group["attached_indices"].append(idx)
-                closest_group["total_area"] += on_block["block_area"]
-
-        off_grid_groups.sort(key=lambda x: x["distance"])
-
-        print(f"    Found {len(blocks_in_site)} remaining blocks, {len(off_grid_groups)} groups")
-
-        allocated_indices = []
+        allocated: set = set()
+        group_rank = 0
         current_area = 0.0
 
-        for group in off_grid_groups:
+        if "block_id" not in blocks_in_site_without_os.columns:
+            raise ValueError(f"`{block_layer_name}` must contain a `block_id` column")
+
+        processed_block_ids: set[int] = set()
+
+        # Phase 1: allocate in the center block (even if it has open space).
+        center_off0 = blocks_in_site_without_os[
+            blocks_in_site_without_os["type"] == ClusterTypes.OFF_GRID_WARM
+        ].copy()
+        if not center_off0.empty:
+            center_off0 = center_off0.sort_values("distance")
+            center_block_id = int(center_off0.iloc[0]["block_id"])
+            current_area, group_rank = _allocate_in_block(
+                center_block_id,
+                ClusterTypes.OFF_GRID_WARM,
+                blocks_in_site_without_os=blocks_in_site_without_os,
+                allocated=allocated,
+                all_allocated_blocks=all_allocated_blocks,
+                current_area=current_area,
+                group_rank=group_rank,
+                required_amen_area=required_amen_area,
+                site_id=site_id,
+                parcel_centroid=parcel_centroid,
+            )
+            processed_block_ids.add(center_block_id)
+
+        # Phase 2: allocate for blocks WITHOUT open space.
+        no_open_space_block_ids = sorted(
+            set(warm_blocks["block_id"].dropna().astype(int)).difference(open_space_block_ids)
+        )
+        for bid in _order_block_ids_by_distance(no_open_space_block_ids, blocks_in_site_without_os):
             if current_area >= required_amen_area:
                 break
+            if bid in processed_block_ids:
+                continue
+            current_area, group_rank = _allocate_in_block(
+                bid,
+                ClusterTypes.OFF_GRID_WARM,
+                blocks_in_site_without_os=blocks_in_site_without_os,
+                allocated=allocated,
+                all_allocated_blocks=all_allocated_blocks,
+                current_area=current_area,
+                group_rank=group_rank,
+                required_amen_area=required_amen_area,
+                site_id=site_id,
+                parcel_centroid=parcel_centroid,
+            )
+            processed_block_ids.add(bid)
 
-            root_idx = group["root_idx"]
-            root_block = group["root"]
-            allocated_indices.append(root_idx)
-            current_area += root_block["block_area"]
-            for attached_idx in group["attached_indices"]:
-                if current_area >= required_amen_area:
-                    break
-
-                attached_block = blocks_in_site.loc[attached_idx]
-                allocated_indices.append(attached_idx)
-                current_area += attached_block["block_area"]
-
-        print(
-            f"    Allocated {len(allocated_indices)} blocks as amenities (area={current_area:.2f})"
+        no_open_space_block_ids = sorted(
+            set(cold_blocks["block_id"].dropna().astype(int)).difference(open_space_block_ids)
         )
+        for bid in _order_block_ids_by_distance(no_open_space_block_ids, blocks_in_site_without_os):
+            if current_area >= required_amen_area:
+                break
+            if bid in processed_block_ids:
+                continue
+            current_area, group_rank = _allocate_in_block(
+                bid,
+                ClusterTypes.OFF_GRID_COLD,
+                blocks_in_site_without_os=blocks_in_site_without_os,
+                allocated=allocated,
+                all_allocated_blocks=all_allocated_blocks,
+                current_area=current_area,
+                group_rank=group_rank,
+                required_amen_area=required_amen_area,
+                site_id=site_id,
+                parcel_centroid=parcel_centroid,
+            )
+            processed_block_ids.add(bid)
 
-        for idx in allocated_indices:
-            block_data = blocks_in_site.loc[idx].copy()
-            block_data["allocation"] = "amenity"
-            block_data["type"] = block_data["type"] + "_am"
-            if "cluster_type" in block_data:
-                block_data["cluster_type"] = block_data["cluster_type"] + "_am"
-            block_data["color"] = ColorTypes[block_data["type"]]
-            all_allocated_blocks.append(block_data)
+        # Phase 3: if still short, allocate per-block for blocks WITH open space.
+        with_open_space_block_ids = sorted(
+            set(blocks_in_site["block_id"].dropna().astype(int)).intersection(open_space_block_ids)
+        )
+        for bid in _order_block_ids_by_distance(
+            with_open_space_block_ids, blocks_in_site_without_os
+        ):
+            if current_area >= required_amen_area:
+                break
+            if bid in processed_block_ids:
+                continue
+            current_area, group_rank = _allocate_in_block(
+                bid,
+                ClusterTypes.OFF_GRID_WARM,
+                blocks_in_site_without_os=blocks_in_site_without_os,
+                allocated=allocated,
+                all_allocated_blocks=all_allocated_blocks,
+                current_area=current_area,
+                group_rank=group_rank,
+                required_amen_area=required_amen_area,
+                site_id=site_id,
+                parcel_centroid=parcel_centroid,
+            )
+            processed_block_ids.add(bid)
+
+        print(f"    Allocated {len(allocated)} clusters as amenities (area={current_area:.2f})")
 
     if all_allocated_blocks:
         gdf_output = gpd.GeoDataFrame(all_allocated_blocks, crs=gdf_blocks.crs)
@@ -211,7 +450,13 @@ def allocate_amenities(
     else:
         gdf_output = gdf_blocks.iloc[:0].copy()
         gdf_output["allocation"] = pd.Series(dtype="str")
-        gdf_output["cluster_index"] = pd.Series(dtype="int")
+        gdf_output["group_id"] = pd.Series(dtype="int")
+        gdf_output["is_root"] = pd.Series(dtype="int")
+        gdf_output["site_id"] = pd.Series(dtype="int")
+        gdf_output["group_rank"] = pd.Series(dtype="int")
+        gdf_output["dist_to_center"] = pd.Series(dtype="float")
+        if "cluster_index" not in gdf_output.columns:
+            gdf_output["cluster_index"] = pd.Series(dtype="int")
         gdf_output.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         print(f"No amenities allocated, empty layer created: {output_layer_name}")
 

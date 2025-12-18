@@ -4,10 +4,8 @@ import pandas as pd
 
 from rue_lib.core.definitions import ClusterTypes, ColorTypes
 
-MAX_OPEN_SPACE_OFF_GRID0_PER_GRID = 2
 
-
-def _find_adjacent_blocks(
+def find_adjacent_blocks(
     central_off_grid0_block, blocks_in_site, cluster_type, min_shared_length: float = 1.0
 ):
     """
@@ -107,7 +105,7 @@ def _allocate_adjacent_blocks_of_type(
     Returns:
         Tuple of (updated current_area, list of allocated blocks of this type)
     """
-    adjacent_blocks = _find_adjacent_blocks(source_block, blocks_in_site, cluster_type)
+    adjacent_blocks = find_adjacent_blocks(source_block, blocks_in_site, cluster_type)
     allocated_this_type = []
 
     for _, block in adjacent_blocks.iterrows():
@@ -247,10 +245,8 @@ def allocate_open_spaces(
             print(f"    No blocks found for site {site_id}")
             continue
 
-        # Calculate centroids and distances
         parcel_centroid = parcel_geom.centroid
 
-        # Store site centroid for debugging
         site_centroids.append(
             {
                 "site_id": site_id,
@@ -264,12 +260,10 @@ def allocate_open_spaces(
         blocks_in_site["distance"] = blocks_in_site["centroid"].distance(parcel_centroid)
         blocks_in_site["block_area"] = blocks_in_site.geometry.area
 
-        # Find off-grid0 (warm) blocks sorted by distance to parcel centroid
         off_grid0_blocks = blocks_in_site[
             blocks_in_site["type"] == ClusterTypes.OFF_GRID_WARM
         ].copy()
 
-        # Initialize allocation tracking
         allocated_indices = set()
         block_ids = set()
         current_area = 0.0
@@ -281,6 +275,11 @@ def allocate_open_spaces(
         else:
             off_grid0_blocks = off_grid0_blocks.sort_values("distance")
             central_off_grid0_block = off_grid0_blocks.iloc[0]
+            budget_per_block = 0.5 * sum(
+                blocks_in_site[
+                    blocks_in_site["block_id"] == central_off_grid0_block.get("block_id")
+                ]["block_area"]
+            )
             plot_index = central_off_grid0_block.get("plot_index")
             block_ids.add(central_off_grid0_block.get("block_id"))
 
@@ -315,12 +314,8 @@ def allocate_open_spaces(
 
             # Phase 2: Allocate one adjacent off-grid0 if space remains and under limit
             group_rank += 1
-            off_grid0_count = 1  # Already allocated central block
-            if (
-                current_area < required_open_area
-                and off_grid0_count < MAX_OPEN_SPACE_OFF_GRID0_PER_GRID
-            ):
-                off_grid0_adjacents = _find_adjacent_blocks(
+            if current_area < required_open_area and current_area < budget_per_block:
+                off_grid0_adjacents = find_adjacent_blocks(
                     central_off_grid0_block, blocks_in_site, ClusterTypes.OFF_GRID_WARM
                 )
 
@@ -329,9 +324,7 @@ def allocate_open_spaces(
                     off_grid0_idx = off_grid0_adjacent.name
 
                     if off_grid0_idx not in allocated_indices:
-                        off_grid0_count += 1
                         block_ids.add(off_grid0_adjacent.get("block_id"))
-
                         current_area = _allocate_single_block(
                             off_grid0_adjacent,
                             all_allocated_blocks,
@@ -389,7 +382,7 @@ def allocate_open_spaces(
                         parcel_centroid,
                     )
 
-                    loc_loc_adjacent = _find_adjacent_blocks(
+                    loc_loc_adjacent = find_adjacent_blocks(
                         concave_block, blocks_in_site, ClusterTypes.ON_GRID_LOC_LOC
                     )
 
@@ -407,53 +400,84 @@ def allocate_open_spaces(
 
         # Phase 4: Allocate remaining off-grid0 blocks (furthest first) with one adjacent loc
         group_rank += 1
+        cluster_added = []
         if current_area < required_open_area and not off_grid0_blocks.empty:
             print(f"    Phase {group_rank}: Allocating remaining off-grid0 blocks...")
 
-            while current_area < required_open_area:
-                # Find remaining off-grid0 blocks not yet allocated and from different block_ids
-                remaining_off_grid0 = off_grid0_blocks[
-                    ~off_grid0_blocks.index.isin(allocated_indices)
-                    & ~off_grid0_blocks["block_id"].isin(block_ids)
-                ].copy()
+            remaining_off_grid0 = off_grid0_blocks[
+                ~off_grid0_blocks.index.isin(allocated_indices)
+                & ~off_grid0_blocks["block_id"].isin(block_ids)
+            ].copy()
 
-                if remaining_off_grid0.empty:
-                    break
+            if remaining_off_grid0.empty:
+                break
 
-                # Sort by distance (furthest first to distribute evenly)
-                remaining_off_grid0 = remaining_off_grid0.sort_values("distance", ascending=False)
-                remaining_block = remaining_off_grid0.iloc[0]
-                block_ids.add(remaining_block.get("block_id"))
+            remaining_off_grid0 = remaining_off_grid0.sort_values("distance", ascending=False)
 
-                # Allocate the off-grid0 block
-                current_area = _allocate_single_block(
-                    remaining_block,
-                    all_allocated_blocks,
-                    allocated_indices,
-                    current_area,
-                    plot_index,
-                    site_id,
-                    group_rank,
-                    parcel_centroid,
+            for _, remaining_block in remaining_off_grid0.iterrows():
+                if remaining_block.get("cluster_index") in cluster_added:
+                    continue
+                budget_per_block = 0.2 * sum(
+                    blocks_in_site[blocks_in_site["block_id"] == remaining_block.get("block_id")][
+                        "block_area"
+                    ]
                 )
+                current_area_per_block = sum(
+                    b["block_area"]
+                    for b in all_allocated_blocks
+                    if b.get("block_id") == remaining_block.get("block_id")
+                )
+                off_grid0_block = remaining_block.copy()
+                current_area_per_block += off_grid0_block["block_area"]
 
-                # Try to allocate one adjacent loc block
-                if current_area < required_open_area:
-                    loc_adjacent = _find_adjacent_blocks(
-                        remaining_block, blocks_in_site, ClusterTypes.ON_GRID_LOC
+                while (
+                    current_area < required_open_area
+                    and current_area_per_block < budget_per_block
+                    and off_grid0_block.empty is False
+                ):
+                    block_ids.add(remaining_block.get("block_id"))
+
+                    current_area = _allocate_single_block(
+                        remaining_block,
+                        all_allocated_blocks,
+                        allocated_indices,
+                        current_area,
+                        plot_index,
+                        site_id,
+                        group_rank,
+                        parcel_centroid,
                     )
 
-                    if not loc_adjacent.empty:
-                        current_area = _allocate_single_block(
-                            loc_adjacent.iloc[0],
-                            all_allocated_blocks,
-                            allocated_indices,
-                            current_area,
-                            plot_index,
-                            site_id,
-                            group_rank,
-                            parcel_centroid,
+                    cluster_added.append(remaining_block.get("cluster_index"))
+                    if current_area_per_block <= budget_per_block:
+                        loc_adjacent = find_adjacent_blocks(
+                            remaining_block, blocks_in_site, ClusterTypes.ON_GRID_LOC
                         )
+
+                        if not loc_adjacent.empty:
+                            current_area = _allocate_single_block(
+                                loc_adjacent.iloc[0],
+                                all_allocated_blocks,
+                                allocated_indices,
+                                current_area,
+                                plot_index,
+                                site_id,
+                                group_rank,
+                                parcel_centroid,
+                            )
+                            cluster_added.append(loc_adjacent.iloc[0].get("cluster_index"))
+                            current_area_per_block += remaining_block["block_area"]
+
+                    if current_area_per_block <= budget_per_block:
+                        off_grid_adjacents = find_adjacent_blocks(
+                            remaining_block, blocks_in_site, ClusterTypes.OFF_GRID_WARM
+                        )
+                        if off_grid_adjacents.empty:
+                            break
+                        off_grid0_block = off_grid_adjacents.iloc[0]
+                        if off_grid0_block.get("cluster_index") in cluster_added:
+                            break
+                        current_area_per_block += off_grid0_block["block_area"]
 
         print(
             f"    Allocated {len(allocated_indices)} blocks as open space (area={current_area:.2f})"
