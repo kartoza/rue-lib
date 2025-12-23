@@ -6,7 +6,7 @@ import geopandas as gpd
 import pandas as pd
 from shapely import LineString, Point, unary_union
 from shapely.errors import TopologicalError
-from shapely.geometry import MultiLineString
+from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
 
 from rue_lib.core.geometry import buffer_layer
 
@@ -323,7 +323,13 @@ def create_dead_end_boundary_lines(
 
     line_parts_extended = []
     for line_part in line_parts:
-        line_parts_extended.append(line_part.buffer(buffer_distance))
+        line_parts_extended.append(
+            line_part.buffer(
+                buffer_distance,
+                join_style=JOIN_STYLE.mitre,
+                cap_style=CAP_STYLE.round,
+            )
+        )
 
     if not line_parts:
         raise RuntimeError("No dead-end boundary lines found after subtraction")

@@ -178,10 +178,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         output_layer_name="13a_dead_end_lines",
-        buffer_distance=min(
-            cfg.on_grid_partition_depth_arterial_roads, cfg.on_grid_partition_depth_secondary_roads
-        )
-        * 0.4,
+        buffer_distance=cfg.dead_end_buffer_distance,
     )
 
     print("Step 14: Generating off-grid blocks...")
