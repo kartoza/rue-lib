@@ -382,9 +382,11 @@ def create_perpendicular_lines_inside_buffer_from_points(
     output_path: Path,
     points_layer: str,
     buffer_layer: str,
+    site_boundary_lines_layer: str,
     line_length: float,
     output_layer_name: Optional[str] = None,
     tangent_step_fraction: float = 0.001,
+    min_endpoint_distance: float = 10.0,
 ) -> Optional[str]:
     """Create perpendicular lines inside the buffer, starting from points on the buffer boundary.
 
@@ -402,9 +404,12 @@ def create_perpendicular_lines_inside_buffer_from_points(
         output_layer_name: Optional name for the output layer. If None, a default is used.
         tangent_step_fraction: Step along the boundary (fraction of boundary length)
                                used to approximate the local tangent.
+        min_endpoint_distance: Minimum distance from line endpoint to next/prev buffer points.
+                               Lines with endpoints closer than this are skipped (default: 80.0).
 
     Returns:
         Name of the created perpendicular lines layer, or None on failure.
+        Debug lines are saved to a layer named "{output_layer_name}_debug".
     """
     import geopandas as gpd
 
@@ -413,6 +418,7 @@ def create_perpendicular_lines_inside_buffer_from_points(
     # Load data
     gdf_pts = gpd.read_file(output_path, layer=points_layer)
     gdf_buffer = gpd.read_file(output_path, layer=buffer_layer)
+    gdf_boundary_lines = gpd.read_file(output_path, layer=site_boundary_lines_layer)
 
     print(f"  Loaded {len(gdf_pts)} points")
     print(f"  Loaded {len(gdf_buffer)} buffer feature(s)")
@@ -454,6 +460,11 @@ def create_perpendicular_lines_inside_buffer_from_points(
 
     lines = []
     records = []
+    filtered_count = 0
+
+    # Debug lines from endpoints to next/prev buffer points
+    debug_lines = []
+    debug_records = []
 
     for _idx, row in gdf_pts.iterrows():
         pt = row.geometry
@@ -521,20 +532,152 @@ def create_perpendicular_lines_inside_buffer_from_points(
         if line_geom.length == 0:
             continue
 
+        line_coords = list(line_geom.coords)
+        line_end = Point(line_coords[-1])
+        line_start = Point(line_coords[0])
+
+        # Initialize vertices from boundary line (will be set if endpoint intersects boundary)
+        prev_vertex = None
+        next_vertex = None
+
+        # Check if line start point intersects with any site boundary line
+        # Use small buffer for numerical tolerance
+        if gdf_boundary_lines.intersects(line_start.buffer(0.1)).any():
+            # Line starts on a boundary line
+            pass
+
+        if gdf_boundary_lines.intersects(line_end.buffer(0.1)).any():
+            # Line ends on a boundary line - get the intersecting line
+            intersecting_lines = gdf_boundary_lines[
+                gdf_boundary_lines.intersects(line_end.buffer(0.1))
+            ]
+
+            if not intersecting_lines.empty:
+                # Get the first intersecting line
+                boundary_line = intersecting_lines.iloc[0].geometry
+
+                # Project the line_end point onto the boundary line to find its position
+                distance_along_line = boundary_line.project(line_end)
+
+                # Get the vertices (coordinates) of the boundary line
+                boundary_coords = list(boundary_line.coords)
+
+                # Find which segment the point falls on
+                cumulative_dist = 0
+                prev_vertex = None
+                next_vertex = None
+
+                for i in range(len(boundary_coords) - 1):
+                    p1 = Point(boundary_coords[i])
+                    p2 = Point(boundary_coords[i + 1])
+                    segment_length = p1.distance(p2)
+
+                    if cumulative_dist <= distance_along_line <= cumulative_dist + segment_length:
+                        # The point falls on this segment
+                        prev_vertex = Point(boundary_coords[i])
+                        next_vertex = Point(boundary_coords[i + 1])
+                        break
+
+                    cumulative_dist += segment_length
+
+                # If point is at the start or end, handle edge cases
+                if prev_vertex is None and next_vertex is None:
+                    if distance_along_line <= 0:
+                        # Point is at the start
+                        prev_vertex = None
+                        next_vertex = (
+                            Point(boundary_coords[1]) if len(boundary_coords) > 1 else None
+                        )
+                    else:
+                        # Point is at the end
+                        prev_vertex = (
+                            Point(boundary_coords[-2]) if len(boundary_coords) > 1 else None
+                        )
+                        next_vertex = None
+
+        # Calculate distances to next and previous points
+        # If line endpoint intersects a boundary line, use vertices from that line
+        # Otherwise, use buffer boundary points
+        if prev_vertex is not None and next_vertex is not None:
+            # Use vertices from the boundary line
+            next_pt = next_vertex
+            prev_pt = prev_vertex
+            dist_to_next = line_end.distance(next_pt)
+            dist_to_prev = line_end.distance(prev_pt)
+        else:
+            # Fall back to buffer boundary logic
+            search_distance = line_length * 2
+
+            s_next = (s + search_distance) % boundary_len
+            next_pt = buffer_boundary.interpolate(s_next)
+
+            s_prev = (s - search_distance) % boundary_len
+            prev_pt = buffer_boundary.interpolate(s_prev)
+
+            dist_to_next = line_end.distance(next_pt)
+            dist_to_prev = line_end.distance(prev_pt)
+
+        # Create debug lines from endpoint to next/prev points
+        debug_line_to_next = LineString([line_end, next_pt])
+        debug_line_to_prev = LineString([line_end, prev_pt])
+
+        debug_lines.append(debug_line_to_next)
+        debug_records.append(
+            {
+                "source_idx": _idx,
+                "line_type": "to_next",
+                "distance": float(dist_to_next),
+                "filtered": dist_to_next < min_endpoint_distance
+                or dist_to_prev < min_endpoint_distance,
+            }
+        )
+
+        debug_lines.append(debug_line_to_prev)
+        debug_records.append(
+            {
+                "source_idx": _idx,
+                "line_type": "to_prev",
+                "distance": float(dist_to_prev),
+                "filtered": dist_to_next < min_endpoint_distance
+                or dist_to_prev < min_endpoint_distance,
+            }
+        )
+
+        # Skip lines where endpoint is too close to next or prev buffer points
+        if dist_to_next < min_endpoint_distance or dist_to_prev < min_endpoint_distance:
+            filtered_count += 1
+            continue
+
         lines.append(line_geom)
         rec = row.drop(labels="geometry").to_dict()
+        rec["dist_end_to_next"] = float(dist_to_next)
+        rec["dist_end_to_prev"] = float(dist_to_prev)
+        rec["line_length"] = float(line_geom.length)
         records.append(rec)
 
     if not lines:
         print("  Warning: no perpendicular lines created")
+        if filtered_count > 0:
+            print(
+                f"  {filtered_count} lines were filtered out (endpoint too close to buffer points)"
+            )
         return None
-
-    import geopandas as gpd
 
     gdf_out = gpd.GeoDataFrame(records, geometry=lines, crs=gdf_pts.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
-    print(f"  Saved perpendicular lines inside buffer to layer: {output_layer_name}")
+    print(f"  Created {len(lines)} perpendicular lines inside buffer")
+    if filtered_count > 0:
+        print(f"  Filtered out {filtered_count} lines (endpoint too close to buffer points)")
+    print(f"  Saved to layer: {output_layer_name}")
+
+    # Save debug lines showing endpoint distances to next/prev buffer points
+    if debug_lines:
+        debug_layer_name = f"{output_layer_name}_debug"
+        gdf_debug = gpd.GeoDataFrame(debug_records, geometry=debug_lines, crs=gdf_pts.crs)
+        gdf_debug.to_file(output_path, layer=debug_layer_name, driver="GPKG")
+        print(f"  Saved {len(debug_lines)} debug lines to layer: {debug_layer_name}")
+
     return output_layer_name
 
 

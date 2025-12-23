@@ -215,7 +215,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
             output_gpkg,
             lines_layer,
             "14a_site_boundary_inner_buffer",
+            "13_site_boundary_lines",
             line_length=cfg.part_loc_d * 2,
+            min_endpoint_distance=cfg.part_loc_d,
         )
 
         if perp_inside_layer is not None:
