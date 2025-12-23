@@ -33,6 +33,7 @@ def main():
         off_grid_local_clusters_width=MainConfig.off_grid_local_clusters_width,
         # Neighborhood / public spaces
         sidewalk_width_m=MainConfig.sidewalk_width_m,
+        dead_end_buffer_distance=MainConfig.dead_end_buffer_distance,
     )
 
     print("=" * 60)
