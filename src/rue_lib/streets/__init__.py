@@ -3,8 +3,10 @@
 
 from .config import StreetConfig
 from .runner import generate_streets
+from .runner_local import generate_streets_with_local_roads
 
 __all__ = [
     "StreetConfig",
     "generate_streets",
+    "generate_streets_with_local_roads",
 ]
