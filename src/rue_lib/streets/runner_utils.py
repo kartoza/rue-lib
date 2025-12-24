@@ -88,26 +88,27 @@ def merge_setback_layers(
     return output_layer_name
 
 
-def polygons_to_lines_layer(
+def polygons_to_lines_graph_based(
     input_path: Path,
     input_layer_names: str | list[str],
     output_path: Path,
-    output_layer_name: str = "polygon_boundaries",
-    dedupe_distance: float = 0.01,
+    output_layer_name: str = "polygon_boundaries_graph",
+    merge_distance: float = 0.1,
 ) -> str:
-    """Extract polygon boundaries from one or more layers and write them as LineStrings.
+    """Extract polygon boundaries using a graph-based approach.
 
-    This preserves individual polygon edges; shared edges are kept from both polygons
-    instead of dissolving the polygons into a single union.
-
-    Lines that are within dedupe_distance of each other are deduplicated.
+    This function:
+    1. Combines all polygons from input layers (preserves individual boundaries)
+    2. Extracts vertices and builds a connectivity graph
+    3. Merges nearby vertices (based on merge_distance)
+    4. Creates lines from the vertex connectivity
 
     Args:
         input_path: Path to input GeoPackage
         input_layer_names: Layer name(s) to extract boundaries from
         output_path: Path to output GeoPackage
         output_layer_name: Name for output layer
-        dedupe_distance: Distance threshold for removing duplicate lines (default: 0.01)
+        merge_distance: Distance threshold for merging nearby vertices (default: 0.1)
     """
     input_path = str(input_path)
     output_path = str(output_path)
@@ -116,7 +117,10 @@ def polygons_to_lines_layer(
         [input_layer_names] if isinstance(input_layer_names, str) else list(input_layer_names)
     )
     if not layer_names:
-        raise RuntimeError("No input layer names provided for polygons_to_lines_layer")
+        raise RuntimeError("No input layer names provided")
+
+    print("\nExtracting polygon boundaries using graph-based approach...")
+    print(f"  Input layers: {', '.join(layer_names)}")
 
     # Read all layers and combine
     all_gdfs = []
@@ -124,9 +128,9 @@ def polygons_to_lines_layer(
         try:
             gdf = gpd.read_file(input_path, layer=layer_name)
             all_gdfs.append(gdf)
+            print(f"  Loaded {len(gdf)} features from '{layer_name}'")
         except Exception as e:
             print(f"  Warning: cannot read layer '{layer_name}': {e}")
-            return
 
     if not all_gdfs:
         raise RuntimeError("No layers could be read")
@@ -134,137 +138,259 @@ def polygons_to_lines_layer(
     gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True))
     crs = gdf_combined.crs
 
-    # Extract all boundary lines from polygons
-    line_records = []
-    feature_idx = 1
-
-    for row in gdf_combined.itertuples():
-        geom = row.geometry
+    # Step 1: Collect all polygons (without merging)
+    print("  Collecting polygons from all features...")
+    all_polygons = []
+    for geom in gdf_combined.geometry:
         if geom is None or geom.is_empty:
             continue
 
-        if not geom.is_valid:
-            geom = geom.buffer(0)
-
-        # Handle different geometry types
         if geom.geom_type == "Polygon":
-            polygons = [geom]
+            all_polygons.append(geom)
         elif geom.geom_type == "MultiPolygon":
-            polygons = list(geom.geoms)
-        else:
+            all_polygons.extend(list(geom.geoms))
+
+    print(f"  Collected {len(all_polygons)} polygon(s)")
+
+    # Step 2: Extract vertices and build connectivity graph
+    print("  Building vertex connectivity graph...")
+
+    # vertex_coords will store unique vertex coordinates
+    # vertex_connections will store which vertices connect to each vertex
+    vertex_coords = []
+    vertex_id_map = {}
+    vertex_connections = {}
+
+    def get_or_create_vertex(coord):
+        """Get existing vertex ID or create new one"""
+        key = (round(coord[0], 10), round(coord[1], 10))
+        if key not in vertex_id_map:
+            vertex_id = len(vertex_coords)
+            vertex_coords.append((coord[0], coord[1]))
+            vertex_id_map[key] = vertex_id
+            vertex_connections[vertex_id] = set()
+        return vertex_id_map[key]
+
+    def add_ring_to_graph(ring_coords):
+        """Add a polygon ring to the connectivity graph"""
+        if len(ring_coords) < 2:
+            return
+        vertex_ids = [get_or_create_vertex(coord) for coord in ring_coords]
+
+        for i in range(len(vertex_ids)):
+            current_id = vertex_ids[i]
+            next_id = vertex_ids[(i + 1) % len(vertex_ids)]
+            vertex_connections[current_id].add(next_id)
+            vertex_connections[next_id].add(current_id)
+
+    for poly in all_polygons:
+        if poly is None or poly.is_empty:
             continue
+        exterior_coords = list(poly.exterior.coords)
+        add_ring_to_graph(exterior_coords)
+        for interior in poly.interiors:
+            interior_coords = list(interior.coords)
+            add_ring_to_graph(interior_coords)
 
-        # Extract rings from each polygon
-        for poly in polygons:
-            rings = [poly.exterior] + list(poly.interiors)
-            ring_id = 1
-            for ring in rings:
-                if ring.is_empty:
-                    continue
-                line_records.append(
-                    {
-                        "src_id": feature_idx,
-                        "ring_id": ring_id,
-                        "geometry": LineString(ring.coords),
-                    }
-                )
-                ring_id += 1
-            feature_idx += 1
+    print(f"  Extracted {len(vertex_coords)} unique vertices")
 
-    if not line_records:
-        raise RuntimeError(f"No geometries found to convert in layers: {', '.join(layer_names)}")
+    # Step 3: Merge nearby vertices
+    if merge_distance > 0:
+        print(f"  Merging vertices within {merge_distance} units...")
 
-    # Create GeoDataFrame of all lines
-    gdf_lines = gpd.GeoDataFrame(line_records, geometry="geometry", crs=crs)
+        gdf_vertices = gpd.GeoDataFrame(geometry=[Point(coord) for coord in vertex_coords], crs=crs)
+        spatial_index = gdf_vertices.sindex
 
-    # Deduplicate by removing close points, then reconstructing lines
-    if dedupe_distance > 0:
-        print(
-            f"  Deduplicating points from {len(gdf_lines)} lines "
-            f"(distance threshold: {dedupe_distance})..."
-        )
+        vertex_merge_map = {}
+        merged_count = 0
 
-        # Extract all unique points from all lines (normalize to 2D)
-        all_points = []
-        point_to_lines = {}  # Map points to the lines they belong to
-
-        for idx, row in gdf_lines.iterrows():
-            line_coords = list(row.geometry.coords)
-            for coord in line_coords:
-                # Normalize to 2D (take only x, y)
-                coord_2d = (coord[0], coord[1])
-                point_key = (round(coord_2d[0], 10), round(coord_2d[1], 10))  # Round for grouping
-                if point_key not in point_to_lines:
-                    all_points.append(coord_2d)
-                    point_to_lines[point_key] = []
-                point_to_lines[point_key].append(idx)
-
-        print(f"  Extracted {len(all_points)} unique points")
-
-        # Create GeoDataFrame of points for spatial indexing
-        gdf_points = gpd.GeoDataFrame(geometry=[Point(coord) for coord in all_points], crs=crs)
-
-        spatial_index = gdf_points.sindex
-        keep_point_indices = set(range(len(all_points)))
-        point_mapping = {}
-
-        for idx in range(len(all_points)):
-            if idx not in keep_point_indices:
+        for vid in range(len(vertex_coords)):
+            if vid in vertex_merge_map:
                 continue
 
-            point = gdf_points.iloc[idx].geometry
+            vertex_point = gdf_vertices.iloc[vid].geometry
+            buffer_geom = vertex_point.buffer(merge_distance)
+            nearby_indices = list(spatial_index.intersection(buffer_geom.bounds))
 
-            buffer_geom = point.buffer(dedupe_distance)
-            possible_matches_idx = list(spatial_index.intersection(buffer_geom.bounds))
-
-            for candidate_idx in possible_matches_idx:
-                if candidate_idx <= idx or candidate_idx not in keep_point_indices:
+            merge_candidates = []
+            for candidate_vid in nearby_indices:
+                if candidate_vid <= vid:
+                    continue
+                if candidate_vid in vertex_merge_map:
                     continue
 
-                candidate_point = gdf_points.iloc[candidate_idx].geometry
+                candidate_point = gdf_vertices.iloc[candidate_vid].geometry
+                if vertex_point.distance(candidate_point) < merge_distance:
+                    merge_candidates.append(candidate_vid)
 
-                if point.distance(candidate_point) < dedupe_distance:
-                    point_mapping[candidate_idx] = idx
-                    keep_point_indices.discard(candidate_idx)
+            for candidate_vid in merge_candidates:
+                vertex_merge_map[candidate_vid] = vid
+                merged_count += 1
 
-        kept_points = [all_points[i] for i in sorted(keep_point_indices)]
-        old_to_new_idx = {
-            old_idx: new_idx for new_idx, old_idx in enumerate(sorted(keep_point_indices))
-        }
+                for connected_vid in vertex_connections[candidate_vid]:
+                    if connected_vid != candidate_vid and connected_vid != vid:
+                        actual_connected = vertex_merge_map.get(connected_vid, connected_vid)
+                        vertex_connections[vid].add(actual_connected)
 
-        for removed_idx, kept_idx in point_mapping.items():
-            old_to_new_idx[removed_idx] = old_to_new_idx[kept_idx]
+                vertex_connections[candidate_vid].clear()
 
-        print(f"  After deduplication: {len(kept_points)} points")
-        new_line_records = []
-        for _idx, row in gdf_lines.iterrows():
-            line_coords = list(row.geometry.coords)
-            new_coords = []
-            for coord in line_coords:
-                coord_2d = (coord[0], coord[1])
-                for point_idx, pt in enumerate(all_points):
-                    if abs(pt[0] - coord_2d[0]) < 1e-9 and abs(pt[1] - coord_2d[1]) < 1e-9:
-                        new_idx = old_to_new_idx.get(point_idx, point_idx)
-                        if new_idx < len(kept_points):
-                            new_coord = kept_points[new_idx]
-                            if not new_coords or new_coords[-1] != new_coord:
-                                new_coords.append(new_coord)
-                        break
+        print(f"  Merged {merged_count} vertices")
 
-            if len(new_coords) >= 2:
-                new_line_records.append(
-                    {
-                        "src_id": row["src_id"],
-                        "ring_id": row["ring_id"],
-                        "geometry": LineString(new_coords),
-                    }
-                )
+        for vid in vertex_connections:
+            new_connections = set()
+            for connected_vid in vertex_connections[vid]:
+                actual_vid = vertex_merge_map.get(connected_vid, connected_vid)
+                if actual_vid != vid:  # Don't create self-loops
+                    new_connections.add(actual_vid)
+            vertex_connections[vid] = new_connections
 
-        gdf_lines = gpd.GeoDataFrame(new_line_records, geometry="geometry", crs=crs)
-        print(f"  After reconstruction: {len(gdf_lines)} lines")
+    debug_vertices = []
+    debug_vertex_info = []
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
 
-    # Write output
+        connections = vertex_connections[vid]
+        if not connections:
+            continue
+
+        coord = vertex_coords[vid]
+        debug_vertices.append(Point(coord[0], coord[1]))
+        debug_vertex_info.append(
+            {
+                "vertex_id": vid,
+                "num_connections": len(connections),
+                "connected_to": ",".join(map(str, sorted(connections))),
+                "x": float(coord[0]),
+                "y": float(coord[1]),
+            }
+        )
+
+    if debug_vertices:
+        debug_layer_name = f"{output_layer_name}_vertices"
+        gdf_debug_verts = gpd.GeoDataFrame(debug_vertex_info, geometry=debug_vertices, crs=crs)
+        gdf_debug_verts.to_file(output_path, layer=debug_layer_name, driver="GPKG")
+        print(f"  Saved {len(debug_vertices)} vertices to: {debug_layer_name}")
+
+    print("  Checking for redundant collinear connections...")
+
+    def are_collinear(p1, p2, p3, tolerance=0.01):
+        """Check if three points are collinear using cross product
+
+        Args:
+            p1, p2, p3: Points as (x, y) tuples
+            tolerance: Maximum cross product value to consider collinear
+        """
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+
+        cross = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1)
+        return abs(cross) < tolerance
+
+    def point_between(p1, p2, p3, tolerance=0.1):
+        """Check if p2 is between p1 and p3
+
+        Args:
+            p1, p2, p3: Points as (x, y) tuples
+            tolerance: Bounding box tolerance in meters
+        """
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+
+        min_x, max_x = (min(x1, x3), max(x1, x3))
+        min_y, max_y = (min(y1, y3), max(y1, y3))
+
+        return (
+            min_x - tolerance <= x2 <= max_x + tolerance
+            and min_y - tolerance <= y2 <= max_y + tolerance
+        )
+
+    redundant_edges = set()
+
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
+
+        connections = vertex_connections[vid]
+        coord_a = vertex_coords[vid]
+        conn_list = list(connections)
+        for i, vid_b in enumerate(conn_list):
+            if vid_b in vertex_merge_map:
+                continue
+
+            coord_b = vertex_coords[vid_b]
+
+            for vid_c in conn_list[i + 1 :]:
+                if vid_c in vertex_merge_map:
+                    continue
+
+                coord_c = vertex_coords[vid_c]
+                if are_collinear(coord_a, coord_b, coord_c):
+                    if vid_c in vertex_connections.get(vid_b, set()):
+                        if point_between(coord_a, coord_b, coord_c):
+                            edge_key = tuple(sorted([vid, vid_c]))
+                            redundant_edges.add(edge_key)
+                        elif point_between(coord_a, coord_c, coord_b):
+                            edge_key = tuple(sorted([vid, vid_b]))
+                            redundant_edges.add(edge_key)
+
+    if redundant_edges:
+        print(f"  Found {len(redundant_edges)} redundant collinear connections to remove")
+
+        for vid in vertex_connections:
+            new_connections = set()
+            for connected_vid in vertex_connections[vid]:
+                edge_key = tuple(sorted([vid, connected_vid]))
+                if edge_key not in redundant_edges:
+                    new_connections.add(connected_vid)
+            vertex_connections[vid] = new_connections
+
+    # Step 5: Create lines from connectivity graph
+    print("  Creating lines from vertex connectivity...")
+
+    lines = []
+    line_info = []
+    created_edges = set()
+
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
+
+        coord = vertex_coords[vid]
+        connections = vertex_connections[vid]
+
+        for connected_vid in connections:
+            edge_key = tuple(sorted([vid, connected_vid]))
+
+            if edge_key in created_edges:
+                continue
+
+            created_edges.add(edge_key)
+
+            connected_coord = vertex_coords[connected_vid]
+            line = LineString([coord, connected_coord])
+            lines.append(line)
+            line_info.append(
+                {
+                    "line_id": len(lines),
+                    "vertex_from": vid,
+                    "vertex_to": connected_vid,
+                    "length": float(line.length),
+                }
+            )
+
+    print(f"  Created {len(lines)} lines from connectivity graph")
+
+    if not lines:
+        print("  Warning: No lines created!")
+        return output_layer_name
+
+    # Save output
+    gdf_lines = gpd.GeoDataFrame(line_info, geometry=lines, crs=crs)
     gdf_lines.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    print(f"  Saved to layer: {output_layer_name}")
 
     return output_layer_name
 
@@ -302,8 +428,6 @@ def create_dead_end_boundary_lines(
 
     if boundary_union and not boundary_union.is_empty:
         site_lines_union = site_lines_union.difference(boundary_union.buffer(diff_buffer))
-
-    # Flatten to LineString parts
     line_parts = []
     if site_lines_union.geom_type == "LineString":
         line_parts = [site_lines_union]

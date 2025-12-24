@@ -18,7 +18,7 @@ from rue_lib.streets.runner_utils import (
     create_guide_points_from_site_boundary,
     create_perpendicular_lines_from_guide_points,
     create_perpendicular_lines_inside_buffer_from_points,
-    polygons_to_lines_layer,
+    polygons_to_lines_graph_based,
     subtract_layer,
 )
 
@@ -49,7 +49,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
     Generate street blocks from roads and parcels (version 3)
 
     Returns:
-        Path to output blocks file
+        StreetOutputs containing the GeoPackage, merged grids GeoJSON, and
+        local streets GeoJSON.
     """
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -323,7 +324,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print("Exporting local roads from off-grid cells as linework...")
     local_roads_layer_name = "18_local_roads"
-    polygons_to_lines_layer(
+    polygons_to_lines_graph_based(
         output_gpkg,
         [
             cleaned_cells_layer,
@@ -331,6 +332,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         ],
         output_gpkg,
         local_roads_layer_name,
+        merge_distance=1,
     )
 
     # Remove cold boundaries from local roads
@@ -448,12 +450,21 @@ def generate_streets(cfg: StreetConfig) -> Path:
         str(output_geojson),
     )
 
+    print("Exporting local streets to GeoJSON for editor use...")
+    local_streets_geojson = output_dir / "local_streets.geojson"
+    export_layer_to_geojson(
+        str(output_gpkg),
+        local_roads_layer_name,
+        str(local_streets_geojson),
+    )
+
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {site_layer}: Site polygon with roads subtracted")
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
+    print(f"  - {local_streets_geojson}: Local streets centerlines")
 
     print("Step 19: Generating financial data")
     FinancialStreet(config=cfg)
