@@ -955,6 +955,7 @@ def create_local_streets_zone(
 
     inner_geoms = []
     outer_geoms = []
+    block_types = []
 
     for feature in input_layer:
         geom = feature.GetGeometryRef()
@@ -1002,6 +1003,12 @@ def create_local_streets_zone(
         inner_geoms.append(ogr.CreateGeometryFromWkb(inner_buffered.wkb))
         outer_geoms.append(ogr.CreateGeometryFromWkb(outer_buffered.wkb))
 
+        # Store block_type if it exists in the feature
+        block_type = ""
+        if feature.GetFieldIndex("block_type") >= 0:
+            block_type = feature.GetField("block_type") or ""
+        block_types.append(block_type)
+
     input_ds = None
 
     if not inner_geoms:
@@ -1030,6 +1037,7 @@ def create_local_streets_zone(
     inner_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
     inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
+    inner_layer.CreateField(ogr.FieldDefn("block_type", ogr.OFTString))
 
     outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbUnknown)
     outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
@@ -1039,7 +1047,9 @@ def create_local_streets_zone(
     outer_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
     outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
 
-    for _idx, (inner_geom, outer_geom) in enumerate(zip(inner_geoms, outer_geoms)):
+    for _idx, (inner_geom, outer_geom, block_type) in enumerate(
+        zip(inner_geoms, outer_geoms, block_types)
+    ):
         inner_area = inner_geom.GetArea()
         outer_area = outer_geom.GetArea()
         sidewalk_area = outer_area - inner_area
@@ -1052,6 +1062,7 @@ def create_local_streets_zone(
         inner_feature.SetField("sidewalk_w", sidewalk_width_m)
         inner_feature.SetField("road_w", road_width_m)
         inner_feature.SetField("zone_type", "buildable")
+        inner_feature.SetField("block_type", block_type)
         inner_layer.CreateFeature(inner_feature)
         inner_feature = None
 
