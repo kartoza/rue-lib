@@ -135,7 +135,16 @@ def polygons_to_lines_graph_based(
     if not all_gdfs:
         raise RuntimeError("No layers could be read")
 
-    gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True))
+    # Determine common CRS (use the first layer's CRS)
+    target_crs = all_gdfs[0].crs
+
+    # Transform all layers to the common CRS if needed
+    for i, gdf in enumerate(all_gdfs):
+        if gdf.crs is not None and gdf.crs != target_crs:
+            print(f"  Transforming layer {layer_names[i]} from {gdf.crs} to {target_crs}")
+            all_gdfs[i] = gdf.to_crs(target_crs)
+
+    gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True), crs=target_crs)
     crs = gdf_combined.crs
 
     # Step 1: Collect all polygons (without merging)
@@ -814,7 +823,7 @@ def create_perpendicular_lines_inside_buffer_from_points(
 def create_guide_points_from_site_boundary(
     output_path: Path,
     site_boundary_lines_layer: str,
-    perp_lines_layer: str,
+    perp_lines_layer: Optional[str],
     output_layer_name: str = "13_site_boundary_points",
     lines_without_points_layer: str = "13_lines_without_points",
     min_line_length_threshold: float = 100.0,
@@ -829,7 +838,7 @@ def create_guide_points_from_site_boundary(
     Args:
         output_path: Path to the GeoPackage
         site_boundary_lines_layer: Name of layer containing site boundary lines
-        perp_lines_layer: Name of layer containing perpendicular lines
+        perp_lines_layer: Name of layer containing perpendicular lines (optional)
         output_layer_name: Name for the output points layer
         lines_without_points_layer: Name for layer containing long segments between points
         min_line_length_threshold: Minimum length for segments and interval for adding points
@@ -842,10 +851,21 @@ def create_guide_points_from_site_boundary(
 
     # Load layers
     gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
-    gdf_perp = gpd.read_file(output_path, layer=perp_lines_layer)
+
+    # Load perpendicular lines if layer name is provided
+    gdf_perp = None
+    if perp_lines_layer is not None:
+        try:
+            gdf_perp = gpd.read_file(output_path, layer=perp_lines_layer)
+        except Exception as e:
+            print(f"  Warning: Could not load perpendicular lines layer '{perp_lines_layer}': {e}")
+            gdf_perp = None
 
     print(f"  Loaded {len(gdf_boundary)} boundary line(s)")
-    print(f"  Loaded {len(gdf_perp)} perpendicular line(s)")
+    if gdf_perp is not None:
+        print(f"  Loaded {len(gdf_perp)} perpendicular line(s)")
+    else:
+        print("  No perpendicular lines layer available")
 
     points = []
     point_types = []
@@ -877,83 +897,87 @@ def create_guide_points_from_site_boundary(
         points.append(Point(pt_coords[0], pt_coords[1]))
         point_types.append("corner")
 
-    print("  Finding perpendicular line intersections...")
-
-    boundary_union = unary_union(boundary_lines)
-
-    extension_factor = 1000.0
-
     intersection_count = 0
-    for _, row in gdf_perp.iterrows():
-        perp_geom = row.geometry
-        if perp_geom is None or perp_geom.is_empty:
-            continue
+    if gdf_perp is not None and not gdf_perp.empty:
+        print("  Finding perpendicular line intersections...")
 
-        try:
-            coords = list(perp_geom.coords)
-            if len(coords) < 2:
+        boundary_union = unary_union(boundary_lines)
+
+        extension_factor = 1000.0
+
+        for _, row in gdf_perp.iterrows():
+            perp_geom = row.geometry
+            if perp_geom is None or perp_geom.is_empty:
                 continue
 
-            start = coords[0]
-            end = coords[-1]
+            try:
+                coords = list(perp_geom.coords)
+                if len(coords) < 2:
+                    continue
 
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            length = (dx**2 + dy**2) ** 0.5
+                start = coords[0]
+                end = coords[-1]
 
-            if length == 0:
-                continue
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = (dx**2 + dy**2) ** 0.5
 
-            dx /= length
-            dy /= length
+                if length == 0:
+                    continue
 
-            extended_start = (start[0] - dx * extension_factor, start[1] - dy * extension_factor)
-            extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
+                dx /= length
+                dy /= length
 
-            extended_line = LineString([extended_start, extended_end])
+                extended_start = (
+                    start[0] - dx * extension_factor,
+                    start[1] - dy * extension_factor,
+                )
+                extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
 
-            intersection = extended_line.intersection(boundary_union)
+                extended_line = LineString([extended_start, extended_end])
 
-            if intersection.is_empty:
-                continue
+                intersection = extended_line.intersection(boundary_union)
 
-            original_mid_x = (start[0] + end[0]) / 2
-            original_mid_y = (start[1] + end[1]) / 2
-            original_mid = Point(original_mid_x, original_mid_y)
+                if intersection.is_empty:
+                    continue
 
-            intersection_points = []
-            if intersection.geom_type == "Point":
-                intersection_points.append(intersection)
-            elif intersection.geom_type == "MultiPoint":
-                intersection_points.extend(list(intersection.geoms))
-            elif intersection.geom_type == "LineString":
-                coords = list(intersection.coords)
-                if coords:
-                    intersection_points.append(Point(coords[0]))
-                    if len(coords) > 1:
-                        intersection_points.append(Point(coords[-1]))
-            elif intersection.geom_type == "MultiLineString":
-                for line in intersection.geoms:
-                    coords = list(line.coords)
+                original_mid_x = (start[0] + end[0]) / 2
+                original_mid_y = (start[1] + end[1]) / 2
+                original_mid = Point(original_mid_x, original_mid_y)
+
+                intersection_points = []
+                if intersection.geom_type == "Point":
+                    intersection_points.append(intersection)
+                elif intersection.geom_type == "MultiPoint":
+                    intersection_points.extend(list(intersection.geoms))
+                elif intersection.geom_type == "LineString":
+                    coords = list(intersection.coords)
                     if coords:
                         intersection_points.append(Point(coords[0]))
                         if len(coords) > 1:
                             intersection_points.append(Point(coords[-1]))
+                elif intersection.geom_type == "MultiLineString":
+                    for line in intersection.geoms:
+                        coords = list(line.coords)
+                        if coords:
+                            intersection_points.append(Point(coords[0]))
+                            if len(coords) > 1:
+                                intersection_points.append(Point(coords[-1]))
 
-            if intersection_points:
-                closest_pt = min(intersection_points, key=lambda pt: pt.distance(original_mid))
-                pt_coords = (round(closest_pt.x, 6), round(closest_pt.y, 6))
+                if intersection_points:
+                    closest_pt = min(intersection_points, key=lambda pt: pt.distance(original_mid))
+                    pt_coords = (round(closest_pt.x, 6), round(closest_pt.y, 6))
 
-                if pt_coords not in corner_points_set:
-                    points.append(Point(pt_coords[0], pt_coords[1]))
-                    point_types.append("perp_intersection")
-                    intersection_count += 1
+                    if pt_coords not in corner_points_set:
+                        points.append(Point(pt_coords[0], pt_coords[1]))
+                        point_types.append("perp_intersection")
+                        intersection_count += 1
 
-        except Exception as e:
-            print(f"  Warning: Failed to compute intersection: {e}")
-            continue
+            except Exception as e:
+                print(f"  Warning: Failed to compute intersection: {e}")
+                continue
 
-    print(f"  Found {intersection_count} perpendicular line intersection points")
+        print(f"  Found {intersection_count} perpendicular line intersection points")
 
     if not points:
         print("  Warning: No guide points created!")
@@ -1396,9 +1420,13 @@ def subtract_layer(
     else:
         # Buffer the erase geometry if buffer_distance is specified
         if buffer_distance > 0:
-            erase_union = erase_union.buffer(buffer_distance, cap_style=3, join_style=2)
+            erase_union = erase_union.buffer(
+                buffer_distance, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+            )
         else:
-            erase_union = erase_union.buffer(0.001, cap_style=3, join_style=2)
+            erase_union = erase_union.buffer(
+                0.001, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+            )
         erased_geom = gdf_base.geometry.difference(erase_union)
 
     # Create a new GeoDataFrame with the erased geometry
