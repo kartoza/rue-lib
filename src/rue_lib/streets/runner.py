@@ -379,7 +379,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 local_roads_layer_name,
                 output_gpkg,
                 "14a_local_roads_minus_cold_boundaries",
-                cfg.road_locals_width_m / 2.0,
+                (cfg.road_locals_width_m / 2.0) + 0.01,
+                simplify=True,
             )
 
             local_roads_minus_cold_layer = subtract_layer(
@@ -389,6 +390,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 output_gpkg,
                 "14a_local_roads_minus_cold_boundaries",
                 cfg.road_secondary_width_m / 2.0,
+                simplify=True,
             )
 
             local_roads_minus_cold_layer = subtract_layer(
@@ -398,6 +400,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 output_gpkg,
                 "14a_local_roads_minus_cold_boundaries",
                 cfg.road_arterial_width_m / 2.0,
+                simplify=True,
             )
         except ValueError as e:
             if "is empty" in str(e):
