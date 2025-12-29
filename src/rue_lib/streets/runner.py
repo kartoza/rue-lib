@@ -58,6 +58,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
     output_gpkg = output_dir / "outputs.gpkg"
     output_path = str(output_gpkg)
 
+    if output_gpkg.exists():
+        output_gpkg.unlink()
+
     print("Step 1: Determining UTM zone...")
     site_ds = ogr.Open(cfg.parcel_path)
     site_layer = site_ds.GetLayer()
@@ -218,7 +221,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
             "14a_site_boundary_inner_buffer",
             "13_site_boundary_lines",
             line_length=cfg.part_loc_d * 2,
-            min_endpoint_distance=cfg.part_loc_d,
         )
 
         if perp_inside_layer is not None:

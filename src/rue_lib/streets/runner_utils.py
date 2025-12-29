@@ -8,6 +8,12 @@ from shapely import LineString, Point, unary_union
 from shapely.errors import TopologicalError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
 
+try:
+    # Shapely 2.x
+    from shapely import make_valid as _make_valid
+except Exception:
+    _make_valid = None
+
 from rue_lib.core.geometry import buffer_layer
 
 from .operations import (
@@ -525,7 +531,7 @@ def create_perpendicular_lines_inside_buffer_from_points(
     line_length: float,
     output_layer_name: Optional[str] = None,
     tangent_step_fraction: float = 0.001,
-    min_endpoint_distance: float = 10.0,
+    min_endpoint_distance: float = 1.0,
 ) -> Optional[str]:
     """Create perpendicular lines inside the buffer, starting from points on the buffer boundary.
 
@@ -1331,13 +1337,6 @@ def create_perpendicular_lines_from_guide_points(
     print(f"  Saved to layer: {output_layer_name}")
 
     return output_layer_name
-
-
-try:
-    # Shapely 2.x
-    from shapely import make_valid as _make_valid
-except Exception:
-    _make_valid = None
 
 
 def _fix_geom(g):
