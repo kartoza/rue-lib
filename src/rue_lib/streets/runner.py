@@ -262,23 +262,26 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 15: Generating on-grid cells")
 
     print("Step 15a: Creating guide points from site boundary...")
+    site_boundary_points = "15a_site_boundary_points"
+    lines_without_points_layer = "15a_lines_without_points"
     _guide_points_layer = create_guide_points_from_site_boundary(
         output_gpkg,
         "13_site_boundary_lines",
         perp_inside_layer,
-        output_layer_name="13_site_boundary_points",
-        lines_without_points_layer="13c_lines_without_points",
-        min_line_length_threshold=preferred_width_off_cluster_grid,
+        output_layer_name=site_boundary_points,
+        lines_without_points_layer=lines_without_points_layer,
+        min_line_length_threshold=preferred_width_off_cluster_grid * 1.25,
     )
 
     print("Step 15b: Creating perpendicular lines from guide points...")
+    site_boundary_perp_from_points = "15b_site_boundary_perp_from_points"
     _guide_perp_layer = create_perpendicular_lines_from_guide_points(
         output_gpkg,
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
-        "13_site_boundary_points",
+        site_boundary_points,
         line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
-        output_layer_name="13_site_boundary_perp_from_points",
+        output_layer_name=site_boundary_perp_from_points,
     )
 
     print("Merge arterial and secondary setbacks with overlaps resolved...")
@@ -293,7 +296,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
         output_gpkg,
         "10_setback_clipped_merged",
-        "13_site_boundary_perp_from_points",
+        site_boundary_perp_from_points,
         output_gpkg,
         "16_on_grid_cells",
     )

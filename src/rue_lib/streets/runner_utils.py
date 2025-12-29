@@ -4,9 +4,12 @@ from typing import Optional
 
 import geopandas as gpd
 import pandas as pd
-from shapely import LineString, Point, unary_union
+from shapely import GeometryCollection, LineString, Point, unary_union
 from shapely.errors import TopologicalError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
+from shapely.ops import split
+
+from rue_lib.core.geometry_sampling import extend_line
 
 try:
     # Shapely 2.x
@@ -934,19 +937,11 @@ def create_guide_points_from_site_boundary(
                 dx /= length
                 dy /= length
 
-                extended_start = (
-                    start[0] - dx * extension_factor,
-                    start[1] - dy * extension_factor,
-                )
-                extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
-
-                extended_line = LineString([extended_start, extended_end])
-
+                line_string = LineString([start, end])
+                extended_line = extend_line(line_string, extension_factor)
                 intersection = extended_line.intersection(boundary_union)
-
                 if intersection.is_empty:
                     continue
-
                 original_mid_x = (start[0] + end[0]) / 2
                 original_mid_y = (start[1] + end[1]) / 2
                 original_mid = Point(original_mid_x, original_mid_y)
@@ -1004,49 +999,154 @@ def create_guide_points_from_site_boundary(
 
     print(f"\n  Breaking boundary lines at {len(points)} points...")
     breaking_points_geom = points
+    broken_segments_layer = f"{output_layer_name}_broken_segments"
+    snap_distance = 10.0
 
     broken_segments = []
     segment_lengths = []
+    segments_meta = []
 
-    for line in boundary_lines:
-        points_on_line = []
-        snap_distance = 1.0
+    for line_idx, line in enumerate(boundary_lines):
+        break_points: dict[float, Point] = {}
 
         for pt in breaking_points_geom:
             if line.distance(pt) < snap_distance:
                 distance_along = line.project(pt)
-                points_on_line.append(distance_along)
+                projected_pt = line.interpolate(distance_along)
+                dist_key = round(distance_along, 6)
+                # Keep a single projected point per distance position
+                if dist_key not in break_points:
+                    break_points[dist_key] = projected_pt
 
-        points_on_line = sorted(set(points_on_line))
+        line_length = line.length
+        num_breaks = len(break_points)
 
-        if not points_on_line:
+        if not break_points:
             broken_segments.append(line)
-            segment_lengths.append(line.length)
-        else:
-            coords = list(line.coords)
-            line_positions = [0.0] + points_on_line + [line.length]
+            segment_lengths.append(line_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": 0,
+                    "start_m": 0.0,
+                    "end_m": float(line_length),
+                    "segment_length": float(line_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": False,
+                    "end_is_break_point": False,
+                    "is_long_segment": line_length >= min_line_length_threshold,
+                }
+            )
+            continue
 
-            for i in range(len(line_positions) - 1):
-                start_dist = line_positions[i]
-                end_dist = line_positions[i + 1]
+        sorted_breaks = sorted(break_points.items(), key=lambda item: item[0])
+        split_points = [pt for _, pt in sorted_breaks]
+        break_positions = [pos for pos, _ in sorted_breaks]
 
-                if end_dist - start_dist < 0.1:
-                    continue
+        try:
+            splitter = unary_union([pt.buffer(0.01) for pt in split_points])
+            split_result = split(line, splitter)
+            if hasattr(split_result, "geoms"):
+                num_result_geoms = len(list(split_result.geoms))
+            else:
+                num_result_geoms = 1
 
-                start_pt = line.interpolate(start_dist)
-                end_pt = line.interpolate(end_dist)
+            if num_result_geoms == 1 and len(split_points) > 0:
+                cut_positions = [0.0] + break_positions + [line_length]
+                cut_positions = sorted(set(cut_positions))
 
-                segment = LineString([start_pt, end_pt])
-                broken_segments.append(segment)
-                segment_lengths.append(segment.length)
+                manual_segments = []
+                for i in range(len(cut_positions) - 1):
+                    start_pos = cut_positions[i]
+                    end_pos = cut_positions[i + 1]
+
+                    if end_pos - start_pos < 0.1:
+                        continue
+                    start_pt = line.interpolate(start_pos)
+                    end_pt = line.interpolate(end_pos)
+                    segment = LineString([start_pt, end_pt])
+                    manual_segments.append(segment)
+
+                split_result = GeometryCollection(manual_segments)
+
+        except Exception as e:
+            print(f"  Warning: failed to split boundary line {line_idx}: {e}")
+            broken_segments.append(line)
+            segment_lengths.append(line_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": 0,
+                    "start_m": 0.0,
+                    "end_m": float(line_length),
+                    "segment_length": float(line_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": False,
+                    "end_is_break_point": False,
+                    "is_long_segment": line_length >= min_line_length_threshold,
+                }
+            )
+            continue
+
+        tol = 1e-6
+
+        for seg_idx, segment in enumerate(split_result.geoms):
+            if segment.is_empty:
+                continue
+
+            seg_length = segment.length
+            if seg_length < 0.1:
+                continue
+
+            start_pt = Point(segment.coords[0])
+            end_pt = Point(segment.coords[-1])
+
+            start_dist = line.project(start_pt)
+            end_dist = line.project(end_pt)
+
+            # Ensure start <= end for reporting while keeping geometry intact
+            start_m = float(min(start_dist, end_dist))
+            end_m = float(max(start_dist, end_dist))
+
+            start_is_break_point = any(abs(start_dist - b) < tol for b in break_positions)
+            end_is_break_point = any(abs(end_dist - b) < tol for b in break_positions)
+            is_long_segment = seg_length >= min_line_length_threshold
+
+            broken_segments.append(segment)
+            segment_lengths.append(seg_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": seg_idx,
+                    "start_m": start_m,
+                    "end_m": end_m,
+                    "segment_length": float(seg_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": start_is_break_point,
+                    "end_is_break_point": end_is_break_point,
+                    "is_long_segment": is_long_segment,
+                }
+            )
 
     print(f"  Created {len(broken_segments)} segments from boundary lines")
+
+    if broken_segments:
+        gdf_broken_segments = gpd.GeoDataFrame(
+            segments_meta,
+            geometry=broken_segments,
+            crs=gdf_boundary.crs,
+        )
+        gdf_broken_segments.to_file(output_path, layer=broken_segments_layer, driver="GPKG")
+        print(f"  Saved broken boundary segments to layer: {broken_segments_layer}")
 
     long_segments = []
     long_lengths = []
 
     for segment, length in zip(broken_segments, segment_lengths):
-        if length >= min_line_length_threshold * 2:
+        if length >= min_line_length_threshold:
             long_segments.append(segment)
             long_lengths.append(length)
 
@@ -1071,10 +1171,55 @@ def create_guide_points_from_site_boundary(
         if len(long_lengths) > 10:
             print(f"    ... and {len(long_lengths) - 10} more segments")
 
-        print(f"\n  Adding points along long segments at {min_line_length_threshold}m intervals...")
-        additional_points_count = 0
-        for segment in long_segments:
-            if segment.geom_type == "LineString":
+        print(
+            f"\n  Adding points starting from corner point at {min_line_length_threshold}m "
+            f"intervals..."
+        )
+
+        # Find corner points on long segments
+        snap_distance = 1.0
+        segments_union = unary_union(long_segments)
+
+        corner_points_on_segments = []
+        for i, pt in enumerate(points):
+            if point_types[i] == "corner":
+                if segments_union.distance(pt) < snap_distance:
+                    corner_points_on_segments.append(pt)
+
+        if not corner_points_on_segments:
+            print("  Warning: No corner points found on long segments, skipping interval points")
+        else:
+            additional_points_count = 0
+            for segment in long_segments:
+                if segment.geom_type != "LineString":
+                    continue
+
+                start_corner = corner_points_on_segments[0]
+                for i, pt in enumerate(points):
+                    if point_types[i] == "corner":
+                        dist_to_seg = segment.distance(pt)
+                        if dist_to_seg < snap_distance:
+                            start_corner = pt
+                            break
+
+                # Check if this segment connects to the start corner
+                seg_start = Point(segment.coords[0])
+                seg_end = Point(segment.coords[-1])
+
+                # Determine if corner is at start or end of this segment
+                dist_to_start = start_corner.distance(seg_start)
+                dist_to_end = start_corner.distance(seg_end)
+
+                if dist_to_start > snap_distance and dist_to_end > snap_distance:
+                    # This segment doesn't connect to our corner, skip it
+                    continue
+
+                # Determine which direction to traverse from the corner
+                if dist_to_start < dist_to_end:
+                    pass  # segment is already oriented from corner
+                else:
+                    segment = LineString(list(reversed(segment.coords)))
+
                 segment_length = segment.length
                 num_intervals = int(segment_length / min_line_length_threshold)
 
