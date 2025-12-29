@@ -56,6 +56,7 @@ def find_concave_points(
     boundary_points_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
+    min_distance: float = 1.0,
 ) -> str:
     """
     Find concave points from the boundary vertices.
@@ -70,6 +71,7 @@ def find_concave_points(
         boundary_points_layer_name: Name of boundary points layer
         output_gpkg: Path to output GeoPackage
         output_layer_name: Name for output concave points layer
+        min_distance: Minimum distance to previous/next points (default: 10.0 meters)
 
     Returns:
         Name of the output layer
@@ -97,6 +99,7 @@ def find_concave_points(
         points_by_block[block_id].sort(key=lambda p: p["vertex_id"])
     print(f"  Processing {len(points_by_block)} blocks...")
     concave_points = []
+    skipped_too_close = 0
     for block_id, points in points_by_block.items():
         num_points = len(points)
 
@@ -111,6 +114,16 @@ def find_concave_points(
 
             v2_x = next_point["x"] - current_point["x"]
             v2_y = next_point["y"] - current_point["y"]
+
+            # Calculate distances to previous and next points
+            dist_to_prev = math.sqrt(v1_x * v1_x + v1_y * v1_y)
+            dist_to_next = math.sqrt(v2_x * v2_x + v2_y * v2_y)
+
+            # Skip if either distance is too small
+            if dist_to_prev < min_distance or dist_to_next < min_distance:
+                skipped_too_close += 1
+                continue
+
             dot = v1_x * v2_x + v1_y * v2_y
             cross = v1_x * v2_y - v1_y * v2_x
             angle_rad = math.atan2(cross, dot)
@@ -135,6 +148,8 @@ def find_concave_points(
 
     total_concave = len(concave_points)
     print(f"  Found {total_concave} concave points")
+    if skipped_too_close > 0:
+        print(f"  Skipped {skipped_too_close} points (distance < {min_distance})")
     print(f"  Created layer: {output_layer_name}")
     return output_layer_name
 
