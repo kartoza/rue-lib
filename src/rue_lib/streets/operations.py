@@ -2889,6 +2889,83 @@ def merge_grid_layers_with_type(
     return output_layer_name
 
 
+def export_layer_to_geojson_gpd(
+    input_path,
+    layer_name,
+    output_geojson_path,
+):
+    """Export a GeoPackage layer to GeoJSON format in EPSG:4326, filtering to only valid
+        polygons and lines.
+
+    Args:
+        input_path (str): Path to input GeoPackage.
+        layer_name (str): Name of layer to export.
+        output_geojson_path (str): Path for output GeoJSON file.
+
+    Returns:
+        str: Path to the created GeoJSON file.
+
+    Raises:
+        RuntimeError: If input GeoPackage cannot be opened or layer not found.
+    """
+    import os
+
+    import geopandas as gpd
+    from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
+
+    try:
+        gdf = gpd.read_file(input_path, layer=layer_name)
+    except Exception as e:
+        print(f"Cannot read layer '{layer_name}' from {input_path}: {e}")
+        return None
+
+    if gdf.empty:
+        print(f"Warning: Layer '{layer_name}' is empty")
+        if gdf.crs is not None and gdf.crs != "EPSG:4326":
+            gdf = gdf.to_crs("EPSG:4326")
+        gdf.to_file(output_geojson_path, driver="GeoJSON")
+        return output_geojson_path
+
+    valid_geom_types = (Polygon, MultiPolygon, LineString, MultiLineString)
+
+    def is_valid_geometry(geom):
+        if geom is None or geom.is_empty:
+            return False
+        return isinstance(geom, valid_geom_types)
+
+    gdf_filtered = gdf[gdf.geometry.apply(is_valid_geometry)].copy()
+
+    invalid_mask = ~gdf_filtered.geometry.is_valid
+    if invalid_mask.any():
+        print(f"  Fixing {invalid_mask.sum()} invalid geometries")
+        gdf_filtered.loc[invalid_mask, "geometry"] = gdf_filtered.loc[
+            invalid_mask, "geometry"
+        ].buffer(0)
+
+    skipped_count = len(gdf) - len(gdf_filtered)
+    if skipped_count > 0:
+        print(f"  Skipped {skipped_count} features with invalid geometry types")
+
+    if gdf_filtered.empty:
+        print(f"Warning: No valid polygon or line geometries found in layer '{layer_name}'")
+        if gdf_filtered.crs is not None and gdf_filtered.crs != "EPSG:4326":
+            gdf_filtered = gdf_filtered.to_crs("EPSG:4326")
+        gdf_filtered.to_file(output_geojson_path, driver="GeoJSON")
+        return output_geojson_path
+
+    if gdf_filtered.crs is not None and gdf_filtered.crs != "EPSG:4326":
+        print(f"  Transforming from {gdf_filtered.crs} to EPSG:4326")
+        gdf_filtered = gdf_filtered.to_crs("EPSG:4326")
+
+    if os.path.exists(output_geojson_path):
+        os.remove(output_geojson_path)
+
+    gdf_filtered.to_file(output_geojson_path, driver="GeoJSON")
+    print(f"Exported {len(gdf_filtered)} features to '{output_geojson_path}'")
+
+    return output_geojson_path
+
+
 def export_layer_to_geojson(
     input_path,
     layer_name,

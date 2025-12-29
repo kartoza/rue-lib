@@ -12,7 +12,9 @@ from rue_lib.streets.runner_utils import polygons_to_lines_graph_based, subtract
 
 from .config import StreetConfig
 from .operations import (
-    export_layer_to_geojson,
+    export_layer_to_geojson_gpd as export_layer_to_geojson,
+)
+from .operations import (
     extract_by_expression,
     merge_grid_layers_with_type,
 )
@@ -202,18 +204,17 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
             local_roads_layer_name,
             output_gpkg,
             cold_boundary_subtracted_layer,
-            cfg.road_locals_width_m / 2.0,
+            (cfg.road_locals_width_m / 2.0) + 0.001,
         )
-    else:
-        cold_boundary_subtracted_layer = cold_boundary_layer
+        cold_boundary_layer = cold_boundary_subtracted_layer
 
     subtract_layer(
         output_gpkg,
-        cold_boundary_subtracted_layer,
+        cold_boundary_layer,
         "05_secondary_roads",
         output_gpkg,
         cold_boundary_subtracted_layer,
-        cfg.road_secondary_width_m / 2.0,
+        (cfg.road_secondary_width_m / 2.0) + 0.001,
     )
 
     subtract_layer(
@@ -222,7 +223,7 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
         "04_arterial_roads",
         output_gpkg,
         cold_boundary_layer,
-        cfg.road_arterial_width_m / 2.0,
+        (cfg.road_arterial_width_m / 2.0) + 0.001,
     )
 
     layers_to_merge = []
@@ -267,6 +268,14 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
         layers_to_merge,
     )
 
+    print("Step 18: Exporting merged grids to GeoJSON...")
+    output_geojson = output_dir / "outputs.geojson"
+    export_layer_to_geojson(
+        str(output_gpkg),
+        all_grid_layer_name,
+        str(output_geojson),
+    )
+
     # Layers for financial calculations
     buildable_zone_layer_name = "15_buildable_zone"
     extract_by_expression(
@@ -300,14 +309,6 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
             output_path,
             buffered_local_roads_layer_name,
         )
-
-    print("Step 18: Exporting merged grids to GeoJSON...")
-    output_geojson = output_dir / "outputs.geojson"
-    export_layer_to_geojson(
-        str(output_gpkg),
-        all_grid_layer_name,
-        str(output_geojson),
-    )
 
     print("Exporting local streets to GeoJSON for editor use...")
     local_streets_geojson = output_dir / "local_streets.geojson"
