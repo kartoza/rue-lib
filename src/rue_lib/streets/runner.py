@@ -183,14 +183,16 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 14: Generating off-grid blocks...")
+    grid_layer_name = "14_off_grid_cells"
+    point_layer_name = "14_off_grid_points"
     grids_from_site(
         output_gpkg,
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         preferred_width_off_cluster_grid,
         preferred_depth_off_cluster_grid,
-        grid_layer_name="14_off_grid_cells",
-        point_layer_name="14_off_grid_points",
+        grid_layer_name=grid_layer_name,
+        point_layer_name=point_layer_name,
         dead_end_lines_layer=dead_end_lines_layer,
     )
 
