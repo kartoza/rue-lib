@@ -270,7 +270,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         perp_inside_layer,
         output_layer_name=site_boundary_points,
         lines_without_points_layer=lines_without_points_layer,
-        min_line_length_threshold=preferred_width_off_cluster_grid * 1.25,
+        min_line_length_threshold=preferred_width_off_cluster_grid,
     )
 
     print("Step 15b: Creating perpendicular lines from guide points...")

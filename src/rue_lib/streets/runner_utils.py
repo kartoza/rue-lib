@@ -413,6 +413,47 @@ def polygons_to_lines_graph_based(
     return output_layer_name
 
 
+def angle_adjusted_length(segment: LineString) -> tuple[float, float]:
+    """Return cumulative deflection (deg) and a length scaled by bending.
+
+    Deflection is measured as the change in direction between consecutive
+    segment vectors (0° for straight, 90° for a right angle, small when
+    the path barely bends). Effective length = L * (1 + total_turn / pi).
+    """
+    coords = list(segment.coords)
+    if len(coords) < 3:
+        return 0.0, float(segment.length)
+
+    total_turn_rad = 0.0
+    for i in range(1, len(coords) - 1):
+        x0, y0 = coords[i - 1]
+        x1, y1 = coords[i]
+        x2, y2 = coords[i + 1]
+
+        v1x, v1y = x1 - x0, y1 - y0
+        v2x, v2y = x2 - x1, y2 - y1
+
+        n1 = math.hypot(v1x, v1y)
+        n2 = math.hypot(v2x, v2y)
+        if n1 == 0 or n2 == 0:
+            continue
+
+        dot = (v1x * v2x + v1y * v2y) / (n1 * n2)
+        dot = max(-1.0, min(1.0, dot))
+        angle = math.acos(dot)
+
+        if angle > math.pi:
+            angle = 2 * math.pi - angle
+        if angle > math.pi / 2 and angle < math.pi:
+            angle = math.pi - angle if angle > math.pi / 2 else angle
+
+        total_turn_rad += abs(angle)
+
+    turn_deg = math.degrees(total_turn_rad)
+    adjusted_length = float(segment.length) * (1.0 + total_turn_rad / math.pi)
+    return turn_deg, adjusted_length
+
+
 def create_dead_end_boundary_lines(
     output_path: Path,
     site_minus_setbacks_layer: str,
@@ -878,6 +919,8 @@ def create_guide_points_from_site_boundary(
 
     points = []
     point_types = []
+    point_dist_prev = []
+    point_dist_next = []
     print("  Extracting corner points...")
 
     boundary_lines = []
@@ -905,6 +948,8 @@ def create_guide_points_from_site_boundary(
     for pt_coords in corner_points_set:
         points.append(Point(pt_coords[0], pt_coords[1]))
         point_types.append("corner")
+        point_dist_prev.append(None)
+        point_dist_next.append(None)
 
     intersection_count = 0
     if gdf_perp is not None and not gdf_perp.empty:
@@ -972,6 +1017,8 @@ def create_guide_points_from_site_boundary(
                     if pt_coords not in corner_points_set:
                         points.append(Point(pt_coords[0], pt_coords[1]))
                         point_types.append("perp_intersection")
+                        point_dist_prev.append(None)
+                        point_dist_next.append(None)
                         intersection_count += 1
 
             except Exception as e:
@@ -985,7 +1032,7 @@ def create_guide_points_from_site_boundary(
         return output_layer_name
 
     gdf_points = gpd.GeoDataFrame(
-        {"point_type": point_types},
+        {"point_type": point_types, "dist_prev_m": point_dist_prev, "dist_next_m": point_dist_next},
         geometry=points,
         crs=gdf_boundary.crs,
     )
@@ -1022,6 +1069,7 @@ def create_guide_points_from_site_boundary(
         num_breaks = len(break_points)
 
         if not break_points:
+            turn_deg, adj_length = angle_adjusted_length(line)
             broken_segments.append(line)
             segment_lengths.append(line_length)
             segments_meta.append(
@@ -1035,7 +1083,9 @@ def create_guide_points_from_site_boundary(
                     "num_break_points_on_line": num_breaks,
                     "start_is_break_point": False,
                     "end_is_break_point": False,
-                    "is_long_segment": line_length >= min_line_length_threshold,
+                    "is_long_segment": adj_length >= min_line_length_threshold * 1.25,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
                 }
             )
             continue
@@ -1072,6 +1122,7 @@ def create_guide_points_from_site_boundary(
 
         except Exception as e:
             print(f"  Warning: failed to split boundary line {line_idx}: {e}")
+            turn_deg, adj_length = angle_adjusted_length(line)
             broken_segments.append(line)
             segment_lengths.append(line_length)
             segments_meta.append(
@@ -1085,7 +1136,9 @@ def create_guide_points_from_site_boundary(
                     "num_break_points_on_line": num_breaks,
                     "start_is_break_point": False,
                     "end_is_break_point": False,
-                    "is_long_segment": line_length >= min_line_length_threshold,
+                    "is_long_segment": adj_length >= min_line_length_threshold * 1.25,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
                 }
             )
             continue
@@ -1112,7 +1165,8 @@ def create_guide_points_from_site_boundary(
 
             start_is_break_point = any(abs(start_dist - b) < tol for b in break_positions)
             end_is_break_point = any(abs(end_dist - b) < tol for b in break_positions)
-            is_long_segment = seg_length >= min_line_length_threshold
+            turn_deg, adj_length = angle_adjusted_length(segment)
+            is_long_segment = adj_length >= min_line_length_threshold * 1.25
 
             broken_segments.append(segment)
             segment_lengths.append(seg_length)
@@ -1128,6 +1182,8 @@ def create_guide_points_from_site_boundary(
                     "start_is_break_point": start_is_break_point,
                     "end_is_break_point": end_is_break_point,
                     "is_long_segment": is_long_segment,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
                 }
             )
 
@@ -1144,21 +1200,34 @@ def create_guide_points_from_site_boundary(
 
     long_segments = []
     long_lengths = []
+    long_lengths_angle = []
 
-    for segment, length in zip(broken_segments, segment_lengths):
-        if length >= min_line_length_threshold:
+    for segment, meta in zip(broken_segments, segments_meta):
+        if (
+            meta.get("length_angle_m", meta.get("segment_length", 0.0))
+            >= min_line_length_threshold * 1.25
+        ):
             long_segments.append(segment)
-            long_lengths.append(length)
+            long_lengths.append(meta.get("segment_length", segment.length))
+            long_lengths_angle.append(meta.get("length_angle_m", segment.length))
 
     if long_segments:
-        sorted_pairs = sorted(zip(long_segments, long_lengths), key=lambda x: x[1], reverse=True)
-        long_segments = [seg for seg, _ in sorted_pairs]
-        long_lengths = [length for _, length in sorted_pairs]
+        sorted_pairs = sorted(
+            zip(long_segments, long_lengths, long_lengths_angle),
+            key=lambda x: x[2],
+            reverse=True,
+        )
+        long_segments = [seg for seg, _, _ in sorted_pairs]
+        long_lengths = [length for _, length, _ in sorted_pairs]
+        long_lengths_angle = [adj for _, _, adj in sorted_pairs]
 
-        print(f"  Found {len(long_segments)} segments longer than {min_line_length_threshold}m")
+        print(
+            f"  Found {len(long_segments)} segments longer than "
+            f"{min_line_length_threshold * 1.25}m (angle-adjusted length)"
+        )
 
         gdf_long_segments = gpd.GeoDataFrame(
-            {"length_m": long_lengths},
+            {"length_m": long_lengths, "length_angle_m": long_lengths_angle},
             geometry=long_segments,
             crs=gdf_boundary.crs,
         )
@@ -1166,8 +1235,8 @@ def create_guide_points_from_site_boundary(
         gdf_long_segments.to_file(output_path, layer=lines_without_points_layer, driver="GPKG")
         print(f"  Saved longest segments to layer: {lines_without_points_layer}")
 
-        for i, length in enumerate(long_lengths[:10]):
-            print(f"    Segment {i + 1}: length = {length:.2f}m")
+        for i, (length, adj) in enumerate(zip(long_lengths[:10], long_lengths_angle[:10])):
+            print(f"    Segment {i + 1}: length = {length:.2f}m, angle_adj = {adj:.2f}m")
         if len(long_lengths) > 10:
             print(f"    ... and {len(long_lengths) - 10} more segments")
 
@@ -1195,6 +1264,10 @@ def create_guide_points_from_site_boundary(
                     continue
 
                 start_corner = corner_points_on_segments[0]
+                existing_points_on_segment = [
+                    (pt, segment.project(pt)) for pt in points if segment.distance(pt) < 0.1
+                ]
+                accepted_points_on_segment: list[tuple[Point, float]] = []
                 for i, pt in enumerate(points):
                     if point_types[i] == "corner":
                         dist_to_seg = segment.distance(pt)
@@ -1211,31 +1284,69 @@ def create_guide_points_from_site_boundary(
                 dist_to_end = start_corner.distance(seg_end)
 
                 if dist_to_start > snap_distance and dist_to_end > snap_distance:
-                    # This segment doesn't connect to our corner, skip it
                     continue
 
-                # Determine which direction to traverse from the corner
                 if dist_to_start < dist_to_end:
-                    pass  # segment is already oriented from corner
+                    oriented_segment = segment
                 else:
-                    segment = LineString(list(reversed(segment.coords)))
+                    oriented_segment = LineString(list(reversed(segment.coords)))
 
-                segment_length = segment.length
-                num_intervals = int(segment_length / min_line_length_threshold)
+                segment_length = oriented_segment.length
+                if segment_length == 0:
+                    continue
+
+                _, adjusted_length = angle_adjusted_length(oriented_segment)
+                length_scale = adjusted_length / segment_length if segment_length else 1.0
+                if length_scale == 0:
+                    continue
+
+                num_intervals = int(adjusted_length / min_line_length_threshold)
 
                 for i in range(1, num_intervals + 1):
-                    distance = i * min_line_length_threshold
-                    if distance < segment_length:
-                        point = segment.interpolate(distance)
-                        key = (round(point.x, 6), round(point.y, 6))
+                    distance_adj = i * min_line_length_threshold
+                    actual_distance = distance_adj / length_scale
+                    if actual_distance >= segment_length:
+                        continue
 
-                        if key not in corner_points_set and not any(
-                            abs(pt.x - point.x) < 0.001 and abs(pt.y - point.y) < 0.001
-                            for pt in points
-                        ):
-                            points.append(Point(point.x, point.y))
-                            point_types.append("long_segment_interval")
-                            additional_points_count += 1
+                    point = oriented_segment.interpolate(actual_distance)
+                    key = (round(point.x, 6), round(point.y, 6))
+
+                    if key in corner_points_set:
+                        continue
+
+                    threshold_dist = 0.35 * min_line_length_threshold
+                    if any(
+                        point.distance(pt) < threshold_dist for pt, _ in existing_points_on_segment
+                    ):
+                        continue
+                    if any(
+                        point.distance(pt) < threshold_dist for pt, _ in accepted_points_on_segment
+                    ):
+                        continue
+
+                    pos_on_seg = oriented_segment.project(point)
+                    neighbor_positions = sorted(
+                        [p for _, p in existing_points_on_segment]
+                        + [p for _, p in accepted_points_on_segment]
+                        + [pos_on_seg]
+                    )
+                    idx = neighbor_positions.index(pos_on_seg)
+                    prev_pos = neighbor_positions[idx - 1] if idx > 0 else None
+                    next_pos = (
+                        neighbor_positions[idx + 1] if idx < len(neighbor_positions) - 1 else None
+                    )
+                    dist_prev = pos_on_seg - prev_pos if prev_pos is not None else None
+                    dist_next = next_pos - pos_on_seg if next_pos is not None else None
+
+                    if not any(
+                        abs(pt.x - point.x) < 0.001 and abs(pt.y - point.y) < 0.001 for pt in points
+                    ):
+                        points.append(Point(point.x, point.y))
+                        point_types.append("long_segment_interval")
+                        point_dist_prev.append(dist_prev if dist_prev is None else float(dist_prev))
+                        point_dist_next.append(dist_next if dist_next is None else float(dist_next))
+                        accepted_points_on_segment.append((point, pos_on_seg))
+                        additional_points_count += 1
 
         print(f"  Added {additional_points_count} additional points along long segments")
         gdf_points = gpd.GeoDataFrame(
