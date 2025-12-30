@@ -420,7 +420,7 @@ def extract_road_adjacent_vertices(
             coords = list(line.coords)
             for vertex_id, (x, y) in enumerate(coords):
                 point = Point(x, y)
-                point_buffer = point.buffer(0.1)
+                point_buffer = point.buffer(10)
 
                 # Check which roads this vertex touches
                 for _, road_row in gdf_roads.iterrows():

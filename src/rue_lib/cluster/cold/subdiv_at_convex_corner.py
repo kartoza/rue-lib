@@ -13,7 +13,7 @@ def find_convex_points(
     points_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
-    min_distance: float = 10.0,
+    min_distance: float = 0.1,
 ) -> str:
     """
     Find convex points from the boundary vertices.
@@ -78,7 +78,7 @@ def find_convex_points(
 
             ang = point["angle"]
 
-            if ang > 60 and ang < 100:
+            if ang > 60 and ang < 105:
                 records.append(
                     {
                         "is_convex": 1,
