@@ -9,8 +9,6 @@ from shapely.errors import TopologicalError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
 from shapely.ops import split
 
-from rue_lib.core.geometry_sampling import extend_line
-
 try:
     # Shapely 2.x
     from shapely import make_valid as _make_valid
@@ -426,9 +424,9 @@ def angle_adjusted_length(segment: LineString) -> tuple[float, float]:
 
     total_turn_rad = 0.0
     for i in range(1, len(coords) - 1):
-        x0, y0 = coords[i - 1]
-        x1, y1 = coords[i]
-        x2, y2 = coords[i + 1]
+        x0, y0 = coords[i - 1][0], coords[i - 1][1]
+        x1, y1 = coords[i][0], coords[i][1]
+        x2, y2 = coords[i + 1][0], coords[i + 1][1]
 
         v1x, v1y = x1 - x0, y1 - y0
         v2x, v2y = x2 - x1, y2 - y1
@@ -645,7 +643,7 @@ def create_perpendicular_lines_inside_buffer_from_points(
     if output_layer_name is None:
         output_layer_name = f"{points_layer}_perp_inside_buffer"
 
-    half_eps_in = line_length * 0.01
+    half_eps_in = line_length * 0.1
 
     lines = []
     records = []
@@ -982,8 +980,13 @@ def create_guide_points_from_site_boundary(
                 dx /= length
                 dy /= length
 
-                line_string = LineString([start, end])
-                extended_line = extend_line(line_string, extension_factor)
+                extended_start = (
+                    start[0] - dx * extension_factor,
+                    start[1] - dy * extension_factor,
+                )
+                extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
+
+                extended_line = LineString([extended_start, extended_end])
                 intersection = extended_line.intersection(boundary_union)
                 if intersection.is_empty:
                     continue
@@ -1434,7 +1437,7 @@ def create_perpendicular_lines_from_guide_points(
     lines = []
     records = []
 
-    touch_tol = 1e-6  # distance to treat a point as touching a line
+    touch_tol = 0.5  # distance to treat a point as touching a line (meters)
     tangent_step_fraction = 0.01  # fraction of line length for tangent calc
     inside_test_step = line_length * 0.01  # small step along normal to test inside/outside
 
@@ -1442,9 +1445,19 @@ def create_perpendicular_lines_from_guide_points(
         """Return list of boundary line segments that touch/are close to the given point."""
         touching = []
         for line in boundary_lines:
+            # Check distance to entire line
             if line.distance(pt) <= touch_tol:
                 touching.append(line)
-        # Fallback: if nothing is within tol, take the closest line
+                continue
+            coords = list(line.coords)
+            if coords:
+                if (
+                    Point(coords[0]).distance(pt) <= touch_tol
+                    or Point(coords[-1]).distance(pt) <= touch_tol
+                ):
+                    touching.append(line)
+                    continue
+
         if not touching:
             min_d = float("inf")
             closest = None
@@ -1457,7 +1470,7 @@ def create_perpendicular_lines_from_guide_points(
                 touching.append(closest)
         return touching
 
-    def perpendicular_line_from_segment_at_point(seg: LineString, pt: Point) -> LineString | None:
+    def perpendicular_line_from_segment_at_point(seg: LineString, pt: Point) -> LineString:
         """Build a perpendicular line from segment seg at pt, oriented away from site polygon."""
         if seg is None or seg.is_empty:
             return None
@@ -1502,30 +1515,14 @@ def create_perpendicular_lines_from_guide_points(
         elif inside2 and not inside1:
             nx, ny = n1x, n1y
         elif not inside1 and not inside2:
-            # Both directions considered outside (boundary may be ambiguous); just pick one
             nx, ny = n1x, n1y
         else:
-            # Both directions go inside; skip
             return None
 
         end_x = x0 + nx * line_length
         end_y = y0 + ny * line_length
 
-        raw_line = LineString([(x0, y0), (end_x, end_y)])
-
-        # Remove any part of the line that lies inside the polygon, keep only outside piece(s)
-        diff = raw_line.difference(site_geom)
-        if diff.is_empty:
-            return None
-
-        if diff.geom_type == "LineString":
-            return diff
-        if diff.geom_type == "MultiLineString":
-            # Return the piece that starts closest to the original point
-            pieces = list(diff.geoms)
-            return min(pieces, key=lambda seg2: seg2.distance(pt))
-
-        return None
+        return LineString([(x0, y0), (end_x, end_y)])
 
     for idx, row in gdf_points.iterrows():
         pt = row.geometry
@@ -1542,7 +1539,7 @@ def create_perpendicular_lines_from_guide_points(
         # Corner: create one perpendicular for each touching segment
         if pt_type == "corner":
             used = 0
-            for seg in touching_segments:
+            for _idx, seg in enumerate(touching_segments):
                 line = perpendicular_line_from_segment_at_point(seg, pt)
                 if line is None or line.length == 0:
                     continue
