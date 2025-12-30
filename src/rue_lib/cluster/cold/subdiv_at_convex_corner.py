@@ -277,7 +277,7 @@ def create_clusters_from_convex_points(
 
             parts.sort(key=lambda g: g.centroid.distance(lines_union.centroid))
 
-            if len(parts) > 2:
+            if len(parts) > 1:
                 part = parts[0]
                 if part.is_empty or part.area <= 0:
                     continue
