@@ -6,6 +6,10 @@ from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.blocks import generate_on_grid_blocks
+from rue_lib.streets.cold_boundaries_utils import (
+    extract_cold_boundary_lines_from_vertices,
+    extract_line_vertices,
+)
 from rue_lib.streets.grids import (
     create_cold_boundaries,
     extract_grid_lines_in_buffer,
@@ -375,20 +379,35 @@ def generate_streets(cfg: StreetConfig) -> Path:
     else:
         print("  Warning: No valid layers for local roads generation, skipping...")
 
-    # Remove cold boundaries from local roads (if they exist)
+    local_roads_vertices_layer = extract_line_vertices(
+        output_gpkg, local_roads_layer_name, output_gpkg, "18_local_roads_vertices"
+    )
+
+    cold_boundary_lines_layer = None
+    if local_roads_vertices_layer and ogr.Open(str(output_gpkg)).GetLayerByName(
+        cold_boundaries_layer
+    ):
+        cold_boundary_lines_layer = extract_cold_boundary_lines_from_vertices(
+            output_gpkg,
+            cold_boundaries_layer,
+            local_roads_vertices_layer,
+            local_roads_layer_name,
+            output_layer_name="14_cold_boundary_lines",
+        )
+
     local_roads_minus_cold_layer = None
-    # Check if cold_boundaries_layer exists in geopackage with geopandas
     if ogr.Open(str(output_gpkg)).GetLayerByName(cold_boundaries_layer):
         try:
-            local_roads_minus_cold_layer = subtract_layer(
-                output_gpkg,
-                cold_boundaries_layer,
-                local_roads_layer_name,
-                output_gpkg,
-                "14a_local_roads_minus_cold_boundaries",
-                (cfg.road_locals_width_m / 2.0) + 0.01,
-                simplify=True,
-            )
+            if cold_boundary_lines_layer:
+                local_roads_minus_cold_layer = subtract_layer(
+                    output_gpkg,
+                    cold_boundaries_layer,
+                    cold_boundary_lines_layer,
+                    output_gpkg,
+                    "14a_local_roads_minus_cold_boundaries",
+                    (cfg.road_locals_width_m / 2.0) + 0.01,
+                    simplify=True,
+                )
 
             local_roads_minus_cold_layer = subtract_layer(
                 output_gpkg,
