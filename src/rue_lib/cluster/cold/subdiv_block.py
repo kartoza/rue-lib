@@ -573,11 +573,19 @@ def subdivide_blocks_by_concave_points(
     for line_data in cutting_lines_to_write:
         line_geom = line_data["geometry"]
         block_id_for_line = line_data["block_id"]
+        concave_x = line_data["concave_x"]
+        concave_y = line_data["concave_y"]
+        concave_pt = Point(concave_x, concave_y)
 
         keys_for_block = [k for k in working_blocks.keys() if k[0] == block_id_for_line]
 
         for key in keys_for_block:
             orig_block_id, local_id = key
+            poly = working_blocks[key]
+
+            if not (poly.intersects(concave_pt) or poly.contains(concave_pt)):
+                continue
+
             poly = working_blocks.pop(key)
 
             if not poly.intersects(line_geom):
