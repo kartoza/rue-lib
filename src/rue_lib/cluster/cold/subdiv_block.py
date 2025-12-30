@@ -1,11 +1,57 @@
 import math
+from typing import Union
 
 import geopandas as gpd
 from osgeo import ogr
-from shapely.geometry import Point
+from shapely.geometry import LineString, MultiPolygon, Point, Polygon
 
 from rue_lib.core.definitions import ClusterTypes, ColorTypes
-from rue_lib.core.helpers import create_or_replace_layer
+
+
+def line_end_intersects_buffer_shapely(
+    line: LineString, buffer_geom: Union[Polygon, MultiPolygon]
+) -> bool:
+    """Check if the end point of a line intersects with a buffer geometry (shapely version)."""
+    if buffer_geom is None or line is None or line.is_empty:
+        return False
+
+    coords = list(line.coords)
+    if len(coords) < 2:
+        return False
+
+    end_pt = Point(coords[-1])
+    return buffer_geom.intersects(end_pt)
+
+
+def split_polygon_by_line_shapely(
+    poly: Polygon, line: LineString, buffer_width: float = 0.00000001
+) -> list[Polygon]:
+    """
+    Split a polygon using a buffered line (shapely version).
+
+    Returns a list of polygon parts. If the line does not split the polygon,
+    returns [poly].
+    """
+    if not poly.intersects(line):
+        return [poly]
+
+    cut_strip = line.buffer(buffer_width)
+    diff = poly.difference(cut_strip)
+
+    result_polys = []
+
+    if diff.is_empty:
+        return [poly]
+
+    if isinstance(diff, Polygon):
+        result_polys.append(diff)
+    elif isinstance(diff, MultiPolygon):
+        result_polys.extend(list(diff.geoms))
+
+    if not result_polys:
+        result_polys.append(poly)
+
+    return result_polys
 
 
 def line_end_intersects_buffer(line: ogr.Geometry, buffer_geom: ogr.Geometry) -> bool:
@@ -297,45 +343,33 @@ def subdivide_blocks_by_concave_points(
     Returns:
         Name of the output layer
     """
-    ds = ogr.Open(input_gpkg, 0)
-    if ds is None:
-        raise ValueError(f"Could not open {input_gpkg}")
+    gdf_grid = gpd.read_file(input_gpkg, layer=erased_grid_layer_name)
+    gdf_concave = gpd.read_file(input_gpkg, layer=concave_points_layer_name)
+    gdf_boundary = gpd.read_file(input_gpkg, layer=boundary_points_layer_name)
 
-    grid_layer = ds.GetLayerByName(erased_grid_layer_name)
-    if grid_layer is None:
-        raise ValueError(f"Layer {erased_grid_layer_name} not found")
-    concave_layer = ds.GetLayerByName(concave_points_layer_name)
-    if concave_layer is None:
-        raise ValueError(f"Layer {concave_points_layer_name} not found")
-    boundary_layer = ds.GetLayerByName(boundary_points_layer_name)
-    if boundary_layer is None:
-        raise ValueError(f"Layer {boundary_points_layer_name} not found")
-    srs = grid_layer.GetSpatialRef()
-    print(f"  Processing {grid_layer.GetFeatureCount()} blocks...")
+    crs = gdf_grid.crs
+    print(f"  Processing {len(gdf_grid)} blocks...")
 
     concave_points_set = set()
-    for concave_feat in concave_layer:
-        block_id = concave_feat.GetField("block_id")
-        concave_geom = concave_feat.GetGeometryRef()
-        concave_x = concave_geom.GetX()
-        concave_y = concave_geom.GetY()
-        concave_points_set.add((block_id, concave_x, concave_y))
+    for _, row in gdf_concave.iterrows():
+        block_id = row["block_id"]
+        concave_geom = row.geometry
+        concave_points_set.add((block_id, concave_geom.x, concave_geom.y))
 
+    # Build boundary points by block
     boundary_points_by_block = {}
-    for boundary_feat in boundary_layer:
-        block_id = boundary_feat.GetField("block_id")
-        vertex_id = boundary_feat.GetField("vertex_id")
-        boundary_geom = boundary_feat.GetGeometryRef()
-        x = boundary_geom.GetX()
-        y = boundary_geom.GetY()
+    for _, row in gdf_boundary.iterrows():
+        block_id = row["block_id"]
+        vertex_id = row["vertex_id"]
+        geom = row.geometry
 
         if block_id not in boundary_points_by_block:
             boundary_points_by_block[block_id] = []
 
         boundary_points_by_block[block_id].append(
             {
-                "x": x,
-                "y": y,
+                "x": geom.x,
+                "y": geom.y,
                 "vertex_id": vertex_id,
             }
         )
@@ -343,17 +377,11 @@ def subdivide_blocks_by_concave_points(
     for block_id in boundary_points_by_block:
         boundary_points_by_block[block_id].sort(key=lambda p: p["vertex_id"])
 
+    # Build grid geometries dict
     grid_geometries = {}
-    for grid_feat in grid_layer:
-        block_id = grid_feat.GetField("id")
-        grid_geom = grid_feat.GetGeometryRef()
-        if grid_geom:
-            grid_geometries[block_id] = grid_geom.Clone()
-
-    grid_layer = None
-    concave_layer = None
-    boundary_layer = None
-    ds = None
+    for _, row in gdf_grid.iterrows():
+        block_id = row["id"]
+        grid_geometries[block_id] = row.geometry
 
     cutting_lines_to_write = []
     line_id = 0
@@ -393,9 +421,6 @@ def subdivide_blocks_by_concave_points(
             next_x = next_point["x"]
             next_y = next_point["y"]
 
-            concave_point_geom = ogr.Geometry(ogr.wkbPoint)
-            concave_point_geom.AddPoint(point_x, point_y)
-
             dir1_x = prev_x - point_x
             dir1_y = prev_y - point_y
             dir1_length = math.sqrt(dir1_x**2 + dir1_y**2)
@@ -423,40 +448,45 @@ def subdivide_blocks_by_concave_points(
             perp1_x = -dir1_y
             perp1_y = dir1_x
 
-            test_line1_pos = ogr.Geometry(ogr.wkbLineString)
-            test_line1_pos.AddPoint(offset1_x, offset1_y)
-            test_line1_pos.AddPoint(offset1_x + perp1_x * 5.0, offset1_y + perp1_y * 5.0)
-
-            test_line1_neg = ogr.Geometry(ogr.wkbLineString)
-            test_line1_neg.AddPoint(offset1_x, offset1_y)
-            test_line1_neg.AddPoint(offset1_x - perp1_x * 5.0, offset1_y - perp1_y * 5.0)
+            test_line1_pos = LineString(
+                [(offset1_x, offset1_y), (offset1_x + perp1_x * 5.0, offset1_y + perp1_y * 5.0)]
+            )
+            test_line1_neg = LineString(
+                [(offset1_x, offset1_y), (offset1_x - perp1_x * 5.0, offset1_y - perp1_y * 5.0)]
+            )
 
             direction1_x, direction1_y = None, None
-            if block_geom and line_end_intersects_buffer(test_line1_pos, block_geom):
+            if block_geom and line_end_intersects_buffer_shapely(test_line1_pos, block_geom):
                 direction1_x, direction1_y = perp1_x, perp1_y
-            elif block_geom and line_end_intersects_buffer(test_line1_neg, block_geom):
+            elif block_geom and line_end_intersects_buffer_shapely(test_line1_neg, block_geom):
                 direction1_x, direction1_y = -perp1_x, -perp1_y
 
             if direction1_x is not None:
                 current_length = 1.0
-                while current_length < 1000.0:
-                    test_line = ogr.Geometry(ogr.wkbLineString)
-                    test_line.AddPoint(offset1_x, offset1_y)
-                    test_line.AddPoint(
-                        offset1_x + direction1_x * current_length,
-                        offset1_y + direction1_y * current_length,
+                while True:
+                    test_line = LineString(
+                        [
+                            (offset1_x, offset1_y),
+                            (
+                                offset1_x + direction1_x * current_length,
+                                offset1_y + direction1_y * current_length,
+                            ),
+                        ]
                     )
 
-                    if not line_end_intersects_buffer(test_line, block_geom):
+                    if not line_end_intersects_buffer_shapely(test_line, block_geom):
                         break
 
                     current_length += 5.0
 
-                line1 = ogr.Geometry(ogr.wkbLineString)
-                line1.AddPoint(offset1_x, offset1_y)
-                line1.AddPoint(
-                    offset1_x + direction1_x * max(current_length, 1.0),
-                    offset1_y + direction1_y * max(current_length, 1.0),
+                line1 = LineString(
+                    [
+                        (offset1_x, offset1_y),
+                        (
+                            offset1_x + direction1_x * max(current_length, 1.0),
+                            offset1_y + direction1_y * max(current_length, 1.0),
+                        ),
+                    ]
                 )
 
                 cutting_lines_to_write.append(
@@ -474,40 +504,45 @@ def subdivide_blocks_by_concave_points(
             perp2_x = -dir2_y
             perp2_y = dir2_x
 
-            test_line2_pos = ogr.Geometry(ogr.wkbLineString)
-            test_line2_pos.AddPoint(offset2_x, offset2_y)
-            test_line2_pos.AddPoint(offset2_x + perp2_x * 5.0, offset2_y + perp2_y * 5.0)
-
-            test_line2_neg = ogr.Geometry(ogr.wkbLineString)
-            test_line2_neg.AddPoint(offset2_x, offset2_y)
-            test_line2_neg.AddPoint(offset2_x - perp2_x * 5.0, offset2_y - perp2_y * 5.0)
+            test_line2_pos = LineString(
+                [(offset2_x, offset2_y), (offset2_x + perp2_x * 5.0, offset2_y + perp2_y * 5.0)]
+            )
+            test_line2_neg = LineString(
+                [(offset2_x, offset2_y), (offset2_x - perp2_x * 5.0, offset2_y - perp2_y * 5.0)]
+            )
 
             direction2_x, direction2_y = None, None
-            if block_geom and line_end_intersects_buffer(test_line2_pos, block_geom):
+            if block_geom and line_end_intersects_buffer_shapely(test_line2_pos, block_geom):
                 direction2_x, direction2_y = perp2_x, perp2_y
-            elif block_geom and line_end_intersects_buffer(test_line2_neg, block_geom):
+            elif block_geom and line_end_intersects_buffer_shapely(test_line2_neg, block_geom):
                 direction2_x, direction2_y = -perp2_x, -perp2_y
 
             if direction2_x is not None:
                 current_length = 1.0
-                while current_length < 200.0:
-                    test_line = ogr.Geometry(ogr.wkbLineString)
-                    test_line.AddPoint(offset2_x, offset2_y)
-                    test_line.AddPoint(
-                        offset2_x + direction2_x * current_length,
-                        offset2_y + direction2_y * current_length,
+                while True:
+                    test_line = LineString(
+                        [
+                            (offset2_x, offset2_y),
+                            (
+                                offset2_x + direction2_x * current_length,
+                                offset2_y + direction2_y * current_length,
+                            ),
+                        ]
                     )
 
-                    if not line_end_intersects_buffer(test_line, block_geom):
+                    if not line_end_intersects_buffer_shapely(test_line, block_geom):
                         break
 
                     current_length += 5.0
 
-                line2 = ogr.Geometry(ogr.wkbLineString)
-                line2.AddPoint(offset2_x, offset2_y)
-                line2.AddPoint(
-                    offset2_x + direction2_x * max(current_length, 1.0),
-                    offset2_y + direction2_y * max(current_length, 1.0),
+                line2 = LineString(
+                    [
+                        (offset2_x, offset2_y),
+                        (
+                            offset2_x + direction2_x * max(current_length, 1.0),
+                            offset2_y + direction2_y * max(current_length, 1.0),
+                        ),
+                    ]
                 )
                 cutting_lines_to_write.append(
                     {
@@ -521,39 +556,43 @@ def subdivide_blocks_by_concave_points(
                 )
                 line_id += 1
 
+    # Build concave points by block
     concave_points_by_block = {}
     for c_block_id, concave_x, concave_y in concave_points_set:
-        pt = ogr.Geometry(ogr.wkbPoint)
-        pt.AddPoint(concave_x, concave_y)
+        pt = Point(concave_x, concave_y)
         concave_points_by_block.setdefault(c_block_id, []).append(
             {"geom": pt, "x": concave_x, "y": concave_y}
         )
 
+    # Initialize working blocks
     working_blocks = {}
     for b_id, geom in grid_geometries.items():
-        working_blocks[(b_id, 0)] = geom.Clone()
+        working_blocks[(b_id, 0)] = geom
 
-    subdivided_blocks = []
+    # Split blocks by cutting lines
     for line_data in cutting_lines_to_write:
         line_geom = line_data["geometry"]
         block_id_for_line = line_data["block_id"]
         concave_x = line_data["concave_x"]
         concave_y = line_data["concave_y"]
-
-        conc_pt = ogr.Geometry(ogr.wkbPoint)
-        conc_pt.AddPoint(concave_x, concave_y)
+        concave_pt = Point(concave_x, concave_y)
 
         keys_for_block = [k for k in working_blocks.keys() if k[0] == block_id_for_line]
 
         for key in keys_for_block:
             orig_block_id, local_id = key
+            poly = working_blocks[key]
+
+            if not (poly.intersects(concave_pt) or poly.contains(concave_pt)):
+                continue
+
             poly = working_blocks.pop(key)
 
-            if not poly.Intersects(line_geom):
+            if not poly.intersects(line_geom):
                 working_blocks[key] = poly
                 continue
 
-            parts = split_polygon_by_line(poly, line_geom)
+            parts = split_polygon_by_line_shapely(poly, line_geom)
 
             for part in parts:
                 new_local_id = (
@@ -563,218 +602,243 @@ def subdivide_blocks_by_concave_points(
                     )
                     + 1
                 )
-                working_blocks[(orig_block_id, new_local_id)] = part.Clone()
+                working_blocks[(orig_block_id, new_local_id)] = part
 
-            poly = None
             break
 
+    # Build subdivided blocks list
+    subdivided_blocks = []
     block_id = 0
     for (orig_block_id, _local_id), poly in working_blocks.items():
         is_concave = 0
+        concave_x_val = None
+        concave_y_val = None
         for concave_point_in_block in concave_points_by_block.get(orig_block_id, []):
             pt = concave_point_in_block["geom"]
             concave_x = concave_point_in_block["x"]
             concave_y = concave_point_in_block["y"]
-            if poly.Intersects(pt):
+            if poly.intersects(pt):
                 is_concave = 1
+                concave_x_val = concave_x
+                concave_y_val = concave_y
                 break
         subdivided_blocks.append(
             {
                 "id": block_id,
                 "orig_block_id": orig_block_id,
-                "geometry": poly.Clone(),
+                "geometry": poly,
                 "is_concave": is_concave,
-                "concave_x": is_concave and concave_x or None,
-                "concave_y": is_concave and concave_y or None,
-                "type": is_concave and "corner" or "block",
+                "concave_x": concave_x_val,
+                "concave_y": concave_y_val,
+                "type": "corner" if is_concave else "block",
                 "block_type": "cold",
             }
         )
         block_id += 1
 
-    out_ds = ogr.Open(output_gpkg, 1)
-    if out_ds is None:
-        raise ValueError(f"Could not open {output_gpkg} for writing")
+    # Write cutting lines to geopackage
+    gdf_lines = gpd.GeoDataFrame(cutting_lines_to_write, geometry="geometry", crs=crs)
+    gdf_lines.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
-    lines_layer = create_or_replace_layer(out_ds, output_layer_name, srs, ogr.wkbLineString)
-
-    lines_layer.CreateField(ogr.FieldDefn("line_id", ogr.OFTInteger))
-    lines_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-    lines_layer.CreateField(ogr.FieldDefn("concave_x", ogr.OFTReal))
-    lines_layer.CreateField(ogr.FieldDefn("concave_y", ogr.OFTReal))
-    lines_layer.CreateField(ogr.FieldDefn("line_type", ogr.OFTString))
-
-    for line_data in cutting_lines_to_write:
-        out_feat = ogr.Feature(lines_layer.GetLayerDefn())
-        out_feat.SetGeometry(line_data["geometry"])
-        out_feat.SetField("line_id", line_data["line_id"])
-        out_feat.SetField("block_id", line_data["block_id"])
-        out_feat.SetField("concave_x", line_data["concave_x"])
-        out_feat.SetField("concave_y", line_data["concave_y"])
-        out_feat.SetField("line_type", line_data["line_type"])
-        lines_layer.CreateFeature(out_feat)
-        out_feat = None
-
+    # Write subdivided blocks
     blocks_layer_name = f"{output_layer_name}_blocks"
-    blocks_layer = create_or_replace_layer(out_ds, blocks_layer_name, srs, ogr.wkbPolygon)
+    gdf_blocks = gpd.GeoDataFrame(subdivided_blocks, geometry="geometry", crs=crs)
+    gdf_blocks.to_file(output_gpkg, layer=blocks_layer_name, driver="GPKG")
 
-    blocks_layer.CreateField(ogr.FieldDefn("orig_id", ogr.OFTInteger))
-    blocks_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
-    blocks_layer.CreateField(ogr.FieldDefn("is_concave", ogr.OFTInteger))
-    blocks_layer.CreateField(ogr.FieldDefn("concave_x", ogr.OFTReal))
-    blocks_layer.CreateField(ogr.FieldDefn("concave_y", ogr.OFTReal))
-    blocks_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
-    blocks_layer.CreateField(ogr.FieldDefn("block_type", ogr.OFTString))
+    # Handle buffered lines if provided
+    if buffered_lines_layer_name:
+        try:
+            gdf_buffered = gpd.read_file(output_gpkg, layer=buffered_lines_layer_name)
 
-    for blk in subdivided_blocks:
-        feat = ogr.Feature(blocks_layer.GetLayerDefn())
-        feat.SetGeometry(blk["geometry"])
-        feat.SetField("orig_id", blk["orig_block_id"])
-        feat.SetField("is_concave", blk["is_concave"])
-        feat.SetField("type", blk["type"])
-        feat.SetField("block_type", blk["block_type"])
-        feat.SetField("id", blk["id"])
+            buffered_line_features = []
+            for _, row in gdf_buffered.iterrows():
+                buffered_line_features.append({"geometry": row.geometry, "block_id": row["id"]})
 
-        if blk["concave_x"] is not None:
-            feat.SetField("concave_x", blk["concave_x"])
-        if blk["concave_y"] is not None:
-            feat.SetField("concave_y", blk["concave_y"])
+            # Split buffered lines by subdivided blocks
+            split_buffered_lines = []
+            idx = 0
+            for buff_line in buffered_line_features:
+                buff_geom = buff_line["geometry"]
+                buff_block_id = buff_line["block_id"]
 
-        blocks_layer.CreateFeature(feat)
-        feat = None
+                for blk in subdivided_blocks:
+                    if blk["orig_block_id"] != buff_block_id:
+                        continue
 
-    buffered_lines_layer = None
-    for i in range(out_ds.GetLayerCount()):
-        layer = out_ds.GetLayerByIndex(i)
-        if layer.GetName() == buffered_lines_layer_name:
-            buffered_lines_layer = layer
-            break
+                    subdivided_block_geom = blk["geometry"]
 
-    if buffered_lines_layer:
-        buffered_line_features = []
-        for feat in buffered_lines_layer:
-            geom = feat.GetGeometryRef()
-            if geom:
-                buffered_line_features.append(
-                    {"geometry": geom.Clone(), "block_id": feat.GetField("id")}
+                    if not buff_geom.intersects(subdivided_block_geom):
+                        continue
+
+                    try:
+                        intersection = buff_geom.intersection(subdivided_block_geom)
+                        if intersection and not intersection.is_empty:
+                            if isinstance(intersection, Polygon):
+                                has_concave = False
+                                if blk["concave_x"] is not None and blk["concave_y"] is not None:
+                                    concave_pt = Point(blk["concave_x"], blk["concave_y"])
+                                    has_concave = concave_pt.buffer(0.1).intersects(intersection)
+
+                                split_buffered_lines.append(
+                                    {
+                                        "geometry": intersection,
+                                        "block_id": buff_block_id,
+                                        "id": idx,
+                                        "concave_x": blk["concave_x"],
+                                        "concave_y": blk["concave_y"],
+                                        "concave_point_in_block": has_concave,
+                                    }
+                                )
+                                idx += 1
+                            elif isinstance(intersection, MultiPolygon):
+                                for poly in intersection.geoms:
+                                    if poly and not poly.is_empty:
+                                        has_concave = False
+                                        if (
+                                            blk["concave_x"] is not None
+                                            and blk["concave_y"] is not None
+                                        ):
+                                            concave_pt = Point(blk["concave_x"], blk["concave_y"])
+                                            has_concave = concave_pt.buffer(0.1).intersects(poly)
+
+                                        split_buffered_lines.append(
+                                            {
+                                                "geometry": poly,
+                                                "block_id": buff_block_id,
+                                                "id": idx,
+                                                "concave_x": blk["concave_x"],
+                                                "concave_y": blk["concave_y"],
+                                                "concave_point_in_block": has_concave,
+                                            }
+                                        )
+                                        idx += 1
+                    except Exception as e:
+                        print(
+                            f"    Warning: Failed to intersect buffered line "
+                            f"with block {buff_block_id}: {e}"
+                        )
+                        continue
+
+            blocks_to_merge = {}
+
+            for i, on_grid_block in enumerate(split_buffered_lines):
+                if on_grid_block.get("concave_point_in_block", False):
+                    continue
+
+                # Find closest neighbor without concave point
+                current_geom = on_grid_block["geometry"]
+                closest_neighbor_idx = None
+                min_distance = float("inf")
+
+                for j, neighbor in enumerate(split_buffered_lines):
+                    if i == j:
+                        continue
+                    if neighbor.get("concave_point_in_block", False):
+                        continue
+
+                    # Check if they touch or are close
+                    neighbor_geom = neighbor["geometry"]
+                    current_buffered = current_geom.buffer(0.1)
+                    touches = current_buffered.touches(neighbor_geom)
+                    intersects = current_buffered.intersects(neighbor_geom)
+
+                    if touches or intersects:
+                        distance = current_geom.distance(neighbor_geom)
+                        if distance < min_distance:
+                            min_distance = distance
+                            closest_neighbor_idx = j
+
+                if closest_neighbor_idx is not None:
+                    blocks_to_merge[i] = closest_neighbor_idx
+
+            # Apply merges
+            merged_blocks = set()
+            for src_idx, dst_idx in blocks_to_merge.items():
+                if src_idx not in merged_blocks and dst_idx not in merged_blocks:
+                    src_geom = split_buffered_lines[src_idx]["geometry"]
+                    dst_geom = split_buffered_lines[dst_idx]["geometry"]
+                    merged_geom = dst_geom.buffer(0.01).union(src_geom.buffer(0.01))
+
+                    if isinstance(merged_geom, Polygon):
+                        pass
+                    elif isinstance(merged_geom, MultiPolygon):
+                        largest_poly = max(merged_geom.geoms, key=lambda p: p.area)
+                        merged_geom = largest_poly
+                    elif hasattr(merged_geom, "geoms"):
+                        polys = []
+                        for g in merged_geom.geoms:
+                            if isinstance(g, Polygon):
+                                polys.append(g)
+                            elif isinstance(g, MultiPolygon):
+                                polys.extend(list(g.geoms))
+
+                        if polys:
+                            merged_geom = max(polys, key=lambda p: p.area)
+
+                    split_buffered_lines[dst_idx]["geometry"] = merged_geom
+                    merged_blocks.add(src_idx)
+
+            merged_buffered_lines = [
+                block for i, block in enumerate(split_buffered_lines) if i not in merged_blocks
+            ]
+            for new_id, block in enumerate(merged_buffered_lines):
+                block["id"] = new_id
+
+            merged_buffered_layer_name = f"{blocks_layer_name}_on_grid"
+            if merged_buffered_lines:
+                gdf_merged = gpd.GeoDataFrame(merged_buffered_lines, geometry="geometry", crs=crs)
+                gdf_merged["type"] = "loc_loc"
+                gdf_merged.to_file(output_gpkg, layer=merged_buffered_layer_name, driver="GPKG")
+                print(f"  Merged buffered lines layer: {merged_buffered_layer_name}")
+
+            # Create off-grid layer
+            off_grid_layer_name = f"{blocks_layer_name}_off_grid"
+            remaining_features = []
+            for blk in subdivided_blocks:
+                block_geom = blk["geometry"]
+                orig_block_id = blk["orig_block_id"]
+
+                intersecting_buffer = None
+                for buff_data in buffered_line_features:
+                    if buff_data["block_id"] == orig_block_id:
+                        intersecting_buffer = buff_data["geometry"]
+                        break
+
+                if not intersecting_buffer:
+                    continue
+
+                remaining_geom = block_geom.buffer(0).difference(
+                    intersecting_buffer.buffer(0.00001)
                 )
 
-        split_buffered_lines = split_buffered_lines_by_subdivided_blocks(
-            buffered_line_features, subdivided_blocks
-        )
+                if remaining_geom and not remaining_geom.is_empty:
+                    _type = (
+                        ClusterTypes.CONCAVE_CORNER
+                        if blk["is_concave"]
+                        else ClusterTypes.OFF_GRID_COLD
+                    )
+                    remaining_features.append(
+                        {
+                            "geometry": remaining_geom,
+                            "orig_id": orig_block_id,
+                            "is_concave": blk["is_concave"],
+                            "concave_x": blk["concave_x"],
+                            "concave_y": blk["concave_y"],
+                            "type": _type,
+                            "block_type": blk["block_type"],
+                            "color": ColorTypes[_type],
+                        }
+                    )
 
-        split_buffered_layer_name = f"{blocks_layer_name}_on_grid"
-        split_buffered_layer = create_or_replace_layer(
-            out_ds, split_buffered_layer_name, srs, ogr.wkbPolygon
-        )
+            if remaining_features:
+                gdf_remaining = gpd.GeoDataFrame(remaining_features, geometry="geometry", crs=crs)
+                gdf_remaining.reset_index(drop=True, inplace=True)
+                gdf_remaining["id"] = gdf_remaining.index
+                gdf_remaining.to_file(output_gpkg, layer=off_grid_layer_name, driver="GPKG")
+                print(f"  Created off-grid cold boundary layer: {off_grid_layer_name}")
 
-        split_buffered_layer.CreateField(ogr.FieldDefn("id", ogr.OFTInteger))
-        split_buffered_layer.CreateField(ogr.FieldDefn("block_id", ogr.OFTInteger))
-        split_buffered_layer.CreateField(ogr.FieldDefn("type", ogr.OFTString))
-
-        for buff_data in split_buffered_lines:
-            feat = ogr.Feature(split_buffered_layer.GetLayerDefn())
-            feat.SetGeometry(buff_data["geometry"])
-            feat.SetField("id", buff_data["id"])
-            feat.SetField("block_id", buff_data["block_id"])
-            feat.SetField("type", "loc_loc")
-            split_buffered_layer.CreateFeature(feat)
-            feat = None
-
-        split_buffered_layer = None
-        print(f"  Split buffered lines layer: {split_buffered_layer_name}")
-
-        off_grid_layer_name = f"{blocks_layer_name}_off_grid"
-
-        for i in range(out_ds.GetLayerCount()):
-            layer = out_ds.GetLayerByIndex(i)
-            if layer.GetName() == off_grid_layer_name:
-                out_ds.DeleteLayer(i)
-                break
-
-        remaining_features = []
-        for blk in subdivided_blocks:
-            block_geom = blk["geometry"]
-            orig_block_id = blk["orig_block_id"]
-
-            intersecting_buffer = None
-            for buff_data in buffered_line_features:
-                if buff_data["block_id"] == orig_block_id:
-                    intersecting_buffer = buff_data["geometry"]
-                    break
-
-            if not intersecting_buffer:
-                continue
-
-            remaining_geom = block_geom.Clone()
-            remaining_geom = remaining_geom.Buffer(0).Difference(
-                intersecting_buffer.Buffer(0.00001)
-            )
-
-            if remaining_geom and not remaining_geom.IsEmpty():
-                remaining_features.append(
-                    {
-                        "id": orig_block_id,
-                        "geometry": remaining_geom,
-                        "orig_id": orig_block_id,
-                        "is_concave": blk["is_concave"],
-                        "concave_x": blk["concave_x"],
-                        "concave_y": blk["concave_y"],
-                        "type": blk["type"],
-                        "block_type": blk["block_type"],
-                    }
-                )
-
-        buffered_lines_layer = None
-
-        remaining_layer = create_or_replace_layer(
-            out_ds,
-            off_grid_layer_name,
-            srs,
-            ogr.wkbPolygon,
-            [
-                ("id", ogr.OFTInteger),
-                ("orig_id", ogr.OFTInteger),
-                ("is_concave", ogr.OFTInteger),
-                ("concave_x", ogr.OFTReal),
-                ("concave_y", ogr.OFTReal),
-                ("type", ogr.OFTString),
-                ("block_type", ogr.OFTString),
-                ("color", ogr.OFTString),
-            ],
-        )
-        id = 0
-        for rem_data in remaining_features:
-            feat = ogr.Feature(remaining_layer.GetLayerDefn())
-            feat.SetGeometry(rem_data["geometry"])
-            feat.SetField("id", id)
-            id += 1
-            _type = (
-                ClusterTypes.CONCAVE_CORNER
-                if rem_data["is_concave"]
-                else ClusterTypes.OFF_GRID_COLD
-            )
-            feat.SetField("orig_id", rem_data["orig_id"])
-            feat.SetField("is_concave", rem_data["is_concave"])
-            feat.SetField("type", _type)
-            feat.SetField("block_type", rem_data["block_type"])
-            feat.SetField("color", ColorTypes[_type])
-
-            if rem_data["concave_x"] is not None:
-                feat.SetField("concave_x", rem_data["concave_x"])
-            if rem_data["concave_y"] is not None:
-                feat.SetField("concave_y", rem_data["concave_y"])
-
-            remaining_layer.CreateFeature(feat)
-            feat = None
-
-        remaining_layer = None
-        print(f"  Created off-grid cold boundary layer: {off_grid_layer_name}")
-
-    # Clean up
-    lines_layer = None
-    blocks_layer = None
-    out_ds = None
+        except Exception as e:
+            print(f"  Warning: Could not process buffered lines layer: {e}")
 
     total_lines = len(cutting_lines_to_write)
     print(f"  Created {total_lines} cutting lines")
