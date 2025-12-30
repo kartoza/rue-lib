@@ -58,6 +58,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
     output_gpkg = output_dir / "outputs.gpkg"
     output_path = str(output_gpkg)
 
+    if output_gpkg.exists():
+        output_gpkg.unlink()
+
     print("Step 1: Determining UTM zone...")
     site_ds = ogr.Open(cfg.parcel_path)
     site_layer = site_ds.GetLayer()
@@ -183,14 +186,16 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 14: Generating off-grid blocks...")
+    grid_layer_name = "14_off_grid_cells"
+    point_layer_name = "14_off_grid_points"
     grids_from_site(
         output_gpkg,
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         preferred_width_off_cluster_grid,
         preferred_depth_off_cluster_grid,
-        grid_layer_name="14_off_grid_cells",
-        point_layer_name="14_off_grid_points",
+        grid_layer_name=grid_layer_name,
+        point_layer_name=point_layer_name,
         dead_end_lines_layer=dead_end_lines_layer,
     )
 
@@ -216,7 +221,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
             "14a_site_boundary_inner_buffer",
             "13_site_boundary_lines",
             line_length=cfg.part_loc_d * 2,
-            min_endpoint_distance=cfg.part_loc_d,
         )
 
         if perp_inside_layer is not None:
@@ -258,23 +262,26 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 15: Generating on-grid cells")
 
     print("Step 15a: Creating guide points from site boundary...")
+    site_boundary_points = "15a_site_boundary_points"
+    lines_without_points_layer = "15a_lines_without_points"
     _guide_points_layer = create_guide_points_from_site_boundary(
         output_gpkg,
         "13_site_boundary_lines",
         perp_inside_layer,
-        output_layer_name="13_site_boundary_points",
-        lines_without_points_layer="13c_lines_without_points",
+        output_layer_name=site_boundary_points,
+        lines_without_points_layer=lines_without_points_layer,
         min_line_length_threshold=preferred_width_off_cluster_grid,
     )
 
     print("Step 15b: Creating perpendicular lines from guide points...")
+    site_boundary_perp_from_points = "15b_site_boundary_perp_from_points"
     _guide_perp_layer = create_perpendicular_lines_from_guide_points(
         output_gpkg,
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
-        "13_site_boundary_points",
+        site_boundary_points,
         line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
-        output_layer_name="13_site_boundary_perp_from_points",
+        output_layer_name=site_boundary_perp_from_points,
     )
 
     print("Merge arterial and secondary setbacks with overlaps resolved...")
@@ -289,7 +296,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
         output_gpkg,
         "10_setback_clipped_merged",
-        "13_site_boundary_perp_from_points",
+        site_boundary_perp_from_points,
         output_gpkg,
         "16_on_grid_cells",
     )

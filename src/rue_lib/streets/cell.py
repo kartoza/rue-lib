@@ -472,7 +472,6 @@ def fix_grid_cells_with_perpendicular_lines(
         print("  No perpendicular lines to process, returning original cells")
         return grid_cells_layer
 
-    # Get buffer geometry (assume single polygon)
     buffer_geom = gdf_buffer.geometry.iloc[0] if not gdf_buffer.empty else None
     if buffer_geom is None:
         print("  Warning: No buffer geometry found")
