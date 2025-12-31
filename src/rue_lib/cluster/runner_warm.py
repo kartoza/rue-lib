@@ -148,9 +148,12 @@ def generate_warm(
     generate_art_sec_parts_no_offgrid_layer_name = generate_art_sec_parts_no_offgrid(
         output_path=output_path,
         blocks_layer_name=warm_grid_on_grid_layer_name,
-        roads_layer_name=roads_layer_name,
+        roads_layer_name="002_input_roads",
+        roads_buffered_layer_name=roads_layer_name,
         part_art_d=part_art_d,
+        art_road_width_m=cfg.road_arterial_width_m / 2,
         part_sec_d=part_sec_d,
+        sec_road_width_m=cfg.road_secondary_width_m / 2,
         part_loc_d=part_loc_d,
         output_layer_name="110_generate_art_sec_parts_no_offgrid",
     )
