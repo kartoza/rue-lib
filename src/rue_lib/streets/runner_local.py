@@ -1,4 +1,5 @@
 # src/rue_lib/streets/runner_local.py
+import shutil
 from pathlib import Path
 
 import geopandas as gpd
@@ -103,6 +104,11 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
     if utm_epsg and gdf_local.crs and utm_epsg != gdf_local.crs:
         print(f"  Reprojecting local roads to match streets CRS: {utm_epsg}")
         gdf_local = gdf_local.to_crs(utm_epsg)
+
+    print("Copy local streets geojson to current output directory for reference.")
+    local_streets_geojson = output_dir / "local_streets.geojson"
+    if local_streets_geojson != local_roads_geojson:
+        shutil.copy(local_roads_geojson, local_streets_geojson)
 
     local_roads_layer = "06_updated_local_roads"
     gdf_local.to_file(output_gpkg, layer=local_roads_layer, driver="GPKG")
@@ -309,18 +315,6 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
             output_path,
             buffered_local_roads_layer_name,
         )
-
-    print("Exporting local streets to GeoJSON for editor use...")
-    local_streets_geojson = output_dir / "local_streets.geojson"
-    export_layer_to_geojson(
-        str(output_gpkg),
-        local_roads_layer_name,
-        str(local_streets_geojson),
-    )
-
-    # Overwrite the local streets GeoJSON with the provided input (projected data)
-    local_streets_geojson = Path(output_gpkg).parent / "local_streets.geojson"
-    gdf_local.to_file(local_streets_geojson, driver="GeoJSON")
 
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
