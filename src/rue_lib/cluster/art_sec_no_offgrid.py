@@ -313,8 +313,11 @@ def generate_art_sec_parts_no_offgrid(
     output_path: Path,
     blocks_layer_name: str,
     roads_layer_name: str,
+    roads_buffered_layer_name: str,
     part_art_d: float,
+    art_road_width_m: float,
     part_sec_d: float,
+    sec_road_width_m: float,
     part_loc_d: float,
     output_layer_name,
     ortho_direction: Optional[np.ndarray] = None,
@@ -327,13 +330,15 @@ def generate_art_sec_parts_no_offgrid(
     corner parts, side parts, and other part types by offsetting roads inward
     and performing boolean operations. Results are saved to a GeoPackage file.
 
+    Arterial and secondary roads are extracted from the roads_layer based on
+    their road_type attribute (RoadTypes.Artery and RoadTypes.Secondary).
+
     Args:
         output_path: Path to the GeoPackage file containing input layers and
             where output will be saved.
         blocks_layer_name: Name of the layer containing block polygons.
-        roads_layer_name: Name of the layer containing road geometries.
-        road_local_width_m: Width of local roads in meters, used for extracting
-            block edges.
+        roads_layer_name: Name of the layer containing road geometries with
+            road_type attributes.
         part_art_d: Offset depth for arterial roads in meters (typically 40m).
         part_sec_d: Offset depth for secondary roads in meters (typically 30m).
         part_loc_d: Offset depth for local roads in meters (typically 20m).
@@ -348,7 +353,11 @@ def generate_art_sec_parts_no_offgrid(
         return
 
     roads_layer = gpd.read_file(output_path, layer=roads_layer_name)
-    block_edges_gdf = extract_block_edges(blocks_layer, roads_layer)
+    roads_buffered_layer = gpd.read_file(output_path, layer=roads_buffered_layer_name)
+
+    # Extract arterial and secondary roads from roads_layer
+    roads_art_layer = roads_layer[roads_layer.get("road_type", "") == "road_art"].copy()
+    roads_sec_layer = roads_layer[roads_layer.get("road_type", "") == "road_sec"].copy()
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])
@@ -356,52 +365,121 @@ def generate_art_sec_parts_no_offgrid(
     if blocks_layer.empty:
         return gpd.GeoDataFrame(columns=["geometry", "class", "type", "block_id"])
 
-    depths_dict = {
-        RoadTypes.Artery: part_art_d,
-        RoadTypes.Secondary: part_sec_d,
-        RoadTypes.Local: part_loc_d,
-        "cold": 0,
-    }
-
     all_parts = []
     edges_for_blocks = []
     edges_for_parts = []
 
+    sec_roads_cleaned = roads_sec_layer.copy()
+    road_art_layer_buffered = roads_art_layer.buffer(art_road_width_m / 2, cap_style="flat")
+    for idx, sec_road in sec_roads_cleaned.iterrows():
+        sec_geom = sec_road.geometry
+        for art_buffer in road_art_layer_buffered:
+            try:
+                sec_geom = sec_geom.difference(art_buffer)
+            except (GEOSException, AttributeError, ValueError):
+                pass
+        sec_roads_cleaned.at[idx, "geometry"] = sec_geom
+
+    art_roads_buffered = roads_art_layer.buffer(part_art_d + art_road_width_m, cap_style="flat")
+
+    sec_roads_buffered = []
+    for sec_geom in sec_roads_cleaned.geometry:
+        buffered = sec_geom.buffer(part_sec_d + sec_road_width_m, cap_style="flat")
+        sec_roads_buffered.append(buffered)
+
     for idx, block_row in blocks_layer.iterrows():
         block = block_row.geometry
 
-        # Get edges for this block
+        # Get block ID
         block_id = block_row.get("block_id", idx)
         if pd.isna(block_id):
             block_id = idx
 
-        edges_for_block = block_edges_gdf[block_edges_gdf.get("block_id", -1) == block_id]
+        parts_to_add = []
 
-        # Create parts
-        parts = create_parts_from_block(block, edges_for_block, depths_dict, ortho_direction)
+        intersecting_art_buffers = []
+        for art_buffer in art_roads_buffered:
+            if block.intersects(art_buffer):
+                intersecting_art_buffers.append(art_buffer)
 
-        # TODO:
-        #  Remove: Save it to layer
-        for _idx, edge in edges_for_block.iterrows():
-            edges_for_blocks.append(edge)
+        intersecting_sec_buffers = []
+        for sec_buffer in sec_roads_buffered:
+            if block.intersects(sec_buffer):
+                intersecting_sec_buffers.append(sec_buffer)
 
-        for part in parts:
-            # Convert part polygon to GeoDataFrame
+        if intersecting_art_buffers or intersecting_sec_buffers:
+            try:
+                intermediate_parts = []
+                remaining_block = block
+                if intersecting_art_buffers:
+                    union_art_buffer = intersecting_art_buffers[0]
+                    for buffer in intersecting_art_buffers[1:]:
+                        union_art_buffer = union_art_buffer.union(buffer)
+
+                    art_buffer_part = remaining_block.intersection(union_art_buffer)
+
+                    remaining_block = remaining_block.difference(union_art_buffer)
+
+                    if isinstance(art_buffer_part, Polygon) and art_buffer_part.area > 1.0:
+                        intermediate_parts.append(art_buffer_part)
+                    elif isinstance(art_buffer_part, MultiPolygon):
+                        intermediate_parts.extend(
+                            [p for p in art_buffer_part.geoms if p.area > 1.0]
+                        )
+
+                if isinstance(remaining_block, Polygon) and remaining_block.area > 1.0:
+                    intermediate_parts.append(remaining_block)
+                elif isinstance(remaining_block, MultiPolygon):
+                    intermediate_parts.extend([p for p in remaining_block.geoms if p.area > 1.0])
+
+                if intersecting_sec_buffers:
+                    union_sec_buffer = intersecting_sec_buffers[0]
+                    for buffer in intersecting_sec_buffers[1:]:
+                        union_sec_buffer = union_sec_buffer.union(buffer)
+
+                    for part in intermediate_parts:
+                        if not part.intersects(union_sec_buffer):
+                            parts_to_add.append(part)
+                            continue
+
+                        sec_buffer_part = part.intersection(union_sec_buffer)
+
+                        part_remaining = part.difference(union_sec_buffer)
+                        if isinstance(sec_buffer_part, Polygon) and sec_buffer_part.area > 1.0:
+                            parts_to_add.append(sec_buffer_part)
+                        elif isinstance(sec_buffer_part, MultiPolygon):
+                            parts_to_add.extend([p for p in sec_buffer_part.geoms if p.area > 1.0])
+                        if isinstance(part_remaining, Polygon) and part_remaining.area > 1.0:
+                            parts_to_add.append(part_remaining)
+                        elif isinstance(part_remaining, MultiPolygon):
+                            parts_to_add.extend([p for p in part_remaining.geoms if p.area > 1.0])
+                else:
+                    parts_to_add = intermediate_parts
+
+            except (GEOSException, AttributeError, ValueError):
+                parts_to_add = [block]
+        else:
+            parts_to_add = [block]
+
+        for part_geom in parts_to_add:
             part_gdf = gpd.GeoDataFrame(
-                [{"geometry": part, "block_id": block_id}], crs=blocks_layer.crs
+                [{"geometry": part_geom, "block_id": block_id}], crs=blocks_layer.crs
             )
-            part_edges = extract_block_edges(part_gdf, roads_layer)
+
+            part_edges = extract_block_edges(part_gdf, roads_buffered_layer)
+
             part_type = classify_part_type(
-                part,
+                part_geom,
                 part_edges,
-                part_art_d=part_art_d,
-                part_sec_d=part_sec_d,
+                part_art_d=part_art_d + art_road_width_m,
+                part_sec_d=part_sec_d + sec_road_width_m,
                 part_loc_d=part_loc_d,
             )
 
             # TODO:
             #  Remove: Save it to layer
             for _idx, edge in part_edges.iterrows():
+                edges_for_blocks.append(edge)
                 edges_for_parts.append(edge)
 
             try:
@@ -411,7 +489,7 @@ def generate_art_sec_parts_no_offgrid(
 
             all_parts.append(
                 {
-                    "geometry": part,
+                    "geometry": part_geom,
                     "class": "part",
                     "block_id": block_id,
                     "block_type": block_row.get("block_type", ""),
