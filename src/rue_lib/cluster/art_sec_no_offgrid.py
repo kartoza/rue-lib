@@ -17,7 +17,6 @@ from shapely.errors import GEOSException
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
 
 from rue_lib.cluster.block_edges import extract_block_edges
-from rue_lib.cluster.classification import classify_part_type
 from rue_lib.cluster.off_grid import extend_line
 from rue_lib.core.definitions import ColorTypes, RoadTypes
 from rue_lib.streets.geometry_utils import break_linestring_by_angle_shapely
@@ -467,33 +466,6 @@ def generate_art_sec_parts_no_offgrid(
             if len(current_group) >= 2:
                 line_groups.append(current_group)
 
-        elif isinstance(boundary, MultiLineString):
-            for line in boundary.geoms:
-                coords = list(line.coords)
-                current_group = []
-
-                for i in range(len(coords) - 1):
-                    segment = LineString([coords[i], coords[i + 1]])
-                    intersects_any = False
-                    for seg_data in loc_segments_buffered:
-                        seg_buffer = seg_data["geometry"]
-                        if segment.intersects(seg_buffer):
-                            intersects_any = True
-                            break
-
-                    if intersects_any:
-                        if not current_group:
-                            current_group.append(coords[i])
-                        current_group.append(coords[i + 1])
-                    else:
-                        if len(current_group) >= 2:
-                            line_groups.append(current_group)
-                        current_group = []
-
-                # Add last group if exists
-                if len(current_group) >= 2:
-                    line_groups.append(current_group)
-
         if line_groups:
             merge_threshold = 1.0
             merged = False
@@ -569,7 +541,7 @@ def generate_art_sec_parts_no_offgrid(
         for block_line in block_lines_intersecting:
             block_id = block_line["block_id"]
             broken_lines = break_linestring_by_angle_shapely(
-                block_line["geometry"], angle_threshold=80.0
+                block_line["geometry"], angle_threshold=60
             )
             local_lines_by_block_id[block_id] = broken_lines
 
@@ -610,34 +582,45 @@ def generate_art_sec_parts_no_offgrid(
 
                     art_buffer_part = remaining_block.intersection(union_art_buffer)
                     remaining_block = remaining_block.difference(union_art_buffer)
-                    intermediate_parts.append(art_buffer_part)
+                    intermediate_parts.append({"geometry": art_buffer_part, "is_art_or_sec": "art"})
 
-                intermediate_parts.append(remaining_block)
+                intermediate_parts.append({"geometry": remaining_block, "is_art_or_sec": None})
 
                 if intersecting_sec_buffers:
                     union_sec_buffer = intersecting_sec_buffers[0]
                     for buffer in intersecting_sec_buffers[1:]:
                         union_sec_buffer = union_sec_buffer.union(buffer)
 
-                    for part in intermediate_parts:
+                    for part_data in intermediate_parts:
+                        part = part_data["geometry"]
+                        is_art = part_data["is_art_or_sec"] == "art"
+
                         if not part.intersects(union_sec_buffer):
-                            parts_to_add.append(part)
+                            parts_to_add.append(part_data)
                             continue
 
                         sec_buffer_part = part.intersection(union_sec_buffer)
-
                         part_remaining = part.difference(union_sec_buffer)
+
                         if isinstance(sec_buffer_part, Polygon) and sec_buffer_part.area > 1.0:
-                            parts_to_add.append(sec_buffer_part)
+                            # If original part was art, this is art_sec; otherwise it's sec
+                            sec_type = "art" if is_art else "sec"
+                            parts_to_add.append(
+                                {"geometry": sec_buffer_part, "is_art_or_sec": sec_type}
+                            )
                         if isinstance(part_remaining, Polygon) and part_remaining.area > 1.0:
-                            parts_to_add.append(part_remaining)
+                            # Remaining part keeps original type
+                            remaining_type = part_data["is_art_or_sec"]
+                            parts_to_add.append(
+                                {"geometry": part_remaining, "is_art_or_sec": remaining_type}
+                            )
                 else:
                     parts_to_add = intermediate_parts
 
             except (GEOSException, AttributeError, ValueError):
-                parts_to_add = [block]
+                parts_to_add = [{"geometry": block, "is_art_or_sec": None}]
         else:
-            parts_to_add = [block]
+            parts_to_add = [{"geometry": block, "is_art_or_sec": None}]
 
         if block_id in local_lines_by_block_id:
             local_lines = local_lines_by_block_id[block_id]
@@ -646,12 +629,35 @@ def generate_art_sec_parts_no_offgrid(
             is_corner_block = len(parts_to_add) >= 4
             min_area_factor = 4 if is_corner_block else 3
 
-            for part in parts_to_add:
-                current_part = part
+            # Get art/sec parts for local line filtering
+            art_sec_parts = [
+                part_data["geometry"]
+                for part_data in parts_to_add
+                if part_data["is_art_or_sec"] is not None
+            ]
+
+            filtered_local_lines = []
+            if art_sec_parts:
+                for local_line in local_lines:
+                    line_centroid = local_line.centroid
+                    for part_geom in art_sec_parts:
+                        if line_centroid.buffer(1).intersects(part_geom):
+                            filtered_local_lines.append(local_line)
+                            break
+
+                # Sort by length
+                local_lines_sorted = sorted(filtered_local_lines, key=lambda line: line.length)
+
+                local_lines = local_lines_sorted
+            else:
+                local_lines = []
+
+            for part_data in parts_to_add:
+                current_part = part_data["geometry"]
                 split_parts = []
 
                 for local_line in local_lines:
-                    local_off = local_line.buffer(part_loc_d, cap_style="round")
+                    local_off = local_line.buffer(part_loc_d, join_style="mitre", cap_style="round")
 
                     buffer_part_for_calculation = block_row.geometry.intersection(local_off)
                     if buffer_part_for_calculation.area * min_area_factor > block_row.geometry.area:
@@ -660,31 +666,83 @@ def generate_art_sec_parts_no_offgrid(
                     try:
                         buffer_part = current_part.intersection(local_off)
                         remaining_part = current_part.difference(local_off)
-                        split_parts.append(buffer_part)
+                        split_parts.append({"geometry": buffer_part, "is_art_or_sec": None})
                         current_part = remaining_part
                     except (GEOSException, AttributeError, ValueError):
                         continue
 
                 final_parts.extend(split_parts)
                 if current_part.area > 1.0:
-                    final_parts.append(current_part)
+                    final_parts.append({"geometry": current_part, "is_art_or_sec": None})
 
             parts_to_add = final_parts
 
-        for part_geom in parts_to_add:
+        index = 0
+        for part_data in parts_to_add:
+            part_geom = part_data["geometry"]
             part_gdf = gpd.GeoDataFrame(
                 [{"geometry": part_geom, "block_id": block_id}], crs=blocks_layer.crs
             )
+            index += 1
+            part_edges = extract_block_edges(part_gdf, roads_buffered_layer, default_type=None)
 
-            part_edges = extract_block_edges(part_gdf, roads_buffered_layer)
+            unique_types = set(part_edges["road_type"])
+            local_count = (part_edges["road_type"] == RoadTypes.Local).sum()
 
-            part_type = classify_part_type(
-                part_geom,
-                part_edges,
-                part_art_d=part_art_d + art_road_width_m,
-                part_sec_d=part_sec_d + sec_road_width_m,
-                part_loc_d=part_loc_d + loc_road_width_m,
-            )
+            if RoadTypes.Artery in unique_types:
+                part_type = "art_sec" if RoadTypes.Secondary in unique_types else "art"
+            elif RoadTypes.Secondary in unique_types:
+                part_type = "sec_loc" if RoadTypes.Local in unique_types else "sec"
+            else:
+                if local_count >= 2 and len(part_edges) >= 4:
+                    local_edges = part_edges[part_edges["road_type"] == RoadTypes.Local].copy()
+
+                    edges_to_merge = set()
+                    min_edge_length = 5.0
+                    local_indices = local_edges.index.tolist()
+                    for i, idx in enumerate(local_indices):
+                        edge = part_edges.loc[idx]
+                        edge_geom = edge.geometry
+                        edge_coords = list(edge_geom.coords)
+
+                        for j in range(i + 1, len(local_indices)):
+                            idx2 = local_indices[j]
+                            edge2 = part_edges.loc[idx2]
+                            edge2_geom = edge2.geometry
+                            edge2_coords = list(edge2_geom.coords)
+
+                            shared_point = None
+                            p1, p2 = None, None
+
+                            if edge_coords[-1] == edge2_coords[0]:
+                                shared_point = edge_coords[-1]
+                                p1 = edge_coords[-2] if len(edge_coords) >= 2 else edge_coords[0]
+                                p2 = edge2_coords[1] if len(edge2_coords) >= 2 else edge2_coords[-1]
+                            elif edge_coords[0] == edge2_coords[-1]:
+                                shared_point = edge_coords[0]
+                                p1 = edge2_coords[-2] if len(edge2_coords) >= 2 else edge2_coords[0]
+                                p2 = edge_coords[1] if len(edge_coords) >= 2 else edge_coords[-1]
+
+                            if shared_point and p1 and p2:
+                                v1 = np.array([p1[0] - shared_point[0], p1[1] - shared_point[1]])
+                                v2 = np.array([p2[0] - shared_point[0], p2[1] - shared_point[1]])
+                                v1_norm = v1 / (np.linalg.norm(v1) + 1e-10)
+                                v2_norm = v2 / (np.linalg.norm(v2) + 1e-10)
+                                dot_product = np.clip(np.dot(v1_norm, v2_norm), -1.0, 1.0)
+                                angle = np.degrees(np.arccos(dot_product))
+
+                                # Consider as one edge if angle > 100 degrees
+                                # or one edge is too small
+                                if (
+                                    angle > 100
+                                    or edge_geom.length < min_edge_length
+                                    or edge2_geom.length < min_edge_length
+                                ):
+                                    edges_to_merge.add((min(idx, idx2), max(idx, idx2)))
+
+                    # Adjust local count by subtracting merged edge pairs
+                    local_count -= len(edges_to_merge)
+                part_type = "loc_loc" if local_count >= 2 else "loc"
 
             # TODO:
             #  Remove: Save it to layer
