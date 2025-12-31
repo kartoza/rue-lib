@@ -60,7 +60,9 @@ def extract_block_edges(
             edge_geom = LineString([coords[i], coords[i + 1]])
 
             # Find the nearest road to this edge
-            road_type = find_closest_road_type(edge_geom, roads_gdf)
+            if edge_geom.length < 1:
+                continue
+            road_type = find_closest_road_type(edge_geom, roads_gdf, max_distance=tolerance)
             if default_type and road_type is None:
                 road_type = default_type
 

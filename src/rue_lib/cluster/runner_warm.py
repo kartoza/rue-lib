@@ -155,6 +155,7 @@ def generate_warm(
         part_sec_d=part_sec_d,
         sec_road_width_m=cfg.road_secondary_width_m / 2,
         part_loc_d=part_loc_d,
+        loc_road_width_m=cfg.road_local_width_m / 2,
         output_layer_name="110_generate_art_sec_parts_no_offgrid",
     )
 

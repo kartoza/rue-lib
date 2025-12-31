@@ -132,10 +132,13 @@ def find_closest_road_type(
     """
     Find the road type that is closest to the center point of a given edge.
 
+    Uses spatial indexing (R-tree) for efficient nearest neighbor search.
+
     Args:
         edge: Edge line of the block
         roads: GeoDataFrame with roads
         max_distance: Maximum distance to consider
+        default_type: Default road type if no road found within max_distance
 
     Returns:
         Road type string or None if no road within max_distance
@@ -149,31 +152,58 @@ def find_closest_road_type(
     else:
         edge_center = edge.interpolate(0.5, normalized=True)
 
-    min_distance = float("inf")
-    closest_type = default_type
+    # Use spatial index to find candidate roads within bounding box
+    # Buffer by max_distance to get search area
+    search_buffer = edge_center.buffer(max_distance)
 
-    for _, road in roads.iterrows():
-        dist = edge_center.distance(road.geometry)
-        if dist < min_distance and dist <= max_distance:
-            min_distance = dist
-            new_type = road[PropertyKeys.RoadType]
-            if (
-                new_type != RoadTypes.Local
-                or new_type == RoadTypes.Local
-                and closest_type not in [RoadTypes.Artery, RoadTypes.Secondary]
-            ):
-                closest_type = road[PropertyKeys.RoadType]
+    # Query spatial index for potentially nearby roads
+    possible_matches_idx = list(roads.sindex.intersection(search_buffer.bounds))
 
-    # Return None if the closest road is too far
-    if min_distance > max_distance:
+    if not possible_matches_idx:
         return None
 
+    # Get candidate roads
+    possible_matches = roads.iloc[possible_matches_idx]
+
+    # Calculate distances only for candidate roads
+    distances = possible_matches.geometry.distance(edge_center)
+
+    # Filter by max_distance
+    within_distance = distances <= max_distance
+
+    if not within_distance.any():
+        return None
+
+    # Get roads within max_distance
+    nearby_roads = possible_matches[within_distance].copy()
+    nearby_roads["dist"] = distances[within_distance]
+
+    # Sort by distance
+    nearby_roads = nearby_roads.sort_values("dist")
+
+    # Find closest road with priority: Artery > Secondary > Local
+    closest_type = default_type
+
+    for _, road in nearby_roads.iterrows():
+        new_type = road[PropertyKeys.RoadType]
+
+        # Prioritize non-local roads
+        if (
+            new_type != RoadTypes.Local
+            or new_type == RoadTypes.Local
+            and closest_type not in [RoadTypes.Artery, RoadTypes.Secondary]
+        ):
+            closest_type = new_type
+            break
+
+    # Normalize road type strings
     if closest_type == "road_art":
         closest_type = RoadTypes.Artery
     elif closest_type == "road_sec":
         closest_type = RoadTypes.Secondary
     elif closest_type == "road_loc":
         closest_type = RoadTypes.Local
+
     return closest_type
 
 

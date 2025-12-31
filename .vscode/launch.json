@@ -20,6 +20,15 @@
             "justMyCode": true
         },
         {
+            "name": "Python: Step 2 Streets with Local Roads Example",
+            "type": "debugpy",
+            "request": "launch",
+            "program": "${workspaceFolder}/examples/step2_generate_streets_with_local_roads.py",
+            "console": "integratedTerminal",
+            "cwd": "${workspaceFolder}",
+            "justMyCode": true
+        },
+        {
             "name": "Python: Step 3 Cluster Example",
             "type": "debugpy",
             "request": "launch",
