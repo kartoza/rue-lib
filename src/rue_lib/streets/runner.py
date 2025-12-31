@@ -6,6 +6,10 @@ from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.blocks import generate_on_grid_blocks
+from rue_lib.streets.cold_boundaries_utils import (
+    extract_cold_boundary_lines_from_vertices,
+    extract_line_vertices,
+)
 from rue_lib.streets.grids import (
     create_cold_boundaries,
     extract_grid_lines_in_buffer,
@@ -186,14 +190,16 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 14: Generating off-grid blocks...")
+    grid_layer_name = "14_off_grid_cells"
+    point_layer_name = "14_off_grid_points"
     grids_from_site(
         output_gpkg,
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         preferred_width_off_cluster_grid,
         preferred_depth_off_cluster_grid,
-        grid_layer_name="14_off_grid_cells",
-        point_layer_name="14_off_grid_points",
+        grid_layer_name=grid_layer_name,
+        point_layer_name=point_layer_name,
         dead_end_lines_layer=dead_end_lines_layer,
     )
 
@@ -219,7 +225,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
             "14a_site_boundary_inner_buffer",
             "13_site_boundary_lines",
             line_length=cfg.part_loc_d * 2,
-            min_endpoint_distance=cfg.part_loc_d,
         )
 
         if perp_inside_layer is not None:
@@ -261,23 +266,26 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print("Step 15: Generating on-grid cells")
 
     print("Step 15a: Creating guide points from site boundary...")
+    site_boundary_points = "15a_site_boundary_points"
+    lines_without_points_layer = "15a_lines_without_points"
     _guide_points_layer = create_guide_points_from_site_boundary(
         output_gpkg,
         "13_site_boundary_lines",
         perp_inside_layer,
-        output_layer_name="13_site_boundary_points",
-        lines_without_points_layer="13c_lines_without_points",
+        output_layer_name=site_boundary_points,
+        lines_without_points_layer=lines_without_points_layer,
         min_line_length_threshold=preferred_width_off_cluster_grid,
     )
 
     print("Step 15b: Creating perpendicular lines from guide points...")
+    site_boundary_perp_from_points = "15b_site_boundary_perp_from_points"
     _guide_perp_layer = create_perpendicular_lines_from_guide_points(
         output_gpkg,
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
-        "13_site_boundary_points",
+        site_boundary_points,
         line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
-        output_layer_name="13_site_boundary_perp_from_points",
+        output_layer_name=site_boundary_perp_from_points,
     )
 
     print("Merge arterial and secondary setbacks with overlaps resolved...")
@@ -292,7 +300,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
         output_gpkg,
         "10_setback_clipped_merged",
-        "13_site_boundary_perp_from_points",
+        site_boundary_perp_from_points,
         output_gpkg,
         "16_on_grid_cells",
     )
@@ -371,19 +379,35 @@ def generate_streets(cfg: StreetConfig) -> Path:
     else:
         print("  Warning: No valid layers for local roads generation, skipping...")
 
-    # Remove cold boundaries from local roads (if they exist)
+    local_roads_vertices_layer = extract_line_vertices(
+        output_gpkg, local_roads_layer_name, output_gpkg, "18_local_roads_vertices"
+    )
+
+    cold_boundary_lines_layer = None
+    if local_roads_vertices_layer and ogr.Open(str(output_gpkg)).GetLayerByName(
+        cold_boundaries_layer
+    ):
+        cold_boundary_lines_layer = extract_cold_boundary_lines_from_vertices(
+            output_gpkg,
+            cold_boundaries_layer,
+            local_roads_vertices_layer,
+            local_roads_layer_name,
+            output_layer_name="14_cold_boundary_lines",
+        )
+
     local_roads_minus_cold_layer = None
-    # Check if cold_boundaries_layer exists in geopackage with geopandas
     if ogr.Open(str(output_gpkg)).GetLayerByName(cold_boundaries_layer):
         try:
-            local_roads_minus_cold_layer = subtract_layer(
-                output_gpkg,
-                cold_boundaries_layer,
-                local_roads_layer_name,
-                output_gpkg,
-                "14a_local_roads_minus_cold_boundaries",
-                cfg.road_locals_width_m / 2.0,
-            )
+            if cold_boundary_lines_layer:
+                local_roads_minus_cold_layer = subtract_layer(
+                    output_gpkg,
+                    cold_boundaries_layer,
+                    cold_boundary_lines_layer,
+                    output_gpkg,
+                    "14a_local_roads_minus_cold_boundaries",
+                    (cfg.road_locals_width_m / 2.0) + 0.01,
+                    simplify=True,
+                )
 
             local_roads_minus_cold_layer = subtract_layer(
                 output_gpkg,
@@ -392,6 +416,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 output_gpkg,
                 "14a_local_roads_minus_cold_boundaries",
                 cfg.road_secondary_width_m / 2.0,
+                simplify=True,
             )
 
             local_roads_minus_cold_layer = subtract_layer(
@@ -401,6 +426,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
                 output_gpkg,
                 "14a_local_roads_minus_cold_boundaries",
                 cfg.road_arterial_width_m / 2.0,
+                simplify=True,
             )
         except ValueError as e:
             if "is empty" in str(e):

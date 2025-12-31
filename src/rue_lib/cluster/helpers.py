@@ -285,17 +285,25 @@ def assign_cluster_type(gpkg_path: str, block_layer_name: str, final_layer_name:
         if final_geom is None:
             continue
 
-        # Find matching feature in block layer by centroid
-        final_geom_centroid = final_geom.Centroid()
-        block_layer.SetSpatialFilter(final_geom_centroid)
+        # Find matching feature in block layer using full geometry
+        # Select the block with the largest intersection area
+        block_layer.SetSpatialFilter(final_geom)
         block_type = None
+        max_intersection_area = 0.0
+
         for block_feat in block_layer:
             block_geom = block_feat.GetGeometryRef()
 
-            # Check if final geometry centroid is within block geometry
-            if block_geom and final_geom_centroid.Within(block_geom):
-                block_type = block_feat.GetField("type")
-                break
+            # Check if geometries intersect
+            if block_geom and final_geom.Intersects(block_geom):
+                # Calculate intersection area
+                intersection = final_geom.Intersection(block_geom)
+                intersection_area = intersection.Area()
+
+                # Keep track of block with largest intersection
+                if intersection_area > max_intersection_area:
+                    max_intersection_area = intersection_area
+                    block_type = block_feat.GetField("type")
 
         block_layer.ResetReading()
 
