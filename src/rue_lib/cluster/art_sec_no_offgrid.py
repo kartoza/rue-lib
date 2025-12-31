@@ -11,6 +11,7 @@ from typing import Optional
 
 import geopandas as gpd
 import numpy as np
+import pandas as pd
 import pyogrio.errors
 from shapely.errors import GEOSException
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Polygon
@@ -371,6 +372,9 @@ def generate_art_sec_parts_no_offgrid(
 
         # Get edges for this block
         block_id = block_row.get("block_id", idx)
+        if pd.isna(block_id):
+            block_id = idx
+
         edges_for_block = block_edges_gdf[block_edges_gdf.get("block_id", -1) == block_id]
 
         # Create parts

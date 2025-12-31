@@ -490,19 +490,6 @@ def generate_streets(cfg: StreetConfig) -> Path:
     # --------------------------------------
     # Extract local roads from merged grids
     # --------------------------------------
-    local_road_grid_layer_name = "17_local_road_grid"
-    extract_by_expression(
-        output_path,
-        all_grid_layer_name,
-        (
-            "type = 'on_grid_art_local_streets' OR "
-            "type = 'on_grid_sec_local_streets' OR "
-            "type = 'on_grid_art_local_streets' OR "
-            "type = 'off_grid_local_streets' "
-        ),
-        output_path,
-        local_road_grid_layer_name,
-    )
     buildable_zone_layer_name = "17_buildable_zone"
     extract_by_expression(
         output_path,
@@ -513,14 +500,49 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Cutting local roads with buildable zone to get roads outside buildable area...")
-    erase_layer(
+    buffered_local_roads_layer_name = "17_local_roads_buffer"
+    site_minus_roads_layer = "17a_site_minus_all_setbacks"
+    subtract_layer(
         output_path,
-        local_road_grid_layer_name,
+        site_layer_name,
+        "00_roads_buffer",
         output_path,
-        buildable_zone_layer_name,
-        output_path,
-        "17_local_roads_buffer",
+        site_minus_roads_layer,
     )
+    if local_roads_minus_cold_layer:
+        subtract_layer(
+            output_path,
+            site_minus_roads_layer,
+            local_roads_minus_cold_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    else:
+        buffered_local_roads_layer_name = site_minus_roads_layer
+    if on_grid_arterial_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            on_grid_arterial_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    if on_grid_secondary_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            on_grid_secondary_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    if off_grid_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            off_grid_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
 
     print("Step 18: Exporting merged grids to GeoJSON...")
     output_geojson = output_dir / "outputs.geojson"
@@ -547,6 +569,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
     print(f"  - {local_streets_geojson}: Local streets centerlines")
 
     print("Step 19: Generating financial data")
-    FinancialStreet(config=cfg)
+    FinancialStreet(
+        config=cfg,
+        local_roads_layer=local_roads_layer_name,
+        local_roads_buffer_layer=buffered_local_roads_layer_name,
+    )
 
     return output_gpkg

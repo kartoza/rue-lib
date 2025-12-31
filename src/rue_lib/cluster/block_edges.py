@@ -4,6 +4,7 @@
 from typing import Optional
 
 import geopandas as gpd
+import pandas as pd
 from shapely.geometry import LineString, Polygon
 
 from rue_lib.cluster.helpers import find_closest_road_type
@@ -45,6 +46,8 @@ def extract_block_edges(
     for idx, block_row in blocks_gdf.iterrows():
         block = block_row.geometry
         block_id = block_row.get("block_id", idx)
+        if pd.isna(block_id):
+            block_id = idx
 
         if not isinstance(block, Polygon):
             continue

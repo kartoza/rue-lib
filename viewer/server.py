@@ -160,7 +160,8 @@ def run_processing_steps(boundary_fc, arterial_fc, secondary_fc, params=None):
         "boundary_path": relative_to_root(boundary_path),
         "roads_path": relative_to_root(roads_path),
         "step1_output": relative_to_root(step1_output),
-        "step2_output": relative_to_root(step2_output),
+        "step2_output": relative_to_root(step2_output.geopackage),
+        "step2_local_streets_geojson": relative_to_root(step2_output.local_streets_geojson),
     }
 
 
