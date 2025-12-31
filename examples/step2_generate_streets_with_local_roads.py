@@ -14,7 +14,7 @@ def main():
     cfg = StreetConfig(
         parcel_path="outputs/step1_parcels/outputs.geojson",
         roads_path="data/roads.geojson",
-        output_dir="outputs/step2_streets_local",
+        output_dir="outputs/step2_streets",
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,

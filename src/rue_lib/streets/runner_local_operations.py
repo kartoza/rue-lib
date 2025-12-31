@@ -67,6 +67,7 @@ def classify_blocks_by_road_type(
 
     # Add unique block ID
     gdf_blocks["block_id"] = range(len(gdf_blocks))
+    gdf_blocks["id"] = range(len(gdf_blocks))
 
     # Calculate area in square meters
     gdf_blocks["area"] = gdf_blocks.geometry.area
