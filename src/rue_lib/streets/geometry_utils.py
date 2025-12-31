@@ -2,6 +2,7 @@
 import math
 
 from osgeo import ogr
+from shapely.geometry import LineString, MultiLineString
 
 
 def is_duplicate(new_geom, existing_geoms):
@@ -90,6 +91,64 @@ def break_linestring_by_angle(linestring, angle_threshold=60.0):
             new_line.AddPoint(linestring.GetX(j), linestring.GetY(j))
 
         segments.append(new_line)
+
+    return segments
+
+
+def break_linestring_by_angle_shapely(linestring, angle_threshold=60.0):
+    """
+    Break a Shapely linestring at points where the angle change exceeds the threshold.
+
+    Args:
+        linestring: Shapely LineString or MultiLineString geometry
+        angle_threshold: Angle threshold in degrees (default 60.0)
+
+    Returns:
+        List of Shapely LineString geometries
+    """
+    # Handle MultiLineString by processing each component
+    if isinstance(linestring, MultiLineString):
+        all_segments = []
+        for line in linestring.geoms:
+            all_segments.extend(break_linestring_by_angle_shapely(line, angle_threshold))
+        return all_segments
+
+    # Get coordinates from Shapely LineString
+    coords = list(linestring.coords)
+    point_count = len(coords)
+
+    # If linestring has less than 3 points, return as is
+    if point_count < 3:
+        return [linestring]
+
+    # Find break points
+    break_indices = [0]  # Start with first point
+
+    for i in range(1, point_count - 1):
+        x1, y1 = coords[i - 1]
+        x2, y2 = coords[i]
+        x3, y3 = coords[i + 1]
+
+        angle_change = calculate_angle_change(x1, y1, x2, y2, x3, y3)
+
+        if angle_change > angle_threshold:
+            break_indices.append(i)
+
+    break_indices.append(point_count - 1)  # End with last point
+
+    # Create linestrings from break indices
+    segments = []
+    for i in range(len(break_indices) - 1):
+        start_idx = break_indices[i]
+        end_idx = break_indices[i + 1]
+
+        # Extract coordinates for this segment
+        segment_coords = coords[start_idx : end_idx + 1]
+
+        # Create new Shapely LineString
+        if len(segment_coords) >= 2:
+            new_line = LineString(segment_coords)
+            segments.append(new_line)
 
     return segments
 

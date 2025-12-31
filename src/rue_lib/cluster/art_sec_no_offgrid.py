@@ -20,6 +20,7 @@ from rue_lib.cluster.block_edges import extract_block_edges
 from rue_lib.cluster.classification import classify_part_type
 from rue_lib.cluster.off_grid import extend_line
 from rue_lib.core.definitions import ColorTypes, RoadTypes
+from rue_lib.streets.geometry_utils import break_linestring_by_angle_shapely
 
 
 def get_perimeter_lines_by_road_type(
@@ -319,32 +320,49 @@ def generate_art_sec_parts_no_offgrid(
     part_sec_d: float,
     sec_road_width_m: float,
     part_loc_d: float,
+    loc_road_width_m: float,
     output_layer_name,
     ortho_direction: Optional[np.ndarray] = None,
 ):
     """
-    Generate arterial and secondary block parts without off-grid subdivision.
+    Generate arterial, secondary, and local block parts without off-grid subdivision.
 
-    This function processes blocks and creates parts based on arterial and
-    secondary road adjacency. It performs geometric operations to create
-    corner parts, side parts, and other part types by offsetting roads inward
+    This function processes blocks and creates parts based on a three-stage splitting
+    process using arterial, secondary, and local roads. It performs geometric operations
+    to create corner parts, side parts, and other part types by offsetting roads inward
     and performing boolean operations. Results are saved to a GeoPackage file.
 
-    Arterial and secondary roads are extracted from the roads_layer based on
-    their road_type attribute (RoadTypes.Artery and RoadTypes.Secondary).
+    Splitting stages:
+    1. Arterial roads: Blocks are split by buffered arterial roads
+    2. Secondary roads: Parts from stage 1 are further split by buffered secondary roads
+    3. Local roads: Parts from stage 2 are split by buffered local roads, but only if
+       both resulting parts are large enough (reverts to original part if too small)
+
+    Roads are extracted from roads_layer based on road_type attribute:
+    - "road_art" for arterial roads
+    - "road_sec" for secondary roads
+    - "road_loc" for local roads
 
     Args:
         output_path: Path to the GeoPackage file containing input layers and
             where output will be saved.
         blocks_layer_name: Name of the layer containing block polygons.
         roads_layer_name: Name of the layer containing road geometries with
-            road_type attributes.
-        part_art_d: Offset depth for arterial roads in meters (typically 40m).
-        part_sec_d: Offset depth for secondary roads in meters (typically 30m).
-        part_loc_d: Offset depth for local roads in meters (typically 20m).
+            road_type attributes ("road_art", "road_sec", "road_loc").
+        roads_buffered_layer_name: Name of the layer containing buffered road
+            geometries used for edge extraction and part classification.
+        part_art_d: Offset depth for arterial road parts in meters (typically 40m).
+        art_road_width_m: Width of arterial roads in meters.
+        part_sec_d: Offset depth for secondary road parts in meters (typically 30m).
+        sec_road_width_m: Width of secondary roads in meters.
+        part_loc_d: Offset depth for local road parts in meters (typically 20m).
+        loc_road_width_m: Width of local roads in meters.
         output_layer_name: Name for the output layer containing generated parts.
         ortho_direction: Optional orthogonal direction vector for perpendicular
             checks. Defaults to [0, 1, 0] if not provided.
+
+    Returns:
+        str: The output layer name.
     """
     try:
         blocks_layer = gpd.read_file(output_path, layer=blocks_layer_name)
@@ -355,9 +373,10 @@ def generate_art_sec_parts_no_offgrid(
     roads_layer = gpd.read_file(output_path, layer=roads_layer_name)
     roads_buffered_layer = gpd.read_file(output_path, layer=roads_buffered_layer_name)
 
-    # Extract arterial and secondary roads from roads_layer
+    # Extract arterial, secondary, and local roads from roads_layer
     roads_art_layer = roads_layer[roads_layer.get("road_type", "") == "road_art"].copy()
     roads_sec_layer = roads_layer[roads_layer.get("road_type", "") == "road_sec"].copy()
+    roads_loc_layer = roads_layer[roads_layer.get("type", "") == "road_local"].copy()
 
     if ortho_direction is None:
         ortho_direction = np.array([0, 1, 0])
@@ -386,6 +405,179 @@ def generate_art_sec_parts_no_offgrid(
     for sec_geom in sec_roads_cleaned.geometry:
         buffered = sec_geom.buffer(part_sec_d + sec_road_width_m, cap_style="flat")
         sec_roads_buffered.append(buffered)
+
+    loc_roads_broken = []
+    segment_id = 0
+    for _idx, loc_road in roads_loc_layer.iterrows():
+        loc_geom = loc_road.geometry
+
+        if isinstance(loc_geom, LineString):
+            coords = list(loc_geom.coords)
+            for i in range(len(coords) - 1):
+                segment = LineString([coords[i], coords[i + 1]])
+                loc_roads_broken.append({"geometry": segment, "segment_id": segment_id})
+                segment_id += 1
+        else:
+            loc_roads_broken.append({"geometry": loc_geom, "segment_id": segment_id})
+            segment_id += 1
+
+    loc_segments_buffered = []
+    for segment_data in loc_roads_broken:
+        segment_geom = segment_data["geometry"]
+        seg_id = segment_data["segment_id"]
+        buffered = segment_geom.buffer(loc_road_width_m + 0.1, cap_style="flat")
+        loc_segments_buffered.append({"geometry": buffered, "segment_id": seg_id})
+
+    block_lines_intersecting = []
+    for idx, block_row in blocks_layer.iterrows():
+        block = block_row.geometry
+        block_id = block_row.get("block_id", idx)
+        if pd.isna(block_id):
+            block_id = idx
+
+        if isinstance(block, Polygon):
+            boundary = block.boundary
+        else:
+            continue
+
+        line_groups = []
+
+        if isinstance(boundary, LineString):
+            coords = list(boundary.coords)
+            current_group = []
+
+            for i in range(len(coords) - 1):
+                segment = LineString([coords[i], coords[i + 1]])
+                intersects_any = False
+                for seg_data in loc_segments_buffered:
+                    seg_buffer = seg_data["geometry"]
+                    if segment.centroid.intersects(seg_buffer):
+                        intersects_any = True
+                        break
+
+                if intersects_any:
+                    if not current_group:
+                        current_group.append(coords[i])
+                    current_group.append(coords[i + 1])
+                else:
+                    if len(current_group) >= 2:
+                        line_groups.append(current_group)
+                    current_group = []
+
+            if len(current_group) >= 2:
+                line_groups.append(current_group)
+
+        elif isinstance(boundary, MultiLineString):
+            for line in boundary.geoms:
+                coords = list(line.coords)
+                current_group = []
+
+                for i in range(len(coords) - 1):
+                    segment = LineString([coords[i], coords[i + 1]])
+                    intersects_any = False
+                    for seg_data in loc_segments_buffered:
+                        seg_buffer = seg_data["geometry"]
+                        if segment.intersects(seg_buffer):
+                            intersects_any = True
+                            break
+
+                    if intersects_any:
+                        if not current_group:
+                            current_group.append(coords[i])
+                        current_group.append(coords[i + 1])
+                    else:
+                        if len(current_group) >= 2:
+                            line_groups.append(current_group)
+                        current_group = []
+
+                # Add last group if exists
+                if len(current_group) >= 2:
+                    line_groups.append(current_group)
+
+        if line_groups:
+            merge_threshold = 1.0
+            merged = False
+
+            while True:
+                merged = False
+                for i in range(len(line_groups)):
+                    if i >= len(line_groups):
+                        break
+                    for j in range(i + 1, len(line_groups)):
+                        if j >= len(line_groups):
+                            break
+
+                        group1 = line_groups[i]
+                        group2 = line_groups[j]
+
+                        dist1 = (
+                            (group1[-1][0] - group2[0][0]) ** 2
+                            + (group1[-1][1] - group2[0][1]) ** 2
+                        ) ** 0.5
+                        dist2 = (
+                            (group1[-1][0] - group2[-1][0]) ** 2
+                            + (group1[-1][1] - group2[-1][1]) ** 2
+                        ) ** 0.5
+                        dist3 = (
+                            (group1[0][0] - group2[0][0]) ** 2 + (group1[0][1] - group2[0][1]) ** 2
+                        ) ** 0.5
+                        dist4 = (
+                            (group1[0][0] - group2[-1][0]) ** 2
+                            + (group1[0][1] - group2[-1][1]) ** 2
+                        ) ** 0.5
+
+                        if dist1 <= merge_threshold:
+                            line_groups[i] = group1 + group2[1:]
+                            line_groups.pop(j)
+                            merged = True
+                            break
+                        elif dist2 <= merge_threshold:
+                            line_groups[i] = group1 + list(reversed(group2))[1:]
+                            line_groups.pop(j)
+                            merged = True
+                            break
+                        elif dist3 <= merge_threshold:
+                            line_groups[i] = list(reversed(group1)) + group2[1:]
+                            line_groups.pop(j)
+                            merged = True
+                            break
+                        elif dist4 <= merge_threshold:
+                            line_groups[i] = group2 + group1[1:]
+                            line_groups.pop(j)
+                            merged = True
+                            break
+
+                    if merged:
+                        break
+
+                if not merged:
+                    break
+
+            if len(line_groups) == 1:
+                line_geom = LineString(line_groups[0])
+                block_lines_intersecting.append({"geometry": line_geom, "block_id": block_id})
+            elif len(line_groups) > 1:
+                lines = [LineString(group) for group in line_groups if len(group) >= 2]
+                if len(lines) == 1:
+                    line_geom = lines[0]
+                else:
+                    line_geom = MultiLineString(lines)
+                block_lines_intersecting.append({"geometry": line_geom, "block_id": block_id})
+
+    local_lines_by_block_id = {}
+    if block_lines_intersecting:
+        for block_line in block_lines_intersecting:
+            block_id = block_line["block_id"]
+            broken_lines = break_linestring_by_angle_shapely(
+                block_line["geometry"], angle_threshold=80.0
+            )
+            local_lines_by_block_id[block_id] = broken_lines
+
+    # Buffer local roads (original, for now)
+    loc_roads_buffered = []
+    for loc_geom in roads_loc_layer.geometry:
+        buffered = loc_geom.buffer(part_loc_d + loc_road_width_m, cap_style="flat")
+        loc_roads_buffered.append(buffered)
 
     for idx, block_row in blocks_layer.iterrows():
         block = block_row.geometry
@@ -417,20 +609,10 @@ def generate_art_sec_parts_no_offgrid(
                         union_art_buffer = union_art_buffer.union(buffer)
 
                     art_buffer_part = remaining_block.intersection(union_art_buffer)
-
                     remaining_block = remaining_block.difference(union_art_buffer)
+                    intermediate_parts.append(art_buffer_part)
 
-                    if isinstance(art_buffer_part, Polygon) and art_buffer_part.area > 1.0:
-                        intermediate_parts.append(art_buffer_part)
-                    elif isinstance(art_buffer_part, MultiPolygon):
-                        intermediate_parts.extend(
-                            [p for p in art_buffer_part.geoms if p.area > 1.0]
-                        )
-
-                if isinstance(remaining_block, Polygon) and remaining_block.area > 1.0:
-                    intermediate_parts.append(remaining_block)
-                elif isinstance(remaining_block, MultiPolygon):
-                    intermediate_parts.extend([p for p in remaining_block.geoms if p.area > 1.0])
+                intermediate_parts.append(remaining_block)
 
                 if intersecting_sec_buffers:
                     union_sec_buffer = intersecting_sec_buffers[0]
@@ -447,12 +629,8 @@ def generate_art_sec_parts_no_offgrid(
                         part_remaining = part.difference(union_sec_buffer)
                         if isinstance(sec_buffer_part, Polygon) and sec_buffer_part.area > 1.0:
                             parts_to_add.append(sec_buffer_part)
-                        elif isinstance(sec_buffer_part, MultiPolygon):
-                            parts_to_add.extend([p for p in sec_buffer_part.geoms if p.area > 1.0])
                         if isinstance(part_remaining, Polygon) and part_remaining.area > 1.0:
                             parts_to_add.append(part_remaining)
-                        elif isinstance(part_remaining, MultiPolygon):
-                            parts_to_add.extend([p for p in part_remaining.geoms if p.area > 1.0])
                 else:
                     parts_to_add = intermediate_parts
 
@@ -460,6 +638,38 @@ def generate_art_sec_parts_no_offgrid(
                 parts_to_add = [block]
         else:
             parts_to_add = [block]
+
+        if block_id in local_lines_by_block_id:
+            local_lines = local_lines_by_block_id[block_id]
+
+            final_parts = []
+            is_corner_block = len(parts_to_add) >= 4
+            min_area_factor = 4 if is_corner_block else 3
+
+            for part in parts_to_add:
+                current_part = part
+                split_parts = []
+
+                for local_line in local_lines:
+                    local_off = local_line.buffer(part_loc_d, cap_style="round")
+
+                    buffer_part_for_calculation = block_row.geometry.intersection(local_off)
+                    if buffer_part_for_calculation.area * min_area_factor > block_row.geometry.area:
+                        continue
+
+                    try:
+                        buffer_part = current_part.intersection(local_off)
+                        remaining_part = current_part.difference(local_off)
+                        split_parts.append(buffer_part)
+                        current_part = remaining_part
+                    except (GEOSException, AttributeError, ValueError):
+                        continue
+
+                final_parts.extend(split_parts)
+                if current_part.area > 1.0:
+                    final_parts.append(current_part)
+
+            parts_to_add = final_parts
 
         for part_geom in parts_to_add:
             part_gdf = gpd.GeoDataFrame(
@@ -473,7 +683,7 @@ def generate_art_sec_parts_no_offgrid(
                 part_edges,
                 part_art_d=part_art_d + art_road_width_m,
                 part_sec_d=part_sec_d + sec_road_width_m,
-                part_loc_d=part_loc_d,
+                part_loc_d=part_loc_d + loc_road_width_m,
             )
 
             # TODO:
