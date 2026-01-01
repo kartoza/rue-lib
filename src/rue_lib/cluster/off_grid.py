@@ -309,7 +309,7 @@ def extract_off_grid_inner_layer(
     part_art_d: float = 40.0,
     part_sec_d: float = 30.0,
     part_loc_d: float = 20.0,
-) -> str:
+) -> str | None:
     """
     Extract off-grid areas from a GeoPackage and save the results to a new layer.
 
@@ -333,7 +333,7 @@ def extract_off_grid_inner_layer(
     :param part_loc_d: Buffer distance (in meters) for edges adjacent to local roads
     :type part_loc_d: float
     :return: Name of the output layer that was created
-    :rtype: str
+    :rtype: str | None
 
     :Example:
 
@@ -354,6 +354,9 @@ def extract_off_grid_inner_layer(
     off_grid_cluster_layer = create_off_grid_inner_layers(
         off_grid_layer, roads_layer, part_art_d, part_sec_d, part_loc_d
     )
+
+    if not off_grid_cluster_layer:
+        return None
 
     gdf_out = gpd.GeoDataFrame(off_grid_cluster_layer, crs=off_grid_layer.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
