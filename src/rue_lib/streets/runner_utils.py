@@ -1351,7 +1351,8 @@ def create_guide_points_from_site_boundary(
                         accepted_points_on_segment.append((point, pos_on_seg))
                         additional_points_count += 1
 
-        print(f"  Added {additional_points_count} additional points along long segments")
+            print(f"  Added {additional_points_count} additional points along long segments")
+
         gdf_points = gpd.GeoDataFrame(
             {"point_type": point_types},
             geometry=points,

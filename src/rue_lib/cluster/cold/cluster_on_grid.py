@@ -1362,6 +1362,7 @@ def create_off_grid_cold_clusters(
             line_geom = perp_line["geometry"]
             start_pt = Point(perp_line["id0_x"], perp_line["id0_y"])
             for block_row in blocks_by_orig_id.get(perp_line["block_id"], []):
+                block_orig_id = block_row.get("orig_id")
                 block_geom = block_row.geometry
                 try:
                     split_result = shapely_split(block_geom, line_geom)
