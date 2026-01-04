@@ -28,7 +28,12 @@ class StepCard(Static):
     """A card widget representing a workflow step with beautiful Rich styling."""
 
     def __init__(
-        self, step_num: int, title: str, description: str, status: str = "pending", **kwargs
+        self,
+        step_num: int,
+        title: str,
+        description: str,
+        status: str = "pending",
+        **kwargs,
     ):
         super().__init__(**kwargs)
         self.step_num = step_num
@@ -111,56 +116,6 @@ class ProgressDisplay(Static):
 
         self.update(progress_text)
 
-    def update_progress(self, completed: int, total: int, description: str = ""):
-        """Update with beautiful animated progress bar."""
-        percentage = (completed / total) * 100 if total > 0 else 0
-
-        # Create animated progress bar
-        filled = int(percentage // 3.33)  # 30 char bar
-        bar = "█" * filled + "▓" * (1 if filled < 30 else 0) + "░" * (29 - filled)
-
-        # Color the progress bar based on completion
-        if percentage < 30:
-            bar_style = "red on dark_red"
-        elif percentage < 70:
-            bar_style = "yellow on dark_blue"
-        else:
-            bar_style = "green on dark_green"
-
-        # Beautiful percentage display
-        percent_text = Text(f"{percentage:.1f}%", style="bold white")
-
-        # Status messages
-        if percentage < 10:
-            status = "🌱 Just getting started..."
-        elif percentage < 50:
-            status = "🏗️ Making good progress..."
-        elif percentage < 90:
-            status = "🚀 Almost there..."
-        else:
-            status = "✨ Finishing up..."
-
-        progress_content = Group(
-            Align.center(Text(description, style="bold white")),
-            "",
-            Align.center(Text(bar, style=bar_style)),
-            "",
-            Align.center(percent_text),
-            "",
-            Align.center(Text(f"({completed}/{total})", style="dim")),
-            "",
-            Align.center(Text(status, style="italic cyan")),
-        )
-
-        content = Panel(
-            progress_content,
-            title="[bold blue]🚀 PROCESSING 🚀[/]",
-            border_style="bold blue",
-            box=box.DOUBLE,
-            padding=(1, 2),
-        )
-        self.update(content)
-
     def complete_progress(self, message: str = "Completed"):
         """Show compact completion message."""
         # Compact success display
@@ -202,7 +157,10 @@ class LayerBrowser(Static):
                 Align.center(Text("📋 No layers available yet", style="bold yellow")),
                 "",
                 Align.center(
-                    Text("Layers will appear here after processing steps", style="dim italic")
+                    Text(
+                        "Layers will appear here after processing steps",
+                        style="dim italic",
+                    )
                 ),
                 "",
             )
@@ -307,7 +265,11 @@ class LayerBrowser(Static):
         )
 
         panel = Panel(
-            summary, title="Layers", border_style="dim white", box=box.ROUNDED, padding=(0, 1)
+            summary,
+            title="Layers",
+            border_style="dim white",
+            box=box.ROUNDED,
+            padding=(0, 1),
         )
         self.update(panel)
 
@@ -324,12 +286,42 @@ class LogViewer(Static):
         """Add a beautifully formatted log message."""
         # Kartoza color scheme for log levels
         level_config = {
-            "info": {"icon": "💡", "emoji": ":information:", "color": "#569FC6", "bg": "#E8F4FD"},
-            "success": {"icon": "✨", "emoji": ":sparkles:", "color": "#06969A", "bg": "#F0FFF0"},
-            "warning": {"icon": "⚠️", "emoji": ":warning:", "color": "#DF9E2F", "bg": "#FFFACD"},
-            "error": {"icon": "💥", "emoji": ":collision:", "color": "#CC0403", "bg": "#FFE4E1"},
-            "debug": {"icon": "🔍", "emoji": ":mag:", "color": "#8A8B8B", "bg": "#F3E5F5"},
-            "step": {"icon": "🚀", "emoji": ":rocket:", "color": "#06969A", "bg": "#E0F7FF"},
+            "info": {
+                "icon": "💡",
+                "emoji": ":information:",
+                "color": "#569FC6",
+                "bg": "#E8F4FD",
+            },
+            "success": {
+                "icon": "✨",
+                "emoji": ":sparkles:",
+                "color": "#06969A",
+                "bg": "#F0FFF0",
+            },
+            "warning": {
+                "icon": "⚠️",
+                "emoji": ":warning:",
+                "color": "#DF9E2F",
+                "bg": "#FFFACD",
+            },
+            "error": {
+                "icon": "💥",
+                "emoji": ":collision:",
+                "color": "#CC0403",
+                "bg": "#FFE4E1",
+            },
+            "debug": {
+                "icon": "🔍",
+                "emoji": ":mag:",
+                "color": "#8A8B8B",
+                "bg": "#F3E5F5",
+            },
+            "step": {
+                "icon": "🚀",
+                "emoji": ":rocket:",
+                "color": "#06969A",
+                "bg": "#E0F7FF",
+            },
         }
 
         config = level_config.get(level, level_config["info"])
@@ -388,52 +380,6 @@ class LogViewer(Static):
         self.lines.clear()
         content = Text("🧹 Log cleared - Ready for new activity", style="dim yellow")
         self.update(content)
-
-
-class ActionButton(Button):
-    """Enhanced button with status indication."""
-
-    def __init__(self, label: str, action: str, enabled: bool = True, **kwargs):
-        super().__init__(label, **kwargs)
-        self.action = action
-        self._enabled = enabled
-        self._success = False
-        self.update_appearance()
-
-    def update_appearance(self):
-        """Update button appearance based on state."""
-        if self._success:
-            self.variant = "success"
-            self.disabled = False
-        elif self._enabled:
-            self.variant = "primary"
-            self.disabled = False
-        else:
-            self.variant = "default"
-            self.disabled = True
-
-    def enable(self):
-        """Enable the button."""
-        self._enabled = True
-        self.update_appearance()
-
-    def disable(self):
-        """Disable the button."""
-        self._enabled = False
-        self.update_appearance()
-
-    def set_success(self):
-        """Set button to success state (green)."""
-        self._success = True
-        self._enabled = True
-        self.update_appearance()
-
-    async def _on_click(self, event) -> None:
-        """Handle button click and add debug logging."""
-        # Add debug logging to see if clicks are detected
-        print(f"DEBUG: ActionButton {self.id} clicked!")
-        # Let the default button behavior handle the rest
-        await super()._on_click(event)
 
 
 class LayerTreeView(Tree):
@@ -580,7 +526,10 @@ class LayerDetailPanel(Static):
                         "",
                         Text("🖼️ Preview:", style="bold green"),
                         Text(f"Image saved to: {preview_path}", style="dim"),
-                        Text("Use 'feh', 'fim' or image viewer to open", style="dim italic"),
+                        Text(
+                            "Use 'feh', 'fim' or image viewer to open",
+                            style="dim italic",
+                        ),
                     ]
                 )
 
@@ -784,7 +733,10 @@ class SetupPanel(Container):
             with Horizontal(classes="form-row"):
                 yield Label("Site Boundary:", classes="form-label")
                 yield Input(
-                    value=self.config.site_path, id="site_path", placeholder="data/site.geojson"
+                    value=self.config.site_path,
+                    id="site_path",
+                    placeholder="data/site.geojson",
+                    classes="form-path",
                 )
                 yield Button("Preview", id="preview-site", variant="default")
 
@@ -792,7 +744,10 @@ class SetupPanel(Container):
             with Horizontal(classes="form-row"):
                 yield Label("Roads:", classes="form-label")
                 yield Input(
-                    value=self.config.roads_path, id="roads_path", placeholder="data/roads.geojson"
+                    value=self.config.roads_path,
+                    id="roads_path",
+                    placeholder="data/roads.geojson",
+                    classes="form-path",
                 )
                 yield Button("Preview", id="preview-roads", variant="default")
 
@@ -802,7 +757,12 @@ class SetupPanel(Container):
             # Output folder
             with Horizontal(classes="form-row"):
                 yield Label("Folder:", classes="form-label")
-                yield Input(value=self.config.output_dir, id="output_dir", placeholder="outputs")
+                yield Input(
+                    value=self.config.output_dir,
+                    id="output_dir",
+                    placeholder="outputs",
+                    classes="form-path",
+                )
                 yield Button("Browse", id="browse-output", variant="default")
 
             # Options section
@@ -810,6 +770,7 @@ class SetupPanel(Container):
 
             # Store intermediate results
             with Horizontal(classes="form-row"):
+                yield Label("", classes="form-label")
                 yield Checkbox(
                     "Store intermediate results",
                     value=self.config.save_intermediate,
@@ -1019,7 +980,11 @@ class GeojsonPreviewWidget(Static):
 
             preview_path = temp_dir / f"{Path(geojson_path).stem}_preview.png"
             plt.savefig(
-                preview_path, dpi=150, bbox_inches="tight", facecolor="white", edgecolor="none"
+                preview_path,
+                dpi=150,
+                bbox_inches="tight",
+                facecolor="white",
+                edgecolor="none",
             )
             plt.close()
 

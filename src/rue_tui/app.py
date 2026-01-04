@@ -177,6 +177,7 @@ class RueTuiApp(App):
     /* Compact progress display */
     .progress-container {
         padding: 0;
+        background: red;
         height: 4;
     }
 
@@ -292,6 +293,14 @@ class RueTuiApp(App):
         text-align: right;
         padding: 0 1 0 0;
     }
+    .form-path {
+        width: 26;
+        text-style: bold;
+        color: $accent;
+        text-align: right;
+        padding: 0 1 0 0;
+    }
+
 
     /* Setup content area - responsive */
     .setup-content {
@@ -299,6 +308,7 @@ class RueTuiApp(App):
         margin: 0;
         padding: 0;
         overflow-y: auto;
+        border: green;
     }
 
     .setup-content.hidden {
@@ -306,7 +316,7 @@ class RueTuiApp(App):
     }
     """
 
-    TITLE = "🏙️ RUE TUI - Rapid Urbanisation Explorer"
+    TITLE = "Rapid Urbanisation Explorer"
     SUB_TITLE = "Terminal Interface for Urban Planning Analysis"
 
     # Reactive state
@@ -380,26 +390,30 @@ class RueTuiApp(App):
                         )
                         yield self.step_cards[3]
 
-                        # Step 0 setup content area
+                        # Setup content area
                         with Container(id="setup-content", classes="setup-content"):
-                            self.setup_panel = SetupPanel(self.config)
-                            yield self.setup_panel
+                            with Horizontal(classes="results-main"):
+                                # Left 1/3: Tree view
+                                with Container(classes="tree-container"):
+                                    self.setup_panel = SetupPanel(self.config)
+                                    yield self.setup_panel
 
-                            # Preview widget for GeoJSON files
-                            self.preview_widget = GeojsonPreviewWidget()
-                            yield self.preview_widget
-
-                        # Progress display
-                        with Container(classes="progress-container"):
-                            self.progress_display = ProgressDisplay()
-                            yield self.progress_display
+                                # Right 2/3: Layer details panel
+                                with Container(classes="detail-container"):
+                                    # Preview widget for GeoJSON files
+                                    self.preview_widget = GeojsonPreviewWidget()
+                                    yield self.preview_widget
+                    # Progress display
+                    with Container(classes="progress-container"):
+                        self.progress_display = ProgressDisplay()
+                        yield self.progress_display
 
                     # Action buttons
                     with Horizontal(classes="action-bar"):
-                        yield Button("▶️ Step 0", variant="primary", id="btn-step0")
-                        yield Button("▶️ Step 1", variant="default", disabled=True, id="btn-step1")
-                        yield Button("▶️ Step 2", variant="default", disabled=True, id="btn-step2")
-                        yield Button("▶️ Step 3", variant="default", disabled=True, id="btn-step3")
+                        yield Button(" Setup", variant="primary", id="btn-step0")
+                        yield Button("▶️ Step 2", variant="default", disabled=True, id="btn-step1")
+                        yield Button("▶️ Step 3", variant="default", disabled=True, id="btn-step2")
+                        yield Button("▶️ Step 4", variant="default", disabled=True, id="btn-step3")
                         yield Button("👁️ View", variant="default", disabled=True, id="btn-view")
 
             # Results tab with split layout
@@ -418,9 +432,10 @@ class RueTuiApp(App):
 
                 # Compact results actions
                 with Horizontal(classes="action-bar"):
-                    yield Button("📊 S1", id="view-step1", disabled=True)
-                    yield Button("📊 S2", id="view-step2", disabled=True)
-                    yield Button("📊 S3", id="view-step3", disabled=True)
+                    yield Button("Step 1", id="view-step1", disabled=True)
+                    yield Button("Step 2", id="view-step2", disabled=True)
+                    yield Button("Step 3", id="view-step3", disabled=True)
+                    yield Button("🗂️ Browse", id="browse-layers", disabled=True)
                     yield Button("📁 Folder", id="open-folder")
                     yield Button("🧹 Clear", id="clear-results")
 
@@ -444,7 +459,6 @@ class RueTuiApp(App):
 
         # Create gradient title
         title = Text()
-        title.append("🏙️ ", style="bold #DF9E2F")
         title.append("RUE", style="bold #CC0403")  # Kartoza red
         title.append("-", style="bold white")
         title.append("lib", style="bold #06969A")  # Kartoza teal
@@ -481,7 +495,7 @@ class RueTuiApp(App):
 
     def on_mount(self) -> None:
         """Initialize the app with beautiful welcome messages."""
-        self.log_viewer.add_log("Welcome to RUE TUI! 🎉", "step")
+        self.log_viewer.add_log("Welcome to RUE TUI!🎉", "step")
         self.log_viewer.add_log("Urban planning made beautiful and interactive", "info")
         self.log_viewer.add_log(f"Output directory configured: {self.config.output_dir}", "info")
 
@@ -516,7 +530,7 @@ class RueTuiApp(App):
         if button_id == "btn-step0":
             event.button.disabled = True
             event.button.label = "🔄 Running..."
-            self.log_viewer.add_log("🚀 Step 0 started - Setup and configuration", "step")
+            self.log_viewer.add_log("🚀 Setup and configuration started", "step")
             self.run_worker(self.run_step(0))
         elif button_id == "btn-step1":
             event.button.disabled = True
@@ -535,11 +549,11 @@ class RueTuiApp(App):
             self.run_worker(self.run_step(3))
         elif button_id == "btn-view":
             self.view_current_results()
-        elif button_id == "btn-browse":
-            self.browse_layers()
         elif button_id.startswith("view-step"):
             step_num = int(button_id.split("-")[1][-1])
             self.view_step_results(step_num)
+        elif button_id == "browse-layers":
+            self.browse_layers()
         elif button_id == "open-folder":
             self.open_output_folder()
         elif button_id == "clear-results":
@@ -603,7 +617,8 @@ class RueTuiApp(App):
                     f"📁 Updated paths - Step3: {self.config.step3_output}", "info"
                 )
                 self.log_viewer.add_log(
-                    f"📁 Updated paths - GeoPackage: {self.config.geopackage_path}", "info"
+                    f"📁 Updated paths - GeoPackage: {self.config.geopackage_path}",
+                    "info",
                 )
 
         # Show file browser modal
@@ -621,7 +636,7 @@ class RueTuiApp(App):
             self.log_viewer.add_log(f"▶️ Starting Step {step}", "info")
 
             if step == 0:
-                result = await self._run_step0()
+                result = await self._run_setup()
             elif step == 1:
                 result = await self._run_step1()
             elif step == 2:
@@ -661,6 +676,7 @@ class RueTuiApp(App):
                 view_btn = self.query_one("#btn-view")
                 view_btn.disabled = False
                 self.query_one(f"#view-step{step}").disabled = False
+                self.query_one("#browse-layers").disabled = False
 
             # Update layer browser
             self._update_layer_browser()
@@ -696,7 +712,7 @@ class RueTuiApp(App):
             current_btn.variant = "error"
             current_btn.label = f"❌ Step {step} (retry)"
 
-    async def _run_step0(self) -> str:
+    async def _run_setup(self) -> str:
         """Run Step 0: Setup and Configuration."""
         self.log_viewer.add_log("📋 Validating setup and configuration", "info")
 
@@ -998,7 +1014,7 @@ class RueTuiApp(App):
             # Reset Step 0 button
             self.query_one("#btn-step0").disabled = False
             self.query_one("#btn-step0").variant = "primary"
-            self.query_one("#btn-step0").label = "▶️ Step 0"
+            self.query_one("#btn-step0").label = " Setup"
 
             # Disable buttons (except step 0)
             for step in [1, 2, 3]:
@@ -1007,7 +1023,7 @@ class RueTuiApp(App):
                     self.query_one(f"#view-step{step}").disabled = True
 
             self.query_one("#btn-view").disable()
-            self.query_one("#btn-browse").disable()
+            self.query_one("#browse-layers").disabled = True
 
             # Clear displays
             self.progress_display.update("Ready to start")
