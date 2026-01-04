@@ -43,3 +43,6 @@ class StreetConfig:
     off_grid_local_clusters_depth: int = 2
     # Number of clusters along width for local road off-grid partitions
     off_grid_local_clusters_width: int = 3
+
+    # Streets / dead end boundary
+    dead_end_buffer_distance: float = 15.0

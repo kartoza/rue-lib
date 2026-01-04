@@ -13,9 +13,20 @@ def find_convex_points(
     points_layer_name: str,
     output_gpkg: str,
     output_layer_name: str,
+    min_distance: float = 0.1,
 ) -> str:
     """
     Find convex points from the boundary vertices.
+
+    Args:
+        input_gpkg: Path to input GeoPackage
+        points_layer_name: Name of boundary points layer
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for output convex points layer
+        min_distance: Minimum distance to previous/next points (default: 10.0 meters)
+
+    Returns:
+        Name of the output layer
     """
     gdf_points = gpd.read_file(input_gpkg, layer=points_layer_name)
 
@@ -37,6 +48,7 @@ def find_convex_points(
 
     records = []
     geoms = []
+    skipped_too_close = 0
 
     for block_id, boundary_pts in points_by_block.items():
         idx = 0
@@ -58,9 +70,15 @@ def find_convex_points(
             p0_dist = math.dist(p0, p1)
             p2_dist = math.dist(p1, p2)
 
+            # Skip if either distance is too small
+            if p0_dist < min_distance or p2_dist < min_distance:
+                skipped_too_close += 1
+                idx += 1
+                continue
+
             ang = point["angle"]
 
-            if ang > 60 and ang < 100:
+            if ang > 60 and ang < 105:
                 records.append(
                     {
                         "is_convex": 1,
@@ -80,6 +98,8 @@ def find_convex_points(
 
     if not geoms:
         print("  No convex points found")
+        if skipped_too_close > 0:
+            print(f"  Skipped {skipped_too_close} points (distance < {min_distance})")
         gdf_out = gpd.GeoDataFrame([], geometry=[], crs=gdf_points.crs)
         gdf_out.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
         return output_layer_name
@@ -87,6 +107,8 @@ def find_convex_points(
     gdf_out = gpd.GeoDataFrame(records, geometry=geoms, crs=gdf_points.crs)
     gdf_out.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
     print(f"  Found {len(gdf_out)} convex points")
+    if skipped_too_close > 0:
+        print(f"  Skipped {skipped_too_close} points (distance < {min_distance})")
     return output_layer_name
 
 
@@ -132,10 +154,17 @@ def create_clusters_from_convex_points(
         return output_layer_name
 
     blocks_by_id = {}
+    convex_by_block = {}
     for _, row in gdf_blocks.iterrows():
         block_id = row.get("id")
         if block_id is not None:
             blocks_by_id[int(block_id)] = row.geometry
+        for _, crow in gdf_convex.iterrows():
+            crow_geom = crow.geometry
+            if crow_geom.buffer(0.1).intersects(row.geometry):
+                if int(block_id) not in convex_by_block:
+                    convex_by_block[int(block_id)] = []
+                convex_by_block[int(block_id)].append(crow)
 
     line_length = max_partition_depth * 1.25
 
@@ -143,14 +172,6 @@ def create_clusters_from_convex_points(
     cluster_records = []
     cluster_id = 0
     split_lines_by_convex = {}
-
-    convex_by_block = {}
-    for _, row in gdf_convex.iterrows():
-        block_id = row.get("block_id")
-        if block_id is not None:
-            if block_id not in convex_by_block:
-                convex_by_block[block_id] = []
-            convex_by_block[block_id].append(row)
 
     print(f"  Processing {len(convex_by_block)} blocks with convex points...")
 
@@ -256,7 +277,7 @@ def create_clusters_from_convex_points(
 
             parts.sort(key=lambda g: g.centroid.distance(lines_union.centroid))
 
-            if len(parts) > 2:
+            if len(parts) > 1:
                 part = parts[0]
                 if part.is_empty or part.area <= 0:
                     continue

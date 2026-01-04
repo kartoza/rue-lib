@@ -25,6 +25,7 @@ class MainConfig:
         off_grid_local_clusters_depth: Number of cluster rows along local roads
         off_grid_local_clusters_width: Number of cluster columns along local roads
         sidewalk_width_m: Width of sidewalks in meters
+        dead_end_buffer_distance: Buffer distance for dead-end boundary lines in meters
 
     Notes:
         - All dimensional values are in meters
@@ -59,3 +60,6 @@ class MainConfig:
     open_percent: float = 6.0
     amen_percent: float = 8.0
     sidewalk_width_m: float = 3.0
+
+    # Streets / dead end boundary
+    dead_end_buffer_distance: float = 15.0

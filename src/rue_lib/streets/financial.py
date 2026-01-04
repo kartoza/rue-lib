@@ -23,12 +23,17 @@ class FinancialStreet(FinancialModel):
     road_area_sec: float
     road_area_loc: float
 
-    def __init__(self, config: StreetConfig):
+    def __init__(
+        self,
+        config: StreetConfig,
+        local_roads_layer: str = "18_local_roads",
+        local_roads_buffer_layer: str = "17_local_roads_buffer",
+    ):
         """Initialize a FinancialStreet object."""
         output_path = config.geopackage_path
 
         roads = gpd.read_file(output_path, layer="00_roads")
-        roads_local = gpd.read_file(output_path, layer="18_local_roads")
+        roads_local = gpd.read_file(output_path, layer=local_roads_layer)
 
         # Filter for 100% roads (road_pcent = 100 or road_pcent doesn't exist)
         art_100 = roads[
@@ -55,7 +60,7 @@ class FinancialStreet(FinancialModel):
 
         # Calculate areas
         road_buffer = gpd.read_file(output_path, layer="00_roads_buffer")
-        local_roads_buffer = gpd.read_file(output_path, layer="17_local_roads_buffer")
+        local_roads_buffer = gpd.read_file(output_path, layer=local_roads_buffer_layer)
         self.road_area_art = road_buffer[(road_buffer["road_type"] == "road_art")].area.sum()
         self.road_area_sec = road_buffer[(road_buffer["road_type"] == "road_sec")].area.sum()
         self.road_area_loc = local_roads_buffer.area.sum()

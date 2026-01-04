@@ -6,6 +6,10 @@ from osgeo import gdal, ogr
 
 from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
 from rue_lib.streets.blocks import generate_on_grid_blocks
+from rue_lib.streets.cold_boundaries_utils import (
+    extract_cold_boundary_lines_from_vertices,
+    extract_line_vertices,
+)
 from rue_lib.streets.grids import (
     create_cold_boundaries,
     extract_grid_lines_in_buffer,
@@ -18,7 +22,7 @@ from rue_lib.streets.runner_utils import (
     create_guide_points_from_site_boundary,
     create_perpendicular_lines_from_guide_points,
     create_perpendicular_lines_inside_buffer_from_points,
-    polygons_to_lines_layer,
+    polygons_to_lines_graph_based,
     subtract_layer,
 )
 from rue_lib.utils.io import prepare_geopackage
@@ -50,7 +54,8 @@ def generate_streets(cfg: StreetConfig) -> Path:
     Generate street blocks from roads and parcels (version 3)
 
     Returns:
-        Path to output blocks file
+        StreetOutputs containing the GeoPackage, merged grids GeoJSON, and
+        local streets GeoJSON.
     """
     output_dir = Path(cfg.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -61,6 +66,9 @@ def generate_streets(cfg: StreetConfig) -> Path:
     prepare_geopackage(output_gpkg)
 
     output_path = str(output_gpkg)
+
+    if output_gpkg.exists():
+        output_gpkg.unlink()
 
     print("Step 1: Determining UTM zone...")
     site_ds = ogr.Open(cfg.parcel_path)
@@ -183,21 +191,20 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         output_layer_name="13a_dead_end_lines",
-        buffer_distance=min(
-            cfg.on_grid_partition_depth_arterial_roads, cfg.on_grid_partition_depth_secondary_roads
-        )
-        * 0.4,
+        buffer_distance=cfg.dead_end_buffer_distance,
     )
 
     print("Step 14: Generating off-grid blocks...")
+    grid_layer_name = "14_off_grid_cells"
+    point_layer_name = "14_off_grid_points"
     grids_from_site(
         output_gpkg,
         "09_site_minus_all_setbacks",
         "13_site_boundary_lines",
         preferred_width_off_cluster_grid,
         preferred_depth_off_cluster_grid,
-        grid_layer_name="14_off_grid_cells",
-        point_layer_name="14_off_grid_points",
+        grid_layer_name=grid_layer_name,
+        point_layer_name=point_layer_name,
         dead_end_lines_layer=dead_end_lines_layer,
     )
 
@@ -215,12 +222,13 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "14a_site_boundary_inner_buffer",
     )
     fixed_cells_layer = None
-    perp_inside_layer = None
+    perp_inside_layer = None  # Initialize to avoid NameError if not generated
     if lines_layer is not None:
         perp_inside_layer = create_perpendicular_lines_inside_buffer_from_points(
             output_gpkg,
             lines_layer,
             "14a_site_boundary_inner_buffer",
+            "13_site_boundary_lines",
             line_length=cfg.part_loc_d * 2,
         )
 
@@ -235,38 +243,54 @@ def generate_streets(cfg: StreetConfig) -> Path:
             )
 
     print("Step 14e: Removing dead end cells")
-    cleaned_cells_layer = remove_dead_end_cells(
-        output_gpkg, fixed_cells_layer, "13a_dead_end_lines_buffered"
-    )
-
-    print("Step 14f: Merging small cells with neighbors")
-    cleaned_cells_layer = merge_small_cells_with_neighbors(
-        output_gpkg,
-        cleaned_cells_layer,
-        target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
-        area_threshold_ratio=0.5,
-    )
+    if fixed_cells_layer:
+        cleaned_cells_layer = remove_dead_end_cells(
+            output_gpkg, fixed_cells_layer, "13a_dead_end_lines_buffered"
+        )
+        print("Step 14f: Merging small cells with neighbors")
+        cleaned_cells_layer = merge_small_cells_with_neighbors(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.5,
+        )
+    else:
+        # Fall back to the original off-grid cells if no perpendicular lines were generated
+        print("  No fixed cells available, using original off-grid cells")
+        cleaned_cells_layer = remove_dead_end_cells(
+            output_gpkg, "14_off_grid_cells", "13a_dead_end_lines_buffered"
+        )
+        print("Step 14f: Merging small cells with neighbors")
+        cleaned_cells_layer = merge_small_cells_with_neighbors(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.5,
+        )
 
     print("Step 15: Generating on-grid cells")
 
     print("Step 15a: Creating guide points from site boundary...")
+    site_boundary_points = "15a_site_boundary_points"
+    lines_without_points_layer = "15a_lines_without_points"
     _guide_points_layer = create_guide_points_from_site_boundary(
         output_gpkg,
         "13_site_boundary_lines",
         perp_inside_layer,
-        output_layer_name="13_site_boundary_points",
-        lines_without_points_layer="13c_lines_without_points",
+        output_layer_name=site_boundary_points,
+        lines_without_points_layer=lines_without_points_layer,
         min_line_length_threshold=preferred_width_off_cluster_grid,
     )
 
     print("Step 15b: Creating perpendicular lines from guide points...")
+    site_boundary_perp_from_points = "15b_site_boundary_perp_from_points"
     _guide_perp_layer = create_perpendicular_lines_from_guide_points(
         output_gpkg,
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
-        "13_site_boundary_points",
+        site_boundary_points,
         line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
-        output_layer_name="13_site_boundary_perp_from_points",
+        output_layer_name=site_boundary_perp_from_points,
     )
 
     print("Merge arterial and secondary setbacks with overlaps resolved...")
@@ -281,7 +305,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     _on_grid_cells_layer = create_on_grid_cells_from_perpendiculars(
         output_gpkg,
         "10_setback_clipped_merged",
-        "13_site_boundary_perp_from_points",
+        site_boundary_perp_from_points,
         output_gpkg,
         "16_on_grid_cells",
     )
@@ -310,6 +334,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Step 17: Creating cold boundaries...")
+    cold_boundaries_layer = "14_cold_boundaries"
     create_cold_boundaries(
         output_gpkg,
         site_layer_name,
@@ -318,64 +343,104 @@ def generate_streets(cfg: StreetConfig) -> Path:
         output_layer_name="14_cold_boundaries",
     )
 
-    on_grid_arterial_outer_layer, on_grid_arterial_inner_layer = generate_local_streets(
-        output_gpkg, cfg, arterial_cells_layer
-    )
-    on_grid_secondary_outer_layer, on_grid_secondary_inner_layer = generate_local_streets(
-        output_gpkg, cfg, secondary_cells_layer
-    )
-    off_grid_outer_layer, off_grid_inner_layer = generate_local_streets(
-        output_gpkg, cfg, cleaned_cells_layer
-    )
+    # Generate local streets zones (only if layer exists)
+    if arterial_cells_layer is not None:
+        _on_grid_arterial_outer_layer, on_grid_arterial_inner_layer = generate_local_streets(
+            output_gpkg, cfg, arterial_cells_layer
+        )
+    else:
+        _on_grid_arterial_outer_layer, on_grid_arterial_inner_layer = None, None
+
+    if secondary_cells_layer is not None:
+        _on_grid_secondary_outer_layer, on_grid_secondary_inner_layer = generate_local_streets(
+            output_gpkg, cfg, secondary_cells_layer
+        )
+    else:
+        _on_grid_secondary_outer_layer, on_grid_secondary_inner_layer = None, None
+
+    if cleaned_cells_layer is not None:
+        _off_grid_outer_layer, off_grid_inner_layer = generate_local_streets(
+            output_gpkg, cfg, cleaned_cells_layer
+        )
+    else:
+        _off_grid_outer_layer, off_grid_inner_layer = None, None
 
     print("Exporting local roads from off-grid cells as linework...")
     local_roads_layer_name = "18_local_roads"
-    polygons_to_lines_layer(
-        output_gpkg,
-        [
-            cleaned_cells_layer,
-            cleaned_on_grid_cells_layer,
-        ],
-        output_gpkg,
-        local_roads_layer_name,
+
+    # Build list of layers for polygon-to-lines conversion (filter out None)
+    layers_for_local_roads = [
+        layer for layer in [cleaned_cells_layer, cleaned_on_grid_cells_layer] if layer is not None
+    ]
+
+    if layers_for_local_roads:
+        polygons_to_lines_graph_based(
+            output_gpkg,
+            layers_for_local_roads,
+            output_gpkg,
+            local_roads_layer_name,
+            merge_distance=1,
+        )
+    else:
+        print("  Warning: No valid layers for local roads generation, skipping...")
+
+    local_roads_vertices_layer = extract_line_vertices(
+        output_gpkg, local_roads_layer_name, output_gpkg, "18_local_roads_vertices"
     )
 
-    # Remove cold boundaries from local roads
-    subtract_layer(
-        output_gpkg,
-        "14_cold_boundaries",
-        cleaned_on_grid_cells_layer,
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        cfg.road_locals_width_m / 2.0,
-    )
+    cold_boundary_lines_layer = None
+    if local_roads_vertices_layer and ogr.Open(str(output_gpkg)).GetLayerByName(
+        cold_boundaries_layer
+    ):
+        cold_boundary_lines_layer = extract_cold_boundary_lines_from_vertices(
+            output_gpkg,
+            cold_boundaries_layer,
+            local_roads_vertices_layer,
+            local_roads_layer_name,
+            output_layer_name="14_cold_boundary_lines",
+        )
 
-    subtract_layer(
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        cleaned_cells_layer,
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        cfg.road_locals_width_m / 2.0,
-    )
+    local_roads_minus_cold_layer = None
+    if ogr.Open(str(output_gpkg)).GetLayerByName(cold_boundaries_layer):
+        try:
+            if cold_boundary_lines_layer:
+                local_roads_minus_cold_layer = subtract_layer(
+                    output_gpkg,
+                    cold_boundaries_layer,
+                    cold_boundary_lines_layer,
+                    output_gpkg,
+                    "14a_local_roads_minus_cold_boundaries",
+                    (cfg.road_locals_width_m / 2.0) + 0.01,
+                    simplify=True,
+                )
 
-    subtract_layer(
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        "05_secondary_roads",
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        cfg.road_secondary_width_m / 2.0,
-    )
+            local_roads_minus_cold_layer = subtract_layer(
+                output_gpkg,
+                local_roads_minus_cold_layer,
+                "05_secondary_roads",
+                output_gpkg,
+                "14a_local_roads_minus_cold_boundaries",
+                cfg.road_secondary_width_m / 2.0,
+                simplify=True,
+            )
 
-    subtract_layer(
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        "04_arterial_roads",
-        output_gpkg,
-        "14a_local_roads_minus_cold_boundaries",
-        cfg.road_arterial_width_m / 2.0,
-    )
+            local_roads_minus_cold_layer = subtract_layer(
+                output_gpkg,
+                local_roads_minus_cold_layer,
+                "04_arterial_roads",
+                output_gpkg,
+                "14a_local_roads_minus_cold_boundaries",
+                cfg.road_arterial_width_m / 2.0,
+                simplify=True,
+            )
+        except ValueError as e:
+            if "is empty" in str(e):
+                print(f"  Cold boundaries layer became empty during subtraction: {e}")
+                local_roads_minus_cold_layer = None
+            else:
+                raise
+    else:
+        print("  Skipping cold boundaries processing (no cold boundaries created)")
 
     subtract_layer(
         output_gpkg,
@@ -397,37 +462,39 @@ def generate_streets(cfg: StreetConfig) -> Path:
 
     print("Step 17: Merging all grid layers with grid_type information...")
     all_grid_layer_name = "17_all_grids_merged"
+
+    # Build list of layers to merge (filter out None layers)
+    layers_to_merge = []
+
+    if off_grid_inner_layer is not None:
+        layers_to_merge.append((off_grid_inner_layer, "off_grid"))
+    if on_grid_arterial_inner_layer is not None:
+        layers_to_merge.append((on_grid_arterial_inner_layer, "on_grid_art"))
+    if on_grid_secondary_inner_layer is not None:
+        layers_to_merge.append((on_grid_secondary_inner_layer, "on_grid_sec"))
+
+    # Only include cold boundaries if they were created
+    if local_roads_minus_cold_layer is not None:
+        layers_to_merge.append((local_roads_minus_cold_layer, "cold_boundaries"))
+
+    layers_to_merge.extend(
+        [
+            ("04_arterial_roads", "road_arterial"),
+            ("05_secondary_roads", "road_secondary"),
+            (local_roads_layer_name, "road_local"),
+        ]
+    )
+
     merge_grid_layers_with_type(
         str(output_gpkg),
         str(output_gpkg),
         all_grid_layer_name,
-        [
-            (off_grid_inner_layer, "off_grid"),
-            (on_grid_arterial_inner_layer, "on_grid_art"),
-            (on_grid_secondary_inner_layer, "on_grid_sec"),
-            ("14a_local_roads_minus_cold_boundaries", "cold_boundaries"),
-            ("04_arterial_roads", "road_arterial"),
-            ("05_secondary_roads", "road_secondary"),
-            (local_roads_layer_name, "road_local"),
-        ],
+        layers_to_merge,
     )
 
     # --------------------------------------
     # Extract local roads from merged grids
     # --------------------------------------
-    local_road_grid_layer_name = "17_local_road_grid"
-    extract_by_expression(
-        output_path,
-        all_grid_layer_name,
-        (
-            "type = 'on_grid_art_local_streets' OR "
-            "type = 'on_grid_sec_local_streets' OR "
-            "type = 'on_grid_art_local_streets' OR "
-            "type = 'off_grid_local_streets' "
-        ),
-        output_path,
-        local_road_grid_layer_name,
-    )
     buildable_zone_layer_name = "17_buildable_zone"
     extract_by_expression(
         output_path,
@@ -438,14 +505,49 @@ def generate_streets(cfg: StreetConfig) -> Path:
     )
 
     print("Cutting local roads with buildable zone to get roads outside buildable area...")
-    erase_layer(
+    buffered_local_roads_layer_name = "17_local_roads_buffer"
+    site_minus_roads_layer = "17a_site_minus_all_setbacks"
+    subtract_layer(
         output_path,
-        local_road_grid_layer_name,
+        site_layer_name,
+        "00_roads_buffer",
         output_path,
-        buildable_zone_layer_name,
-        output_path,
-        "17_local_roads_buffer",
+        site_minus_roads_layer,
     )
+    if local_roads_minus_cold_layer:
+        subtract_layer(
+            output_path,
+            site_minus_roads_layer,
+            local_roads_minus_cold_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    else:
+        buffered_local_roads_layer_name = site_minus_roads_layer
+    if on_grid_arterial_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            on_grid_arterial_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    if on_grid_secondary_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            on_grid_secondary_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
+    if off_grid_inner_layer:
+        subtract_layer(
+            output_path,
+            buffered_local_roads_layer_name,
+            off_grid_inner_layer,
+            output_path,
+            buffered_local_roads_layer_name,
+        )
 
     print("Step 18: Exporting merged grids to GeoJSON...")
     output_geojson = output_dir / "outputs.geojson"
@@ -455,14 +557,27 @@ def generate_streets(cfg: StreetConfig) -> Path:
         str(output_geojson),
     )
 
+    print("Exporting local streets to GeoJSON for editor use...")
+    local_streets_geojson = output_dir / "local_streets.geojson"
+    export_layer_to_geojson(
+        str(output_gpkg),
+        local_roads_layer_name,
+        str(local_streets_geojson),
+    )
+
     print(f"\nProcessing complete! Output saved to: {output_gpkg}")
     print("\nFinal layers:")
     print(f"  - {site_layer}: Site polygon with roads subtracted")
     print("  - 17_all_grids_merged: Merged grid cells with grid_type classification")
     print("\nGeoJSON export:")
     print(f"  - {output_geojson}: Merged grids with grid_type classification")
+    print(f"  - {local_streets_geojson}: Local streets centerlines")
 
     print("Step 19: Generating financial data")
-    FinancialStreet(config=cfg)
+    FinancialStreet(
+        config=cfg,
+        local_roads_layer=local_roads_layer_name,
+        local_roads_buffer_layer=buffered_local_roads_layer_name,
+    )
 
     return output_gpkg

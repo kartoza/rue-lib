@@ -616,6 +616,9 @@ def grids_from_site(
     grid_id = 1
     pt_id = 1
 
+    all_grid_cells = []
+    all_mesh_points = []
+
     for polygon in site_layer:
         site_boundary_lines.ResetReading()
 
@@ -636,41 +639,84 @@ def grids_from_site(
             dead_end_lines=dead_end_lines_geom,
         )
 
-        for _i, _cell in enumerate(grid_cells):
-            cell = _cell.geom
-            quality_info = _cell.quality
-            feat = ogr.Feature(grid_layer.GetLayerDefn())
-            feat.SetField("grid_id", grid_id)
-            feat.SetField("area", cell.area)
+        all_grid_cells.extend(grid_cells)
+        all_mesh_points.extend(mesh_points)
 
-            feat.SetField("is_good", 1 if quality_info["is_good"] else 0)
-            feat.SetField("quality", quality_info["reason"])
-            feat.SetField("right_angles", quality_info["right_angles"])
-            feat.SetField("num_vertices", quality_info["num_vertices"])
-            feat.SetField("area_ratio", quality_info["area_ratio"])
+    target_area = grid_width * grid_depth
+    min_area_threshold = target_area * 0.15
 
-            grid_id += 1
+    print(
+        f"\nMerging grids smaller than {min_area_threshold:.2f} "
+        f"({target_area * 0.15:.0%} of target area)..."
+    )
 
-            geom = ogr.CreateGeometryFromWkt(cell.wkt)
-            # Ensure polygon is converted to multipolygon for compatibility
-            if geom.GetGeometryType() in (ogr.wkbPolygon, ogr.wkbPolygon25D):
-                multi_geom = ogr.Geometry(ogr.wkbMultiPolygon25D)
-                multi_geom.AddGeometry(geom)
-                feat.SetGeometry(multi_geom)
-            else:
-                feat.SetGeometry(geom)
-            grid_layer.CreateFeature(feat)
-            feat = None
+    grid_data = []
+    for _cell in all_grid_cells:
+        grid_data.append({"geom": _cell.geom, "quality": _cell.quality, "merged": False})
 
-        for p in mesh_points:
-            feat = ogr.Feature(point_layer.GetLayerDefn())
-            feat.SetField("pt_id", pt_id)
-            pt_id += 1
+    merged_count = 0
+    for i, grid in enumerate(grid_data):
+        if grid["merged"]:
+            continue
 
-            geom = ogr.CreateGeometryFromWkt(p.wkt)
-            feat.SetGeometry(geom)
-            point_layer.CreateFeature(feat)
-            feat = None
+        if grid["geom"].area < min_area_threshold:
+            # Find closest neighbor
+            min_distance = float("inf")
+            closest_idx = None
+
+            for j, other_grid in enumerate(grid_data):
+                if i == j or other_grid["merged"]:
+                    continue
+
+                distance = grid["geom"].distance(other_grid["geom"])
+                if distance < min_distance:
+                    min_distance = distance
+                    closest_idx = j
+
+            if closest_idx is not None:
+                merged_geom = grid["geom"].union(grid_data[closest_idx]["geom"])
+                grid_data[closest_idx]["geom"] = merged_geom
+                grid_data[closest_idx]["quality"]["area_ratio"] = merged_geom.area / target_area
+                grid["merged"] = True
+                merged_count += 1
+                print(f"  Merged grid {i} (area: {grid['geom'].area:.2f}) into grid {closest_idx}")
+
+    print(f"  Merged {merged_count} small grids")
+
+    # Write grids to layer (skip merged ones)
+    for grid in grid_data:
+        if grid["merged"]:
+            continue
+
+        cell = grid["geom"]
+        quality_info = grid["quality"]
+        feat = ogr.Feature(grid_layer.GetLayerDefn())
+        feat.SetField("grid_id", grid_id)
+        feat.SetField("area", cell.area)
+
+        feat.SetField("is_good", 1 if quality_info["is_good"] else 0)
+        feat.SetField("quality", quality_info["reason"])
+        feat.SetField("right_angles", quality_info["right_angles"])
+        feat.SetField("num_vertices", quality_info["num_vertices"])
+        feat.SetField("area_ratio", quality_info["area_ratio"])
+
+        grid_id += 1
+
+        geom = ogr.CreateGeometryFromWkt(cell.wkt)
+        feat.SetGeometry(geom)
+        grid_layer.CreateFeature(feat)
+        feat = None
+
+    # Write mesh points
+    for p in all_mesh_points:
+        feat = ogr.Feature(point_layer.GetLayerDefn())
+        feat.SetField("pt_id", pt_id)
+        pt_id += 1
+
+        geom = ogr.CreateGeometryFromWkt(p.wkt)
+        feat.SetGeometry(geom)
+        point_layer.CreateFeature(feat)
+        feat = None
 
     ds = None
 

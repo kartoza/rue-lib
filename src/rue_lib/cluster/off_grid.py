@@ -7,9 +7,7 @@ from typing import Optional
 import geopandas as gpd
 from shapely.geometry import LineString, Polygon
 
-from rue_lib.cluster.helpers import find_closest_road_type, get_roads_near_block
-from rue_lib.core.definitions import RoadTypes
-from rue_lib.core.geometry import remove_vertices_by_angle
+from rue_lib.cluster.helpers import get_roads_near_block
 
 
 def extend_line(line: LineString, extension: float) -> LineString:
@@ -164,58 +162,7 @@ def create_off_grid_inner_layer(
         >>> roads = gpd.GeoDataFrame(...)
         >>> off_grid = create_off_grid_area(block, roads)
     """
-    edges = get_block_edges(block)
-
-    if not edges:
-        print("Warning: Could not extract block edges")
-        return None
-
-    current_polygon = block
-
-    for i, edge in enumerate(edges):
-        road_type = find_closest_road_type(edge, roads)
-
-        if road_type == RoadTypes.Artery:
-            buffer_dist = part_art_d
-        elif road_type == RoadTypes.Secondary:
-            buffer_dist = part_sec_d
-        elif road_type == RoadTypes.Local:
-            buffer_dist = part_loc_d
-        else:
-            buffer_dist = part_loc_d
-
-        try:
-            edge_buffer = edge.buffer(buffer_dist, cap_style=2)
-
-            new_polygon = current_polygon.difference(edge_buffer)
-
-            if new_polygon.is_empty:
-                print(f"  Edge {i} ({road_type}): Buffer consumed entire polygon")
-                return None
-
-            if new_polygon.geom_type == "MultiPolygon":
-                polygons = list(new_polygon.geoms)
-                polygons = clean_small_polygons(polygons, min_area=1.0)
-                if not polygons:
-                    return None
-                new_polygon = max(polygons, key=lambda p: p.area)
-            elif new_polygon.geom_type != "Polygon":
-                print(f"  Edge {i} ({road_type}): Invalid geometry type {new_polygon.geom_type}")
-                return None
-
-            current_polygon = new_polygon
-
-        except Exception as e:
-            print(f"  Warning: Failed to process edge {i} ({road_type}): {e}")
-            continue
-
-    # Final validation
-    if current_polygon.area < 1.0:
-        return None
-
-    # Remove spike vertices based on angle threshold
-    current_polygon = remove_vertices_by_angle(current_polygon, min_angle_threshold=10)
-    return current_polygon
+    return block.buffer(-part_loc_d, join_style="mitre", cap_style="flat")
 
 
 def create_off_grid_inner_layers(
@@ -309,7 +256,7 @@ def extract_off_grid_inner_layer(
     part_art_d: float = 40.0,
     part_sec_d: float = 30.0,
     part_loc_d: float = 20.0,
-) -> str:
+) -> str | None:
     """
     Extract off-grid areas from a GeoPackage and save the results to a new layer.
 
@@ -333,7 +280,7 @@ def extract_off_grid_inner_layer(
     :param part_loc_d: Buffer distance (in meters) for edges adjacent to local roads
     :type part_loc_d: float
     :return: Name of the output layer that was created
-    :rtype: str
+    :rtype: str | None
 
     :Example:
 
@@ -354,6 +301,9 @@ def extract_off_grid_inner_layer(
     off_grid_cluster_layer = create_off_grid_inner_layers(
         off_grid_layer, roads_layer, part_art_d, part_sec_d, part_loc_d
     )
+
+    if not off_grid_cluster_layer:
+        return None
 
     gdf_out = gpd.GeoDataFrame(off_grid_cluster_layer, crs=off_grid_layer.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")

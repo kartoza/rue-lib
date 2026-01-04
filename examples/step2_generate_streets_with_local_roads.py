@@ -1,40 +1,20 @@
-# examples/step2_generate_streets.py
+# examples/step2_generate_streets_with_local_roads.py
+"""
+Example: Run the streets pipeline and replace local streets with a provided GeoJSON.
 
-import os
-import sys
-
-# Ensure we use the local rue_lib instead of any installed version
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
-
-import argparse
+The local streets centerlines are taken from data/local_streets.geojson and buffered
+according to StreetConfig. Outputs are written to outputs/step2_streets_local.
+"""
 
 from rue_lib.config import MainConfig
-from rue_lib.streets.runner import StreetConfig, generate_streets
+from rue_lib.streets import StreetConfig, generate_streets_with_local_roads
 
 
 def main():
-    """
-    Step 2: Generate street blocks from parcels and roads.
-    """
-    parser = argparse.ArgumentParser(description="Generate street blocks from parcels and roads")
-    parser.add_argument(
-        "--parcels",
-        default="outputs/step1_parcels/parcels.geojson",
-        help="Path to parcels geojson file",
-    )
-    parser.add_argument(
-        "--output-dir", default="outputs/step2_streets", help="Output directory for street blocks"
-    )
-    parser.add_argument(
-        "--geopackage", default="outputs/output.gpkg", help="Path to output geopackage file"
-    )
-    args = parser.parse_args()
-
-    config = StreetConfig(
-        parcel_path=args.parcels,
+    cfg = StreetConfig(
+        parcel_path="outputs/step1_parcels/outputs.geojson",
         roads_path="data/roads.geojson",
-        output_dir=args.output_dir,
-        geopackage_path=args.geopackage,
+        output_dir="outputs/step2_streets",
         # Neighborhood / public roads
         road_arterial_width_m=MainConfig.road_arterial_width_m,
         road_secondary_width_m=MainConfig.road_secondary_width_m,
@@ -58,19 +38,22 @@ def main():
         dead_end_buffer_distance=MainConfig.dead_end_buffer_distance,
     )
 
+    local_roads_geojson = "data/local_streets.geojson"
+
     print("=" * 60)
-    print("STEP 2: Generating Street Blocks")
+    print("STEP 2 (with provided local streets): Generating Streets")
     print("=" * 60)
-    print(f"Parcels: {config.parcel_path}")
-    print(f"Roads: {config.roads_path}")
-    print(f"Output: {config.output_dir}")
+    print(f"Parcels: {cfg.parcel_path}")
+    print(f"Roads: {cfg.roads_path}")
+    print(f"Local streets (provided): {local_roads_geojson}")
+    print(f"Output: {cfg.output_dir}")
     print()
 
-    output_path = generate_streets(config)
+    output = generate_streets_with_local_roads(cfg, local_roads_geojson)
 
     print()
-    print("✔ Step 2 completed successfully!")
-    print(f"  Output: {output_path}")
+    print("✔ Streets generation completed with provided local streets")
+    print(f"  GeoPackage: {output}")
 
 
 if __name__ == "__main__":

@@ -4,9 +4,16 @@ from typing import Optional
 
 import geopandas as gpd
 import pandas as pd
-from shapely import LineString, Point, unary_union
+from shapely import GeometryCollection, LineString, Point, unary_union
 from shapely.errors import TopologicalError
-from shapely.geometry import MultiLineString
+from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
+from shapely.ops import split
+
+try:
+    # Shapely 2.x
+    from shapely import make_valid as _make_valid
+except Exception:
+    _make_valid = None
 
 from rue_lib.core.geometry import buffer_layer
 
@@ -88,26 +95,27 @@ def merge_setback_layers(
     return output_layer_name
 
 
-def polygons_to_lines_layer(
+def polygons_to_lines_graph_based(
     input_path: Path,
     input_layer_names: str | list[str],
     output_path: Path,
-    output_layer_name: str = "polygon_boundaries",
-    dedupe_distance: float = 0.01,
+    output_layer_name: str = "polygon_boundaries_graph",
+    merge_distance: float = 0.1,
 ) -> str:
-    """Extract polygon boundaries from one or more layers and write them as LineStrings.
+    """Extract polygon boundaries using a graph-based approach.
 
-    This preserves individual polygon edges; shared edges are kept from both polygons
-    instead of dissolving the polygons into a single union.
-
-    Lines that are within dedupe_distance of each other are deduplicated.
+    This function:
+    1. Combines all polygons from input layers (preserves individual boundaries)
+    2. Extracts vertices and builds a connectivity graph
+    3. Merges nearby vertices (based on merge_distance)
+    4. Creates lines from the vertex connectivity
 
     Args:
         input_path: Path to input GeoPackage
         input_layer_names: Layer name(s) to extract boundaries from
         output_path: Path to output GeoPackage
         output_layer_name: Name for output layer
-        dedupe_distance: Distance threshold for removing duplicate lines (default: 0.01)
+        merge_distance: Distance threshold for merging nearby vertices (default: 0.1)
     """
     input_path = str(input_path)
     output_path = str(output_path)
@@ -116,7 +124,10 @@ def polygons_to_lines_layer(
         [input_layer_names] if isinstance(input_layer_names, str) else list(input_layer_names)
     )
     if not layer_names:
-        raise RuntimeError("No input layer names provided for polygons_to_lines_layer")
+        raise RuntimeError("No input layer names provided")
+
+    print("\nExtracting polygon boundaries using graph-based approach...")
+    print(f"  Input layers: {', '.join(layer_names)}")
 
     # Read all layers and combine
     all_gdfs = []
@@ -124,149 +135,321 @@ def polygons_to_lines_layer(
         try:
             gdf = gpd.read_file(input_path, layer=layer_name)
             all_gdfs.append(gdf)
+            print(f"  Loaded {len(gdf)} features from '{layer_name}'")
         except Exception as e:
             print(f"  Warning: cannot read layer '{layer_name}': {e}")
-            return
 
     if not all_gdfs:
         raise RuntimeError("No layers could be read")
 
-    gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True))
+    # Determine common CRS (use the first layer's CRS)
+    target_crs = all_gdfs[0].crs
+
+    # Transform all layers to the common CRS if needed
+    for i, gdf in enumerate(all_gdfs):
+        if gdf.crs is not None and gdf.crs != target_crs:
+            print(f"  Transforming layer {layer_names[i]} from {gdf.crs} to {target_crs}")
+            all_gdfs[i] = gdf.to_crs(target_crs)
+
+    gdf_combined = gpd.GeoDataFrame(pd.concat(all_gdfs, ignore_index=True), crs=target_crs)
     crs = gdf_combined.crs
 
-    # Extract all boundary lines from polygons
-    line_records = []
-    feature_idx = 1
-
-    for row in gdf_combined.itertuples():
-        geom = row.geometry
+    # Step 1: Collect all polygons (without merging)
+    print("  Collecting polygons from all features...")
+    all_polygons = []
+    for geom in gdf_combined.geometry:
         if geom is None or geom.is_empty:
             continue
 
-        if not geom.is_valid:
-            geom = geom.buffer(0)
-
-        # Handle different geometry types
         if geom.geom_type == "Polygon":
-            polygons = [geom]
+            all_polygons.append(geom)
         elif geom.geom_type == "MultiPolygon":
-            polygons = list(geom.geoms)
-        else:
+            all_polygons.extend(list(geom.geoms))
+
+    print(f"  Collected {len(all_polygons)} polygon(s)")
+
+    # Step 2: Extract vertices and build connectivity graph
+    print("  Building vertex connectivity graph...")
+
+    # vertex_coords will store unique vertex coordinates
+    # vertex_connections will store which vertices connect to each vertex
+    vertex_coords = []
+    vertex_id_map = {}
+    vertex_connections = {}
+
+    def get_or_create_vertex(coord):
+        """Get existing vertex ID or create new one"""
+        key = (round(coord[0], 10), round(coord[1], 10))
+        if key not in vertex_id_map:
+            vertex_id = len(vertex_coords)
+            vertex_coords.append((coord[0], coord[1]))
+            vertex_id_map[key] = vertex_id
+            vertex_connections[vertex_id] = set()
+        return vertex_id_map[key]
+
+    def add_ring_to_graph(ring_coords):
+        """Add a polygon ring to the connectivity graph"""
+        if len(ring_coords) < 2:
+            return
+        vertex_ids = [get_or_create_vertex(coord) for coord in ring_coords]
+
+        for i in range(len(vertex_ids)):
+            current_id = vertex_ids[i]
+            next_id = vertex_ids[(i + 1) % len(vertex_ids)]
+            vertex_connections[current_id].add(next_id)
+            vertex_connections[next_id].add(current_id)
+
+    for poly in all_polygons:
+        if poly is None or poly.is_empty:
             continue
+        exterior_coords = list(poly.exterior.coords)
+        add_ring_to_graph(exterior_coords)
+        for interior in poly.interiors:
+            interior_coords = list(interior.coords)
+            add_ring_to_graph(interior_coords)
 
-        # Extract rings from each polygon
-        for poly in polygons:
-            rings = [poly.exterior] + list(poly.interiors)
-            ring_id = 1
-            for ring in rings:
-                if ring.is_empty:
-                    continue
-                line_records.append(
-                    {
-                        "src_id": feature_idx,
-                        "ring_id": ring_id,
-                        "geometry": LineString(ring.coords),
-                    }
-                )
-                ring_id += 1
-            feature_idx += 1
+    print(f"  Extracted {len(vertex_coords)} unique vertices")
 
-    if not line_records:
-        raise RuntimeError(f"No geometries found to convert in layers: {', '.join(layer_names)}")
+    # Step 3: Merge nearby vertices
+    if merge_distance > 0:
+        print(f"  Merging vertices within {merge_distance} units...")
 
-    # Create GeoDataFrame of all lines
-    gdf_lines = gpd.GeoDataFrame(line_records, geometry="geometry", crs=crs)
+        gdf_vertices = gpd.GeoDataFrame(geometry=[Point(coord) for coord in vertex_coords], crs=crs)
+        spatial_index = gdf_vertices.sindex
 
-    # Deduplicate by removing close points, then reconstructing lines
-    if dedupe_distance > 0:
-        print(
-            f"  Deduplicating points from {len(gdf_lines)} lines "
-            f"(distance threshold: {dedupe_distance})..."
-        )
+        vertex_merge_map = {}
+        merged_count = 0
 
-        # Extract all unique points from all lines (normalize to 2D)
-        all_points = []
-        point_to_lines = {}  # Map points to the lines they belong to
-
-        for idx, row in gdf_lines.iterrows():
-            line_coords = list(row.geometry.coords)
-            for coord in line_coords:
-                # Normalize to 2D (take only x, y)
-                coord_2d = (coord[0], coord[1])
-                point_key = (round(coord_2d[0], 10), round(coord_2d[1], 10))  # Round for grouping
-                if point_key not in point_to_lines:
-                    all_points.append(coord_2d)
-                    point_to_lines[point_key] = []
-                point_to_lines[point_key].append(idx)
-
-        print(f"  Extracted {len(all_points)} unique points")
-
-        # Create GeoDataFrame of points for spatial indexing
-        gdf_points = gpd.GeoDataFrame(geometry=[Point(coord) for coord in all_points], crs=crs)
-
-        spatial_index = gdf_points.sindex
-        keep_point_indices = set(range(len(all_points)))
-        point_mapping = {}
-
-        for idx in range(len(all_points)):
-            if idx not in keep_point_indices:
+        for vid in range(len(vertex_coords)):
+            if vid in vertex_merge_map:
                 continue
 
-            point = gdf_points.iloc[idx].geometry
+            vertex_point = gdf_vertices.iloc[vid].geometry
+            buffer_geom = vertex_point.buffer(merge_distance)
+            nearby_indices = list(spatial_index.intersection(buffer_geom.bounds))
 
-            buffer_geom = point.buffer(dedupe_distance)
-            possible_matches_idx = list(spatial_index.intersection(buffer_geom.bounds))
-
-            for candidate_idx in possible_matches_idx:
-                if candidate_idx <= idx or candidate_idx not in keep_point_indices:
+            merge_candidates = []
+            for candidate_vid in nearby_indices:
+                if candidate_vid <= vid:
+                    continue
+                if candidate_vid in vertex_merge_map:
                     continue
 
-                candidate_point = gdf_points.iloc[candidate_idx].geometry
+                candidate_point = gdf_vertices.iloc[candidate_vid].geometry
+                if vertex_point.distance(candidate_point) < merge_distance:
+                    merge_candidates.append(candidate_vid)
 
-                if point.distance(candidate_point) < dedupe_distance:
-                    point_mapping[candidate_idx] = idx
-                    keep_point_indices.discard(candidate_idx)
+            for candidate_vid in merge_candidates:
+                vertex_merge_map[candidate_vid] = vid
+                merged_count += 1
 
-        kept_points = [all_points[i] for i in sorted(keep_point_indices)]
-        old_to_new_idx = {
-            old_idx: new_idx for new_idx, old_idx in enumerate(sorted(keep_point_indices))
-        }
+                for connected_vid in vertex_connections[candidate_vid]:
+                    if connected_vid != candidate_vid and connected_vid != vid:
+                        actual_connected = vertex_merge_map.get(connected_vid, connected_vid)
+                        vertex_connections[vid].add(actual_connected)
 
-        for removed_idx, kept_idx in point_mapping.items():
-            old_to_new_idx[removed_idx] = old_to_new_idx[kept_idx]
+                vertex_connections[candidate_vid].clear()
 
-        print(f"  After deduplication: {len(kept_points)} points")
-        new_line_records = []
-        for _idx, row in gdf_lines.iterrows():
-            line_coords = list(row.geometry.coords)
-            new_coords = []
-            for coord in line_coords:
-                coord_2d = (coord[0], coord[1])
-                for point_idx, pt in enumerate(all_points):
-                    if abs(pt[0] - coord_2d[0]) < 1e-9 and abs(pt[1] - coord_2d[1]) < 1e-9:
-                        new_idx = old_to_new_idx.get(point_idx, point_idx)
-                        if new_idx < len(kept_points):
-                            new_coord = kept_points[new_idx]
-                            if not new_coords or new_coords[-1] != new_coord:
-                                new_coords.append(new_coord)
-                        break
+        print(f"  Merged {merged_count} vertices")
 
-            if len(new_coords) >= 2:
-                new_line_records.append(
-                    {
-                        "src_id": row["src_id"],
-                        "ring_id": row["ring_id"],
-                        "geometry": LineString(new_coords),
-                    }
-                )
+        for vid in vertex_connections:
+            new_connections = set()
+            for connected_vid in vertex_connections[vid]:
+                actual_vid = vertex_merge_map.get(connected_vid, connected_vid)
+                if actual_vid != vid:  # Don't create self-loops
+                    new_connections.add(actual_vid)
+            vertex_connections[vid] = new_connections
 
-        gdf_lines = gpd.GeoDataFrame(new_line_records, geometry="geometry", crs=crs)
-        print(f"  After reconstruction: {len(gdf_lines)} lines")
+    debug_vertices = []
+    debug_vertex_info = []
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
 
-    # Write output
+        connections = vertex_connections[vid]
+        if not connections:
+            continue
+
+        coord = vertex_coords[vid]
+        debug_vertices.append(Point(coord[0], coord[1]))
+        debug_vertex_info.append(
+            {
+                "vertex_id": vid,
+                "num_connections": len(connections),
+                "connected_to": ",".join(map(str, sorted(connections))),
+                "x": float(coord[0]),
+                "y": float(coord[1]),
+            }
+        )
+
+    if debug_vertices:
+        debug_layer_name = f"{output_layer_name}_vertices"
+        gdf_debug_verts = gpd.GeoDataFrame(debug_vertex_info, geometry=debug_vertices, crs=crs)
+        gdf_debug_verts.to_file(output_path, layer=debug_layer_name, driver="GPKG")
+        print(f"  Saved {len(debug_vertices)} vertices to: {debug_layer_name}")
+
+    print("  Checking for redundant collinear connections...")
+
+    def are_collinear(p1, p2, p3, tolerance=0.01):
+        """Check if three points are collinear using cross product
+
+        Args:
+            p1, p2, p3: Points as (x, y) tuples
+            tolerance: Maximum cross product value to consider collinear
+        """
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+
+        cross = (y2 - y1) * (x3 - x2) - (y3 - y2) * (x2 - x1)
+        return abs(cross) < tolerance
+
+    def point_between(p1, p2, p3, tolerance=0.1):
+        """Check if p2 is between p1 and p3
+
+        Args:
+            p1, p2, p3: Points as (x, y) tuples
+            tolerance: Bounding box tolerance in meters
+        """
+        x1, y1 = p1
+        x2, y2 = p2
+        x3, y3 = p3
+
+        min_x, max_x = (min(x1, x3), max(x1, x3))
+        min_y, max_y = (min(y1, y3), max(y1, y3))
+
+        return (
+            min_x - tolerance <= x2 <= max_x + tolerance
+            and min_y - tolerance <= y2 <= max_y + tolerance
+        )
+
+    redundant_edges = set()
+
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
+
+        connections = vertex_connections[vid]
+        coord_a = vertex_coords[vid]
+        conn_list = list(connections)
+        for i, vid_b in enumerate(conn_list):
+            if vid_b in vertex_merge_map:
+                continue
+
+            coord_b = vertex_coords[vid_b]
+
+            for vid_c in conn_list[i + 1 :]:
+                if vid_c in vertex_merge_map:
+                    continue
+
+                coord_c = vertex_coords[vid_c]
+                if are_collinear(coord_a, coord_b, coord_c):
+                    if vid_c in vertex_connections.get(vid_b, set()):
+                        if point_between(coord_a, coord_b, coord_c):
+                            edge_key = tuple(sorted([vid, vid_c]))
+                            redundant_edges.add(edge_key)
+                        elif point_between(coord_a, coord_c, coord_b):
+                            edge_key = tuple(sorted([vid, vid_b]))
+                            redundant_edges.add(edge_key)
+
+    if redundant_edges:
+        print(f"  Found {len(redundant_edges)} redundant collinear connections to remove")
+
+        for vid in vertex_connections:
+            new_connections = set()
+            for connected_vid in vertex_connections[vid]:
+                edge_key = tuple(sorted([vid, connected_vid]))
+                if edge_key not in redundant_edges:
+                    new_connections.add(connected_vid)
+            vertex_connections[vid] = new_connections
+
+    # Step 5: Create lines from connectivity graph
+    print("  Creating lines from vertex connectivity...")
+
+    lines = []
+    line_info = []
+    created_edges = set()
+
+    for vid in range(len(vertex_coords)):
+        if vid in vertex_merge_map:
+            continue
+
+        coord = vertex_coords[vid]
+        connections = vertex_connections[vid]
+
+        for connected_vid in connections:
+            edge_key = tuple(sorted([vid, connected_vid]))
+
+            if edge_key in created_edges:
+                continue
+
+            created_edges.add(edge_key)
+
+            connected_coord = vertex_coords[connected_vid]
+            line = LineString([coord, connected_coord])
+            lines.append(line)
+            line_info.append(
+                {
+                    "line_id": len(lines),
+                    "vertex_from": vid,
+                    "vertex_to": connected_vid,
+                    "length": float(line.length),
+                }
+            )
+
+    print(f"  Created {len(lines)} lines from connectivity graph")
+
+    if not lines:
+        print("  Warning: No lines created!")
+        return output_layer_name
+
+    # Save output
+    gdf_lines = gpd.GeoDataFrame(line_info, geometry=lines, crs=crs)
     gdf_lines.to_file(output_path, layer=output_layer_name, driver="GPKG")
+    print(f"  Saved to layer: {output_layer_name}")
 
     return output_layer_name
+
+
+def angle_adjusted_length(segment: LineString) -> tuple[float, float]:
+    """Return cumulative deflection (deg) and a length scaled by bending.
+
+    Deflection is measured as the change in direction between consecutive
+    segment vectors (0° for straight, 90° for a right angle, small when
+    the path barely bends). Effective length = L * (1 + total_turn / pi).
+    """
+    coords = list(segment.coords)
+    if len(coords) < 3:
+        return 0.0, float(segment.length)
+
+    total_turn_rad = 0.0
+    for i in range(1, len(coords) - 1):
+        x0, y0 = coords[i - 1][0], coords[i - 1][1]
+        x1, y1 = coords[i][0], coords[i][1]
+        x2, y2 = coords[i + 1][0], coords[i + 1][1]
+
+        v1x, v1y = x1 - x0, y1 - y0
+        v2x, v2y = x2 - x1, y2 - y1
+
+        n1 = math.hypot(v1x, v1y)
+        n2 = math.hypot(v2x, v2y)
+        if n1 == 0 or n2 == 0:
+            continue
+
+        dot = (v1x * v2x + v1y * v2y) / (n1 * n2)
+        dot = max(-1.0, min(1.0, dot))
+        angle = math.acos(dot)
+
+        if angle > math.pi:
+            angle = 2 * math.pi - angle
+        if angle > math.pi / 2 and angle < math.pi:
+            angle = math.pi - angle if angle > math.pi / 2 else angle
+
+        total_turn_rad += abs(angle)
+
+    turn_deg = math.degrees(total_turn_rad)
+    adjusted_length = float(segment.length) * (1.0 + total_turn_rad / math.pi)
+    return turn_deg, adjusted_length
 
 
 def create_dead_end_boundary_lines(
@@ -302,8 +485,6 @@ def create_dead_end_boundary_lines(
 
     if boundary_union and not boundary_union.is_empty:
         site_lines_union = site_lines_union.difference(boundary_union.buffer(diff_buffer))
-
-    # Flatten to LineString parts
     line_parts = []
     if site_lines_union.geom_type == "LineString":
         line_parts = [site_lines_union]
@@ -323,7 +504,13 @@ def create_dead_end_boundary_lines(
 
     line_parts_extended = []
     for line_part in line_parts:
-        line_parts_extended.append(line_part.buffer(buffer_distance))
+        line_parts_extended.append(
+            line_part.buffer(
+                buffer_distance,
+                join_style=JOIN_STYLE.mitre,
+                cap_style=CAP_STYLE.round,
+            )
+        )
 
     if not line_parts:
         raise RuntimeError("No dead-end boundary lines found after subtraction")
@@ -382,9 +569,11 @@ def create_perpendicular_lines_inside_buffer_from_points(
     output_path: Path,
     points_layer: str,
     buffer_layer: str,
+    site_boundary_lines_layer: str,
     line_length: float,
     output_layer_name: Optional[str] = None,
     tangent_step_fraction: float = 0.001,
+    min_endpoint_distance: float = 1.0,
 ) -> Optional[str]:
     """Create perpendicular lines inside the buffer, starting from points on the buffer boundary.
 
@@ -402,9 +591,12 @@ def create_perpendicular_lines_inside_buffer_from_points(
         output_layer_name: Optional name for the output layer. If None, a default is used.
         tangent_step_fraction: Step along the boundary (fraction of boundary length)
                                used to approximate the local tangent.
+        min_endpoint_distance: Minimum distance from line endpoint to next/prev buffer points.
+                               Lines with endpoints closer than this are skipped (default: 80.0).
 
     Returns:
         Name of the created perpendicular lines layer, or None on failure.
+        Debug lines are saved to a layer named "{output_layer_name}_debug".
     """
     import geopandas as gpd
 
@@ -413,6 +605,7 @@ def create_perpendicular_lines_inside_buffer_from_points(
     # Load data
     gdf_pts = gpd.read_file(output_path, layer=points_layer)
     gdf_buffer = gpd.read_file(output_path, layer=buffer_layer)
+    gdf_boundary_lines = gpd.read_file(output_path, layer=site_boundary_lines_layer)
 
     print(f"  Loaded {len(gdf_pts)} points")
     print(f"  Loaded {len(gdf_buffer)} buffer feature(s)")
@@ -450,10 +643,15 @@ def create_perpendicular_lines_inside_buffer_from_points(
     if output_layer_name is None:
         output_layer_name = f"{points_layer}_perp_inside_buffer"
 
-    half_eps_in = line_length * 0.01
+    half_eps_in = line_length * 0.1
 
     lines = []
     records = []
+    filtered_count = 0
+
+    # Debug lines from endpoints to next/prev buffer points
+    debug_lines = []
+    debug_records = []
 
     for _idx, row in gdf_pts.iterrows():
         pt = row.geometry
@@ -521,27 +719,159 @@ def create_perpendicular_lines_inside_buffer_from_points(
         if line_geom.length == 0:
             continue
 
+        line_coords = list(line_geom.coords)
+        line_end = Point(line_coords[-1])
+        line_start = Point(line_coords[0])
+
+        # Initialize vertices from boundary line (will be set if endpoint intersects boundary)
+        prev_vertex = None
+        next_vertex = None
+
+        # Check if line start point intersects with any site boundary line
+        # Use small buffer for numerical tolerance
+        if gdf_boundary_lines.intersects(line_start.buffer(0.1)).any():
+            # Line starts on a boundary line
+            pass
+
+        if gdf_boundary_lines.intersects(line_end.buffer(0.1)).any():
+            # Line ends on a boundary line - get the intersecting line
+            intersecting_lines = gdf_boundary_lines[
+                gdf_boundary_lines.intersects(line_end.buffer(0.1))
+            ]
+
+            if not intersecting_lines.empty:
+                # Get the first intersecting line
+                boundary_line = intersecting_lines.iloc[0].geometry
+
+                # Project the line_end point onto the boundary line to find its position
+                distance_along_line = boundary_line.project(line_end)
+
+                # Get the vertices (coordinates) of the boundary line
+                boundary_coords = list(boundary_line.coords)
+
+                # Find which segment the point falls on
+                cumulative_dist = 0
+                prev_vertex = None
+                next_vertex = None
+
+                for i in range(len(boundary_coords) - 1):
+                    p1 = Point(boundary_coords[i])
+                    p2 = Point(boundary_coords[i + 1])
+                    segment_length = p1.distance(p2)
+
+                    if cumulative_dist <= distance_along_line <= cumulative_dist + segment_length:
+                        # The point falls on this segment
+                        prev_vertex = Point(boundary_coords[i])
+                        next_vertex = Point(boundary_coords[i + 1])
+                        break
+
+                    cumulative_dist += segment_length
+
+                # If point is at the start or end, handle edge cases
+                if prev_vertex is None and next_vertex is None:
+                    if distance_along_line <= 0:
+                        # Point is at the start
+                        prev_vertex = None
+                        next_vertex = (
+                            Point(boundary_coords[1]) if len(boundary_coords) > 1 else None
+                        )
+                    else:
+                        # Point is at the end
+                        prev_vertex = (
+                            Point(boundary_coords[-2]) if len(boundary_coords) > 1 else None
+                        )
+                        next_vertex = None
+
+        # Calculate distances to next and previous points
+        # If line endpoint intersects a boundary line, use vertices from that line
+        # Otherwise, use buffer boundary points
+        if prev_vertex is not None and next_vertex is not None:
+            # Use vertices from the boundary line
+            next_pt = next_vertex
+            prev_pt = prev_vertex
+            dist_to_next = line_end.distance(next_pt)
+            dist_to_prev = line_end.distance(prev_pt)
+        else:
+            # Fall back to buffer boundary logic
+            search_distance = line_length * 2
+
+            s_next = (s + search_distance) % boundary_len
+            next_pt = buffer_boundary.interpolate(s_next)
+
+            s_prev = (s - search_distance) % boundary_len
+            prev_pt = buffer_boundary.interpolate(s_prev)
+
+            dist_to_next = line_end.distance(next_pt)
+            dist_to_prev = line_end.distance(prev_pt)
+
+        # Create debug lines from endpoint to next/prev points
+        debug_line_to_next = LineString([line_end, next_pt])
+        debug_line_to_prev = LineString([line_end, prev_pt])
+
+        debug_lines.append(debug_line_to_next)
+        debug_records.append(
+            {
+                "source_idx": _idx,
+                "line_type": "to_next",
+                "distance": float(dist_to_next),
+                "filtered": dist_to_next < min_endpoint_distance
+                or dist_to_prev < min_endpoint_distance,
+            }
+        )
+
+        debug_lines.append(debug_line_to_prev)
+        debug_records.append(
+            {
+                "source_idx": _idx,
+                "line_type": "to_prev",
+                "distance": float(dist_to_prev),
+                "filtered": dist_to_next < min_endpoint_distance
+                or dist_to_prev < min_endpoint_distance,
+            }
+        )
+
+        # Skip lines where endpoint is too close to next or prev buffer points
+        if dist_to_next < min_endpoint_distance or dist_to_prev < min_endpoint_distance:
+            filtered_count += 1
+            continue
+
         lines.append(line_geom)
         rec = row.drop(labels="geometry").to_dict()
+        rec["dist_end_to_next"] = float(dist_to_next)
+        rec["dist_end_to_prev"] = float(dist_to_prev)
+        rec["line_length"] = float(line_geom.length)
         records.append(rec)
 
     if not lines:
         print("  Warning: no perpendicular lines created")
+        if filtered_count > 0:
+            print(
+                f"  {filtered_count} lines were filtered out (endpoint too close to buffer points)"
+            )
         return None
-
-    import geopandas as gpd
 
     gdf_out = gpd.GeoDataFrame(records, geometry=lines, crs=gdf_pts.crs)
     gdf_out.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
-    print(f"  Saved perpendicular lines inside buffer to layer: {output_layer_name}")
+    print(f"  Created {len(lines)} perpendicular lines inside buffer")
+    if filtered_count > 0:
+        print(f"  Filtered out {filtered_count} lines (endpoint too close to buffer points)")
+    print(f"  Saved to layer: {output_layer_name}")
+
+    # Save debug lines showing endpoint distances to next/prev buffer points
+    if debug_lines:
+        debug_layer_name = f"{output_layer_name}_debug"
+        gdf_debug = gpd.GeoDataFrame(debug_records, geometry=debug_lines, crs=gdf_pts.crs)
+        gdf_debug.to_file(output_path, layer=debug_layer_name, driver="GPKG")
+        print(f"  Saved {len(debug_lines)} debug lines to layer: {debug_layer_name}")
+
     return output_layer_name
 
 
 def create_guide_points_from_site_boundary(
     output_path: Path,
     site_boundary_lines_layer: str,
-    perp_lines_layer: str,
+    perp_lines_layer: Optional[str],
     output_layer_name: str = "13_site_boundary_points",
     lines_without_points_layer: str = "13_lines_without_points",
     min_line_length_threshold: float = 100.0,
@@ -556,7 +886,7 @@ def create_guide_points_from_site_boundary(
     Args:
         output_path: Path to the GeoPackage
         site_boundary_lines_layer: Name of layer containing site boundary lines
-        perp_lines_layer: Name of layer containing perpendicular lines
+        perp_lines_layer: Name of layer containing perpendicular lines (optional)
         output_layer_name: Name for the output points layer
         lines_without_points_layer: Name for layer containing long segments between points
         min_line_length_threshold: Minimum length for segments and interval for adding points
@@ -569,13 +899,26 @@ def create_guide_points_from_site_boundary(
 
     # Load layers
     gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
-    gdf_perp = gpd.read_file(output_path, layer=perp_lines_layer)
+
+    # Load perpendicular lines if layer name is provided
+    gdf_perp = None
+    if perp_lines_layer is not None:
+        try:
+            gdf_perp = gpd.read_file(output_path, layer=perp_lines_layer)
+        except Exception as e:
+            print(f"  Warning: Could not load perpendicular lines layer '{perp_lines_layer}': {e}")
+            gdf_perp = None
 
     print(f"  Loaded {len(gdf_boundary)} boundary line(s)")
-    print(f"  Loaded {len(gdf_perp)} perpendicular line(s)")
+    if gdf_perp is not None:
+        print(f"  Loaded {len(gdf_perp)} perpendicular line(s)")
+    else:
+        print("  No perpendicular lines layer available")
 
     points = []
     point_types = []
+    point_dist_prev = []
+    point_dist_next = []
     print("  Extracting corner points...")
 
     boundary_lines = []
@@ -603,91 +946,96 @@ def create_guide_points_from_site_boundary(
     for pt_coords in corner_points_set:
         points.append(Point(pt_coords[0], pt_coords[1]))
         point_types.append("corner")
-
-    print("  Finding perpendicular line intersections...")
-
-    boundary_union = unary_union(boundary_lines)
-
-    extension_factor = 1000.0
+        point_dist_prev.append(None)
+        point_dist_next.append(None)
 
     intersection_count = 0
-    for _, row in gdf_perp.iterrows():
-        perp_geom = row.geometry
-        if perp_geom is None or perp_geom.is_empty:
-            continue
+    if gdf_perp is not None and not gdf_perp.empty:
+        print("  Finding perpendicular line intersections...")
 
-        try:
-            coords = list(perp_geom.coords)
-            if len(coords) < 2:
+        boundary_union = unary_union(boundary_lines)
+
+        extension_factor = 1000.0
+
+        for _, row in gdf_perp.iterrows():
+            perp_geom = row.geometry
+            if perp_geom is None or perp_geom.is_empty:
                 continue
 
-            start = coords[0]
-            end = coords[-1]
+            try:
+                coords = list(perp_geom.coords)
+                if len(coords) < 2:
+                    continue
 
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            length = (dx**2 + dy**2) ** 0.5
+                start = coords[0]
+                end = coords[-1]
 
-            if length == 0:
-                continue
+                dx = end[0] - start[0]
+                dy = end[1] - start[1]
+                length = (dx**2 + dy**2) ** 0.5
 
-            dx /= length
-            dy /= length
+                if length == 0:
+                    continue
 
-            extended_start = (start[0] - dx * extension_factor, start[1] - dy * extension_factor)
-            extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
+                dx /= length
+                dy /= length
 
-            extended_line = LineString([extended_start, extended_end])
+                extended_start = (
+                    start[0] - dx * extension_factor,
+                    start[1] - dy * extension_factor,
+                )
+                extended_end = (end[0] + dx * extension_factor, end[1] + dy * extension_factor)
 
-            intersection = extended_line.intersection(boundary_union)
+                extended_line = LineString([extended_start, extended_end])
+                intersection = extended_line.intersection(boundary_union)
+                if intersection.is_empty:
+                    continue
+                original_mid_x = (start[0] + end[0]) / 2
+                original_mid_y = (start[1] + end[1]) / 2
+                original_mid = Point(original_mid_x, original_mid_y)
 
-            if intersection.is_empty:
-                continue
-
-            original_mid_x = (start[0] + end[0]) / 2
-            original_mid_y = (start[1] + end[1]) / 2
-            original_mid = Point(original_mid_x, original_mid_y)
-
-            intersection_points = []
-            if intersection.geom_type == "Point":
-                intersection_points.append(intersection)
-            elif intersection.geom_type == "MultiPoint":
-                intersection_points.extend(list(intersection.geoms))
-            elif intersection.geom_type == "LineString":
-                coords = list(intersection.coords)
-                if coords:
-                    intersection_points.append(Point(coords[0]))
-                    if len(coords) > 1:
-                        intersection_points.append(Point(coords[-1]))
-            elif intersection.geom_type == "MultiLineString":
-                for line in intersection.geoms:
-                    coords = list(line.coords)
+                intersection_points = []
+                if intersection.geom_type == "Point":
+                    intersection_points.append(intersection)
+                elif intersection.geom_type == "MultiPoint":
+                    intersection_points.extend(list(intersection.geoms))
+                elif intersection.geom_type == "LineString":
+                    coords = list(intersection.coords)
                     if coords:
                         intersection_points.append(Point(coords[0]))
                         if len(coords) > 1:
                             intersection_points.append(Point(coords[-1]))
+                elif intersection.geom_type == "MultiLineString":
+                    for line in intersection.geoms:
+                        coords = list(line.coords)
+                        if coords:
+                            intersection_points.append(Point(coords[0]))
+                            if len(coords) > 1:
+                                intersection_points.append(Point(coords[-1]))
 
-            if intersection_points:
-                closest_pt = min(intersection_points, key=lambda pt: pt.distance(original_mid))
-                pt_coords = (round(closest_pt.x, 6), round(closest_pt.y, 6))
+                if intersection_points:
+                    closest_pt = min(intersection_points, key=lambda pt: pt.distance(original_mid))
+                    pt_coords = (round(closest_pt.x, 6), round(closest_pt.y, 6))
 
-                if pt_coords not in corner_points_set:
-                    points.append(Point(pt_coords[0], pt_coords[1]))
-                    point_types.append("perp_intersection")
-                    intersection_count += 1
+                    if pt_coords not in corner_points_set:
+                        points.append(Point(pt_coords[0], pt_coords[1]))
+                        point_types.append("perp_intersection")
+                        point_dist_prev.append(None)
+                        point_dist_next.append(None)
+                        intersection_count += 1
 
-        except Exception as e:
-            print(f"  Warning: Failed to compute intersection: {e}")
-            continue
+            except Exception as e:
+                print(f"  Warning: Failed to compute intersection: {e}")
+                continue
 
-    print(f"  Found {intersection_count} perpendicular line intersection points")
+        print(f"  Found {intersection_count} perpendicular line intersection points")
 
     if not points:
         print("  Warning: No guide points created!")
         return output_layer_name
 
     gdf_points = gpd.GeoDataFrame(
-        {"point_type": point_types},
+        {"point_type": point_types, "dist_prev_m": point_dist_prev, "dist_next_m": point_dist_next},
         geometry=points,
         crs=gdf_boundary.crs,
     )
@@ -701,61 +1049,188 @@ def create_guide_points_from_site_boundary(
 
     print(f"\n  Breaking boundary lines at {len(points)} points...")
     breaking_points_geom = points
+    broken_segments_layer = f"{output_layer_name}_broken_segments"
+    snap_distance = 10.0
 
     broken_segments = []
     segment_lengths = []
+    segments_meta = []
 
-    for line in boundary_lines:
-        points_on_line = []
-        snap_distance = 1.0
+    for line_idx, line in enumerate(boundary_lines):
+        break_points: dict[float, Point] = {}
 
         for pt in breaking_points_geom:
             if line.distance(pt) < snap_distance:
                 distance_along = line.project(pt)
-                points_on_line.append(distance_along)
+                projected_pt = line.interpolate(distance_along)
+                dist_key = round(distance_along, 6)
+                # Keep a single projected point per distance position
+                if dist_key not in break_points:
+                    break_points[dist_key] = projected_pt
 
-        points_on_line = sorted(set(points_on_line))
+        line_length = line.length
+        num_breaks = len(break_points)
 
-        if not points_on_line:
+        if not break_points:
+            turn_deg, adj_length = angle_adjusted_length(line)
             broken_segments.append(line)
-            segment_lengths.append(line.length)
-        else:
-            coords = list(line.coords)
-            line_positions = [0.0] + points_on_line + [line.length]
+            segment_lengths.append(line_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": 0,
+                    "start_m": 0.0,
+                    "end_m": float(line_length),
+                    "segment_length": float(line_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": False,
+                    "end_is_break_point": False,
+                    "is_long_segment": adj_length >= min_line_length_threshold * 1.25,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
+                }
+            )
+            continue
 
-            for i in range(len(line_positions) - 1):
-                start_dist = line_positions[i]
-                end_dist = line_positions[i + 1]
+        sorted_breaks = sorted(break_points.items(), key=lambda item: item[0])
+        split_points = [pt for _, pt in sorted_breaks]
+        break_positions = [pos for pos, _ in sorted_breaks]
 
-                if end_dist - start_dist < 0.1:
-                    continue
+        try:
+            splitter = unary_union([pt.buffer(0.01) for pt in split_points])
+            split_result = split(line, splitter)
+            if hasattr(split_result, "geoms"):
+                num_result_geoms = len(list(split_result.geoms))
+            else:
+                num_result_geoms = 1
 
-                start_pt = line.interpolate(start_dist)
-                end_pt = line.interpolate(end_dist)
+            if num_result_geoms == 1 and len(split_points) > 0:
+                cut_positions = [0.0] + break_positions + [line_length]
+                cut_positions = sorted(set(cut_positions))
 
-                segment = LineString([start_pt, end_pt])
-                broken_segments.append(segment)
-                segment_lengths.append(segment.length)
+                manual_segments = []
+                for i in range(len(cut_positions) - 1):
+                    start_pos = cut_positions[i]
+                    end_pos = cut_positions[i + 1]
+
+                    if end_pos - start_pos < 0.1:
+                        continue
+                    start_pt = line.interpolate(start_pos)
+                    end_pt = line.interpolate(end_pos)
+                    segment = LineString([start_pt, end_pt])
+                    manual_segments.append(segment)
+
+                split_result = GeometryCollection(manual_segments)
+
+        except Exception as e:
+            print(f"  Warning: failed to split boundary line {line_idx}: {e}")
+            turn_deg, adj_length = angle_adjusted_length(line)
+            broken_segments.append(line)
+            segment_lengths.append(line_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": 0,
+                    "start_m": 0.0,
+                    "end_m": float(line_length),
+                    "segment_length": float(line_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": False,
+                    "end_is_break_point": False,
+                    "is_long_segment": adj_length >= min_line_length_threshold * 1.25,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
+                }
+            )
+            continue
+
+        tol = 1e-6
+
+        for seg_idx, segment in enumerate(split_result.geoms):
+            if segment.is_empty:
+                continue
+
+            seg_length = segment.length
+            if seg_length < 0.1:
+                continue
+
+            start_pt = Point(segment.coords[0])
+            end_pt = Point(segment.coords[-1])
+
+            start_dist = line.project(start_pt)
+            end_dist = line.project(end_pt)
+
+            # Ensure start <= end for reporting while keeping geometry intact
+            start_m = float(min(start_dist, end_dist))
+            end_m = float(max(start_dist, end_dist))
+
+            start_is_break_point = any(abs(start_dist - b) < tol for b in break_positions)
+            end_is_break_point = any(abs(end_dist - b) < tol for b in break_positions)
+            turn_deg, adj_length = angle_adjusted_length(segment)
+            is_long_segment = adj_length >= min_line_length_threshold * 1.25
+
+            broken_segments.append(segment)
+            segment_lengths.append(seg_length)
+            segments_meta.append(
+                {
+                    "source_line_idx": line_idx,
+                    "segment_idx": seg_idx,
+                    "start_m": start_m,
+                    "end_m": end_m,
+                    "segment_length": float(seg_length),
+                    "line_length": float(line_length),
+                    "num_break_points_on_line": num_breaks,
+                    "start_is_break_point": start_is_break_point,
+                    "end_is_break_point": end_is_break_point,
+                    "is_long_segment": is_long_segment,
+                    "turn_deg": turn_deg,
+                    "length_angle_m": adj_length,
+                }
+            )
 
     print(f"  Created {len(broken_segments)} segments from boundary lines")
 
+    if broken_segments:
+        gdf_broken_segments = gpd.GeoDataFrame(
+            segments_meta,
+            geometry=broken_segments,
+            crs=gdf_boundary.crs,
+        )
+        gdf_broken_segments.to_file(output_path, layer=broken_segments_layer, driver="GPKG")
+        print(f"  Saved broken boundary segments to layer: {broken_segments_layer}")
+
     long_segments = []
     long_lengths = []
+    long_lengths_angle = []
 
-    for segment, length in zip(broken_segments, segment_lengths):
-        if length >= min_line_length_threshold * 2:
+    for segment, meta in zip(broken_segments, segments_meta):
+        if (
+            meta.get("length_angle_m", meta.get("segment_length", 0.0))
+            >= min_line_length_threshold * 1.25
+        ):
             long_segments.append(segment)
-            long_lengths.append(length)
+            long_lengths.append(meta.get("segment_length", segment.length))
+            long_lengths_angle.append(meta.get("length_angle_m", segment.length))
 
     if long_segments:
-        sorted_pairs = sorted(zip(long_segments, long_lengths), key=lambda x: x[1], reverse=True)
-        long_segments = [seg for seg, _ in sorted_pairs]
-        long_lengths = [length for _, length in sorted_pairs]
+        sorted_pairs = sorted(
+            zip(long_segments, long_lengths, long_lengths_angle),
+            key=lambda x: x[2],
+            reverse=True,
+        )
+        long_segments = [seg for seg, _, _ in sorted_pairs]
+        long_lengths = [length for _, length, _ in sorted_pairs]
+        long_lengths_angle = [adj for _, _, adj in sorted_pairs]
 
-        print(f"  Found {len(long_segments)} segments longer than {min_line_length_threshold}m")
+        print(
+            f"  Found {len(long_segments)} segments longer than "
+            f"{min_line_length_threshold * 1.25}m (angle-adjusted length)"
+        )
 
         gdf_long_segments = gpd.GeoDataFrame(
-            {"length_m": long_lengths},
+            {"length_m": long_lengths, "length_angle_m": long_lengths_angle},
             geometry=long_segments,
             crs=gdf_boundary.crs,
         )
@@ -763,33 +1238,121 @@ def create_guide_points_from_site_boundary(
         gdf_long_segments.to_file(output_path, layer=lines_without_points_layer, driver="GPKG")
         print(f"  Saved longest segments to layer: {lines_without_points_layer}")
 
-        for i, length in enumerate(long_lengths[:10]):
-            print(f"    Segment {i + 1}: length = {length:.2f}m")
+        for i, (length, adj) in enumerate(zip(long_lengths[:10], long_lengths_angle[:10])):
+            print(f"    Segment {i + 1}: length = {length:.2f}m, angle_adj = {adj:.2f}m")
         if len(long_lengths) > 10:
             print(f"    ... and {len(long_lengths) - 10} more segments")
 
-        print(f"\n  Adding points along long segments at {min_line_length_threshold}m intervals...")
-        additional_points_count = 0
-        for segment in long_segments:
-            if segment.geom_type == "LineString":
-                segment_length = segment.length
-                num_intervals = int(segment_length / min_line_length_threshold)
+        print(
+            f"\n  Adding points starting from corner point at {min_line_length_threshold}m "
+            f"intervals..."
+        )
+
+        # Find corner points on long segments
+        snap_distance = 1.0
+        segments_union = unary_union(long_segments)
+
+        corner_points_on_segments = []
+        for i, pt in enumerate(points):
+            if point_types[i] == "corner":
+                if segments_union.distance(pt) < snap_distance:
+                    corner_points_on_segments.append(pt)
+
+        if not corner_points_on_segments:
+            print("  Warning: No corner points found on long segments, skipping interval points")
+        else:
+            additional_points_count = 0
+            for segment in long_segments:
+                if segment.geom_type != "LineString":
+                    continue
+
+                start_corner = corner_points_on_segments[0]
+                existing_points_on_segment = [
+                    (pt, segment.project(pt)) for pt in points if segment.distance(pt) < 0.1
+                ]
+                accepted_points_on_segment: list[tuple[Point, float]] = []
+                for i, pt in enumerate(points):
+                    if point_types[i] == "corner":
+                        dist_to_seg = segment.distance(pt)
+                        if dist_to_seg < snap_distance:
+                            start_corner = pt
+                            break
+
+                # Check if this segment connects to the start corner
+                seg_start = Point(segment.coords[0])
+                seg_end = Point(segment.coords[-1])
+
+                # Determine if corner is at start or end of this segment
+                dist_to_start = start_corner.distance(seg_start)
+                dist_to_end = start_corner.distance(seg_end)
+
+                if dist_to_start > snap_distance and dist_to_end > snap_distance:
+                    continue
+
+                if dist_to_start < dist_to_end:
+                    oriented_segment = segment
+                else:
+                    oriented_segment = LineString(list(reversed(segment.coords)))
+
+                segment_length = oriented_segment.length
+                if segment_length == 0:
+                    continue
+
+                _, adjusted_length = angle_adjusted_length(oriented_segment)
+                length_scale = adjusted_length / segment_length if segment_length else 1.0
+                if length_scale == 0:
+                    continue
+
+                num_intervals = int(adjusted_length / min_line_length_threshold)
 
                 for i in range(1, num_intervals + 1):
-                    distance = i * min_line_length_threshold
-                    if distance < segment_length:
-                        point = segment.interpolate(distance)
-                        key = (round(point.x, 6), round(point.y, 6))
+                    distance_adj = i * min_line_length_threshold
+                    actual_distance = distance_adj / length_scale
+                    if actual_distance >= segment_length:
+                        continue
 
-                        if key not in corner_points_set and not any(
-                            abs(pt.x - point.x) < 0.001 and abs(pt.y - point.y) < 0.001
-                            for pt in points
-                        ):
-                            points.append(Point(point.x, point.y))
-                            point_types.append("long_segment_interval")
-                            additional_points_count += 1
+                    point = oriented_segment.interpolate(actual_distance)
+                    key = (round(point.x, 6), round(point.y, 6))
 
-        print(f"  Added {additional_points_count} additional points along long segments")
+                    if key in corner_points_set:
+                        continue
+
+                    threshold_dist = 0.35 * min_line_length_threshold
+                    if any(
+                        point.distance(pt) < threshold_dist for pt, _ in existing_points_on_segment
+                    ):
+                        continue
+                    if any(
+                        point.distance(pt) < threshold_dist for pt, _ in accepted_points_on_segment
+                    ):
+                        continue
+
+                    pos_on_seg = oriented_segment.project(point)
+                    neighbor_positions = sorted(
+                        [p for _, p in existing_points_on_segment]
+                        + [p for _, p in accepted_points_on_segment]
+                        + [pos_on_seg]
+                    )
+                    idx = neighbor_positions.index(pos_on_seg)
+                    prev_pos = neighbor_positions[idx - 1] if idx > 0 else None
+                    next_pos = (
+                        neighbor_positions[idx + 1] if idx < len(neighbor_positions) - 1 else None
+                    )
+                    dist_prev = pos_on_seg - prev_pos if prev_pos is not None else None
+                    dist_next = next_pos - pos_on_seg if next_pos is not None else None
+
+                    if not any(
+                        abs(pt.x - point.x) < 0.001 and abs(pt.y - point.y) < 0.001 for pt in points
+                    ):
+                        points.append(Point(point.x, point.y))
+                        point_types.append("long_segment_interval")
+                        point_dist_prev.append(dist_prev if dist_prev is None else float(dist_prev))
+                        point_dist_next.append(dist_next if dist_next is None else float(dist_next))
+                        accepted_points_on_segment.append((point, pos_on_seg))
+                        additional_points_count += 1
+
+            print(f"  Added {additional_points_count} additional points along long segments")
+
         gdf_points = gpd.GeoDataFrame(
             {"point_type": point_types},
             geometry=points,
@@ -875,7 +1438,7 @@ def create_perpendicular_lines_from_guide_points(
     lines = []
     records = []
 
-    touch_tol = 1e-6  # distance to treat a point as touching a line
+    touch_tol = 0.5  # distance to treat a point as touching a line (meters)
     tangent_step_fraction = 0.01  # fraction of line length for tangent calc
     inside_test_step = line_length * 0.01  # small step along normal to test inside/outside
 
@@ -883,9 +1446,19 @@ def create_perpendicular_lines_from_guide_points(
         """Return list of boundary line segments that touch/are close to the given point."""
         touching = []
         for line in boundary_lines:
+            # Check distance to entire line
             if line.distance(pt) <= touch_tol:
                 touching.append(line)
-        # Fallback: if nothing is within tol, take the closest line
+                continue
+            coords = list(line.coords)
+            if coords:
+                if (
+                    Point(coords[0]).distance(pt) <= touch_tol
+                    or Point(coords[-1]).distance(pt) <= touch_tol
+                ):
+                    touching.append(line)
+                    continue
+
         if not touching:
             min_d = float("inf")
             closest = None
@@ -898,7 +1471,7 @@ def create_perpendicular_lines_from_guide_points(
                 touching.append(closest)
         return touching
 
-    def perpendicular_line_from_segment_at_point(seg: LineString, pt: Point) -> LineString | None:
+    def perpendicular_line_from_segment_at_point(seg: LineString, pt: Point) -> LineString:
         """Build a perpendicular line from segment seg at pt, oriented away from site polygon."""
         if seg is None or seg.is_empty:
             return None
@@ -943,30 +1516,14 @@ def create_perpendicular_lines_from_guide_points(
         elif inside2 and not inside1:
             nx, ny = n1x, n1y
         elif not inside1 and not inside2:
-            # Both directions considered outside (boundary may be ambiguous); just pick one
             nx, ny = n1x, n1y
         else:
-            # Both directions go inside; skip
             return None
 
         end_x = x0 + nx * line_length
         end_y = y0 + ny * line_length
 
-        raw_line = LineString([(x0, y0), (end_x, end_y)])
-
-        # Remove any part of the line that lies inside the polygon, keep only outside piece(s)
-        diff = raw_line.difference(site_geom)
-        if diff.is_empty:
-            return None
-
-        if diff.geom_type == "LineString":
-            return diff
-        if diff.geom_type == "MultiLineString":
-            # Return the piece that starts closest to the original point
-            pieces = list(diff.geoms)
-            return min(pieces, key=lambda seg2: seg2.distance(pt))
-
-        return None
+        return LineString([(x0, y0), (end_x, end_y)])
 
     for idx, row in gdf_points.iterrows():
         pt = row.geometry
@@ -983,7 +1540,7 @@ def create_perpendicular_lines_from_guide_points(
         # Corner: create one perpendicular for each touching segment
         if pt_type == "corner":
             used = 0
-            for seg in touching_segments:
+            for _idx, seg in enumerate(touching_segments):
                 line = perpendicular_line_from_segment_at_point(seg, pt)
                 if line is None or line.length == 0:
                     continue
@@ -1036,13 +1593,6 @@ def create_perpendicular_lines_from_guide_points(
     return output_layer_name
 
 
-try:
-    # Shapely 2.x
-    from shapely import make_valid as _make_valid
-except Exception:
-    _make_valid = None
-
-
 def _fix_geom(g):
     """Fix invalid geometries, returning None if empty/invalid."""
     if g is None or g.is_empty:
@@ -1074,6 +1624,7 @@ def subtract_layer(
     output_gpkg: str,
     output_layer_name: str,
     buffer_distance: float = 0.0,
+    simplify: bool = False,
 ) -> str:
     """
     Subtract one layer from another using geometric difference (GeoPandas/Shapely).
@@ -1123,9 +1674,21 @@ def subtract_layer(
     else:
         # Buffer the erase geometry if buffer_distance is specified
         if buffer_distance > 0:
-            erase_union = erase_union.buffer(buffer_distance, cap_style=3, join_style=2)
+            erase_union = erase_union.buffer(
+                buffer_distance, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+            )
+
+            if simplify:
+                simplify_tolerance = buffer_distance * 0.1
+                erase_union = erase_union.simplify(simplify_tolerance, preserve_topology=True)
+
+            if not erase_union.is_valid:
+                erase_union = erase_union.buffer(0)
         else:
-            erase_union = erase_union.buffer(0.001, cap_style=3, join_style=2)
+            # Small buffer to clean geometry
+            erase_union = erase_union.buffer(
+                0.001, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+            )
         erased_geom = gdf_base.geometry.difference(erase_union)
 
     # Create a new GeoDataFrame with the erased geometry
