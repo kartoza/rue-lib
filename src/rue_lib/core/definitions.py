@@ -160,6 +160,7 @@ class ClusterTypes(EnumType):
     GREEN1 = "green1"
     GREEN2 = "green2"
     OPEN_SPACE = "os"
+    ART_OPEN_SPACE = "art_os"
     SEC_OPEN_SPACE = "sec_os"
     SEC_SEC_OPEN_SPACE = "sec_sec_os"
     SEC_LOC_OPEN_SPACE = "sec_loc_os"
@@ -221,6 +222,7 @@ ColorTypes = {
     ClusterTypes.GREEN1: "rgb(219,242,207)",
     ClusterTypes.GREEN2: "rgb(219,242,207)",
     ClusterTypes.OPEN_SPACE: "rgb(191,230,171)",
+    ClusterTypes.ART_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.SEC_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.SEC_SEC_OPEN_SPACE: "rgb(191,230,171)",
     ClusterTypes.SEC_LOC_OPEN_SPACE: "rgb(191,230,171)",
