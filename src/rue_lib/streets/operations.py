@@ -2,10 +2,10 @@
 import math
 import os
 
+import geopandas as gpd
 from osgeo import ogr
 from shapely import geometry, wkb, wkt
 from shapely.errors import GEOSException, WKTReadingError
-from shapely.geometry import CAP_STYLE, JOIN_STYLE
 from shapely.ops import split, unary_union
 
 from .geometry_utils import (
@@ -580,81 +580,59 @@ def create_on_grid_cells_from_perpendiculars(
     input_path = str(input_path)
     output_path = str(output_path)
 
-    ds = ogr.Open(input_path)
-    if ds is None:
-        raise RuntimeError(f"Cannot open dataset: {input_path}")
+    setback_gdf = gpd.read_file(input_path, layer=setback_layer_name)
+    if setback_gdf.empty:
+        raise RuntimeError(f"Cannot find or read setback layer: {setback_layer_name}")
 
-    setback_layer = ds.GetLayerByName(setback_layer_name)
-    perp_layer = ds.GetLayerByName(perp_lines_layer_name)
+    perp_gdf = gpd.read_file(input_path, layer=perp_lines_layer_name)
+    if perp_gdf.empty:
+        raise RuntimeError(
+            f"Cannot find or read perpendicular lines layer: {perp_lines_layer_name}"
+        )
 
-    if setback_layer is None:
-        ds = None
-        raise RuntimeError(f"Cannot find setback layer: {setback_layer_name}")
-    if perp_layer is None:
-        ds = None
-        raise RuntimeError(f"Cannot find perpendicular lines layer: {perp_lines_layer_name}")
-
-    srs = setback_layer.GetSpatialRef()
+    crs = setback_gdf.crs
 
     setback_polygons = []
-    for feature in setback_layer:
-        geom = feature.GetGeometryRef()
-        if geom is None:
-            continue
-        geom = geom.Clone()
-        if not geom.IsValid():
-            geom = geom.Buffer(0)
-
-        shapely_geom = _ogr_to_shapely(geom)
-        if shapely_geom is None:
-            continue
-        if not shapely_geom.is_valid:
-            shapely_geom = shapely_geom.buffer(0)
-        if shapely_geom.is_empty:
+    for _idx, row in setback_gdf.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
             continue
 
-        setback_id = feature.GetField("id") if feature.GetFieldIndex("id") >= 0 else None
-        setback_polygons.append((setback_id, shapely_geom))
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if geom.is_empty:
+            continue
+
+        setback_id = row.get("id") if "id" in row else None
+        setback_polygons.append((setback_id, geom))
 
     if not setback_polygons:
-        ds = None
         raise RuntimeError("No setback polygons found to create on-grid cells.")
 
     setback_union = unary_union([geom for _sid, geom in setback_polygons])
 
-    # Collect perpendicular lines whose midpoint falls inside the merged setback area
     candidate_lines = []
     line_counter = 1
-    for feature in perp_layer:
-        geom = feature.GetGeometryRef()
-        if geom is None:
-            continue
-        geom = geom.Clone()
-        if not geom.IsValid():
-            geom = geom.Buffer(0)
-
-        shapely_line = _ogr_to_shapely(geom)
-        if shapely_line is None:
-            continue
-        if shapely_line.is_empty:
-            continue
-        if not shapely_line.is_valid:
-            shapely_line = shapely_line.buffer(0)
-        if shapely_line.is_empty:
+    for _idx, row in perp_gdf.iterrows():
+        geom = row.geometry
+        if geom is None or geom.is_empty:
             continue
 
-        midpoint = shapely_line.interpolate(0.5, normalized=True)
+        if not geom.is_valid:
+            geom = geom.buffer(0)
+        if geom.is_empty:
+            continue
+
+        midpoint = geom.interpolate(0.5, normalized=True)
         if not setback_union.contains(midpoint):
             continue
 
-        line_id = feature.GetField("id") if feature.GetFieldIndex("id") >= 0 else None
+        line_id = row.get("id") if "id" in row else None
         if line_id is None:
             line_id = line_counter
             line_counter += 1
 
-        candidate_lines.append({"id": line_id, "geom": shapely_line, "midpoint": midpoint})
-
-    ds = None
+        candidate_lines.append({"id": line_id, "geom": geom, "midpoint": midpoint})
 
     if not candidate_lines:
         raise RuntimeError(
@@ -710,59 +688,25 @@ def create_on_grid_cells_from_perpendiculars(
                 }
             )
 
-    driver = ogr.GetDriverByName("GPKG")
+    output_data = []
+    for feature_id, cell in enumerate(cells, start=1):
+        output_data.append(
+            {
+                "id": feature_id,
+                "setback_id": int(cell["setback_id"]) if cell["setback_id"] is not None else None,
+                "line_count": len(cell["line_ids"]),
+                "line_ids": ",".join(str(lid) for lid in cell["line_ids"]),
+                "area_m2": float(cell["area_m2"]),
+                "geometry": cell["geom"],
+            }
+        )
+
+    output_gdf = gpd.GeoDataFrame(output_data, crs=crs)
+
     if os.path.exists(output_path):
-        output_ds = driver.Open(output_path, 1)
+        output_gdf.to_file(output_path, layer=output_layer_name, driver="GPKG", mode="a")
     else:
-        output_ds = driver.CreateDataSource(output_path)
-
-    if output_ds is None:
-        raise RuntimeError(f"Cannot open output dataset: {output_path}")
-
-    if output_ds.GetLayerByName(output_layer_name):
-        output_ds.DeleteLayer(output_layer_name)
-
-    output_layer = output_ds.CreateLayer(output_layer_name, srs, geom_type=ogr.wkbPolygon)
-
-    id_field = ogr.FieldDefn("id", ogr.OFTInteger)
-    output_layer.CreateField(id_field)
-
-    setback_id_field = ogr.FieldDefn("setback_id", ogr.OFTInteger)
-    output_layer.CreateField(setback_id_field)
-
-    line_count_field = ogr.FieldDefn("line_count", ogr.OFTInteger)
-    output_layer.CreateField(line_count_field)
-
-    line_ids_field = ogr.FieldDefn("line_ids", ogr.OFTString)
-    line_ids_field.SetWidth(255)
-    output_layer.CreateField(line_ids_field)
-
-    area_field = ogr.FieldDefn("area_m2", ogr.OFTReal)
-    output_layer.CreateField(area_field)
-
-    feature_id = 1
-    for cell in cells:
-        geom = cell["geom"]
-        ogr_geom = ogr.CreateGeometryFromWkb(geom.wkb)
-        if not ogr_geom.IsValid():
-            ogr_geom = ogr_geom.Buffer(0)
-
-        out_feature = ogr.Feature(output_layer.GetLayerDefn())
-        out_feature.SetGeometry(ogr_geom)
-        out_feature.SetField("id", feature_id)
-
-        if cell["setback_id"] is not None:
-            out_feature.SetField("setback_id", int(cell["setback_id"]))
-
-        out_feature.SetField("line_count", len(cell["line_ids"]))
-        out_feature.SetField("line_ids", ",".join(str(lid) for lid in cell["line_ids"]))
-        out_feature.SetField("area_m2", float(cell["area_m2"]))
-
-        output_layer.CreateFeature(out_feature)
-        out_feature = None
-        feature_id += 1
-
-    output_ds = None
+        output_gdf.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
     return output_layer_name
 
@@ -907,181 +851,6 @@ def classify_on_grid_cells_by_setback(
     output_ds = None
 
     return arterial_output_layer_name, secondary_output_layer_name
-
-
-def create_local_streets_zone(
-    input_path,
-    input_layer_name,
-    output_path,
-    output_layer_name,
-    sidewalk_width_m,
-    road_width_m,
-):
-    """Create local streets zone with sidewalks from grid blocks.
-
-    This creates a zone for local streets by:
-    1. Creating an inner (negative) buffer using sidewalk_width + half of road_width
-    2. Creating an outer (positive) rounded buffer of sidewalk_width from the inner result
-
-    The result represents the area where local streets and sidewalks will be placed.
-    Both inner and outer buffer zones are saved as separate layers.
-
-    Args:
-        input_path (str): Path to the input dataset containing grid blocks.
-        input_layer_name (str): Name of the layer with grid blocks.
-        output_path (str): Path to the output GeoPackage (.gpkg). Created if missing.
-        output_layer_name (str): Base name for the output layers.
-        sidewalk_width_m (float): Width of sidewalk in meters.
-        road_width_m (float): Width of local road in meters.
-
-    Returns:
-        tuple[str, str]: Names of (outer_layer, inner_layer) created.
-
-    Raises:
-        Exception: Propagated GDAL/OGR errors.
-    """
-    inner_buffer_distance = -(road_width_m / 2.0)
-    outer_buffer_distance = sidewalk_width_m
-
-    input_ds = ogr.Open(input_path)
-    if input_ds is None:
-        raise RuntimeError(f"Could not open input dataset: {input_path}")
-
-    input_layer = input_ds.GetLayerByName(input_layer_name)
-    if input_layer is None:
-        raise RuntimeError(f"Could not find layer: {input_layer_name}")
-
-    srs = input_layer.GetSpatialRef()
-
-    inner_geoms = []
-    outer_geoms = []
-    block_types = []
-
-    for feature in input_layer:
-        geom = feature.GetGeometryRef()
-        if geom is None:
-            continue
-
-        shapely_geom = _ogr_to_shapely(geom.Clone())
-        if shapely_geom is None or shapely_geom.is_empty:
-            continue
-
-        if not shapely_geom.is_valid:
-            shapely_geom = shapely_geom.buffer(0)
-
-        inner_buffered = shapely_geom.buffer(
-            inner_buffer_distance,
-            join_style=JOIN_STYLE.mitre,
-            cap_style=CAP_STYLE.square,
-        )
-
-        if inner_buffered.is_empty:
-            continue
-
-        if not inner_buffered.is_valid:
-            inner_buffered = inner_buffered.buffer(0)
-        if inner_buffered.is_empty:
-            continue
-
-        inner_buffered = inner_buffered.simplify(0.01, preserve_topology=True)
-        outer_buffered = inner_buffered.buffer(
-            outer_buffer_distance,
-            join_style=JOIN_STYLE.round,
-            cap_style=CAP_STYLE.round,
-        )
-
-        if outer_buffered.is_empty:
-            continue
-
-        if not outer_buffered.is_valid:
-            outer_buffered = outer_buffered.buffer(0)
-        if outer_buffered.is_empty:
-            continue
-
-        outer_buffered = outer_buffered.simplify(0.01, preserve_topology=True)
-
-        inner_geoms.append(ogr.CreateGeometryFromWkb(inner_buffered.wkb))
-        outer_geoms.append(ogr.CreateGeometryFromWkb(outer_buffered.wkb))
-
-        # Store block_type if it exists in the feature
-        block_type = ""
-        if feature.GetFieldIndex("block_type") >= 0:
-            block_type = feature.GetField("block_type") or ""
-        block_types.append(block_type)
-
-    input_ds = None
-
-    if not inner_geoms:
-        print(f"No valid geometries after inner buffer from {input_layer_name}")
-        return (None, None)
-
-    driver = ogr.GetDriverByName("GPKG")
-    if os.path.exists(output_path):
-        output_ds = driver.Open(output_path, 1)
-    else:
-        output_ds = driver.CreateDataSource(output_path)
-
-    inner_layer_name = f"{output_layer_name}_inner"
-    outer_layer_name = f"{output_layer_name}_outer"
-
-    for layer_name in [inner_layer_name, outer_layer_name]:
-        for i in range(output_ds.GetLayerCount()):
-            if output_ds.GetLayerByIndex(i).GetName() == layer_name:
-                output_ds.DeleteLayer(i)
-                break
-
-    inner_layer = output_ds.CreateLayer(inner_layer_name, srs, ogr.wkbUnknown)
-    inner_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
-    inner_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
-    inner_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
-    inner_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
-    inner_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
-    inner_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
-    inner_layer.CreateField(ogr.FieldDefn("block_type", ogr.OFTString))
-
-    outer_layer = output_ds.CreateLayer(outer_layer_name, srs, ogr.wkbUnknown)
-    outer_layer.CreateField(ogr.FieldDefn("area_m2", ogr.OFTReal))
-    outer_layer.CreateField(ogr.FieldDefn("sidewalk_area", ogr.OFTReal))
-    outer_layer.CreateField(ogr.FieldDefn("buffer_dist", ogr.OFTReal))
-    outer_layer.CreateField(ogr.FieldDefn("sidewalk_w", ogr.OFTReal))
-    outer_layer.CreateField(ogr.FieldDefn("road_w", ogr.OFTReal))
-    outer_layer.CreateField(ogr.FieldDefn("zone_type", ogr.OFTString))
-
-    for _idx, (inner_geom, outer_geom, block_type) in enumerate(
-        zip(inner_geoms, outer_geoms, block_types)
-    ):
-        inner_area = inner_geom.GetArea()
-        outer_area = outer_geom.GetArea()
-        sidewalk_area = outer_area - inner_area
-
-        inner_feature = ogr.Feature(inner_layer.GetLayerDefn())
-        inner_feature.SetGeometry(inner_geom)
-        inner_feature.SetField("area_m2", inner_area)
-        inner_feature.SetField("sidewalk_area", sidewalk_area)
-        inner_feature.SetField("buffer_dist", abs(inner_buffer_distance))
-        inner_feature.SetField("sidewalk_w", sidewalk_width_m)
-        inner_feature.SetField("road_w", road_width_m)
-        inner_feature.SetField("zone_type", "buildable")
-        inner_feature.SetField("block_type", block_type)
-        inner_layer.CreateFeature(inner_feature)
-        inner_feature = None
-
-        outer_feature = ogr.Feature(outer_layer.GetLayerDefn())
-        outer_feature.SetGeometry(outer_geom)
-        outer_feature.SetField("area_m2", outer_area)
-        outer_feature.SetField("sidewalk_area", sidewalk_area)
-        outer_feature.SetField("buffer_dist", abs(outer_buffer_distance))
-        outer_feature.SetField("sidewalk_w", sidewalk_width_m)
-        outer_feature.SetField("road_w", road_width_m)
-        outer_feature.SetField("zone_type", "street_sidewalk")
-        outer_layer.CreateFeature(outer_feature)
-        outer_feature = None
-
-    if output_ds is not None:
-        output_ds.FlushCache()
-    output_ds = None
-
-    return (outer_layer_name, inner_layer_name)
 
 
 def export_geometry_vertices(
