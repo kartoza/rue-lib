@@ -104,14 +104,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
     preferred_depth_on_grid_arterial = (
         cfg.part_art_d
         + (cfg.off_grid_arterial_clusters_depth * cfg.off_grid_cluster_depth)
-        + cfg.road_locals_width_m
+        + (cfg.road_locals_width_m * 1.5)
         + cfg.part_loc_d
     )
 
     preferred_depth_on_grid_secondary = (
         cfg.part_sec_d
         + (cfg.off_grid_secondary_clusters_depth * cfg.off_grid_cluster_depth)
-        + cfg.road_locals_width_m
+        + (cfg.road_locals_width_m * 1.5)
         + cfg.part_loc_d
     )
 

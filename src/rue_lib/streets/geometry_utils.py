@@ -100,7 +100,7 @@ def break_linestring_by_angle_shapely(linestring, angle_threshold=60.0):
     Break a Shapely linestring at points where the angle change exceeds the threshold.
 
     Args:
-        linestring: Shapely LineString or MultiLineString geometry
+        linestring: Shapely LineString or MultiLineString geometry (2D or 3D)
         angle_threshold: Angle threshold in degrees (default 60.0)
 
     Returns:
@@ -122,27 +122,25 @@ def break_linestring_by_angle_shapely(linestring, angle_threshold=60.0):
         return [linestring]
 
     # Find break points
-    break_indices = [0]  # Start with first point
+    break_indices = [0]
 
     for i in range(1, point_count - 1):
-        x1, y1 = coords[i - 1]
-        x2, y2 = coords[i]
-        x3, y3 = coords[i + 1]
+        x1, y1 = coords[i - 1][0], coords[i - 1][1]
+        x2, y2 = coords[i][0], coords[i][1]
+        x3, y3 = coords[i + 1][0], coords[i + 1][1]
 
         angle_change = calculate_angle_change(x1, y1, x2, y2, x3, y3)
 
         if angle_change > angle_threshold:
             break_indices.append(i)
 
-    break_indices.append(point_count - 1)  # End with last point
+    break_indices.append(point_count - 1)
 
-    # Create linestrings from break indices
     segments = []
     for i in range(len(break_indices) - 1):
         start_idx = break_indices[i]
         end_idx = break_indices[i + 1]
 
-        # Extract coordinates for this segment
         segment_coords = coords[start_idx : end_idx + 1]
 
         # Create new Shapely LineString
