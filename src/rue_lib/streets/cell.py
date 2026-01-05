@@ -910,7 +910,14 @@ def remove_dead_end_cells(
 
     for _idx, row in gdf_cells.iterrows():
         cell_geom = row.geometry
-        is_good = row.get("is_good", 0) == 1
+        is_good_val = row.get("is_good", None)
+        if is_good_val is not None:
+            if isinstance(is_good_val, str):
+                is_good = is_good_val.lower() == "true"
+            else:
+                is_good = bool(is_good_val)
+        else:
+            is_good = False
 
         if cell_geom is None or cell_geom.is_empty:
             continue
@@ -924,8 +931,8 @@ def remove_dead_end_cells(
             should_be_removed = True
             if (
                 row.get("quality", "") == "area_too_small"
-                and row.get("area_ratio", 1.0) > 0.75
-                and row.get("right_angles", 0) >= 4
+                and row.get("area_ratio", 1.0) > 1
+                and row.get("right_angles", 0) == 4
             ):
                 should_be_removed = False
             if should_be_removed:
