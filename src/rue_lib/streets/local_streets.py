@@ -171,6 +171,21 @@ def create_local_streets_zone(
     outer_gdf = gpd.GeoDataFrame(outer_data, crs=crs)
 
     if os.path.exists(output_path):
+        from osgeo import ogr
+
+        ds = ogr.Open(output_path, 1)
+        if ds:
+            layers_to_delete = []
+            for i in range(ds.GetLayerCount()):
+                layer = ds.GetLayerByIndex(i)
+                if layer.GetName() in [inner_layer_name, outer_layer_name]:
+                    layers_to_delete.append(i)
+
+            for i in reversed(layers_to_delete):
+                ds.DeleteLayer(i)
+            ds = None
+
+    if os.path.exists(output_path):
         inner_gdf.to_file(output_path, layer=inner_layer_name, driver="GPKG", mode="a")
         outer_gdf.to_file(output_path, layer=outer_layer_name, driver="GPKG", mode="a")
     else:
