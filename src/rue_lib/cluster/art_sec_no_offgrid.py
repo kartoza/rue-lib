@@ -388,7 +388,9 @@ def generate_art_sec_parts_no_offgrid(
     edges_for_parts = []
 
     sec_roads_cleaned = roads_sec_layer.copy()
-    road_art_layer_buffered = roads_art_layer.buffer(art_road_width_m / 2, cap_style="flat")
+    road_art_layer_buffered = roads_art_layer.buffer(
+        art_road_width_m / 2, cap_style="flat", join_style="mitre"
+    )
     for idx, sec_road in sec_roads_cleaned.iterrows():
         sec_geom = sec_road.geometry
         for art_buffer in road_art_layer_buffered:
@@ -398,11 +400,15 @@ def generate_art_sec_parts_no_offgrid(
                 pass
         sec_roads_cleaned.at[idx, "geometry"] = sec_geom
 
-    art_roads_buffered = roads_art_layer.buffer(part_art_d + art_road_width_m, cap_style="flat")
+    art_roads_buffered = roads_art_layer.buffer(
+        part_art_d + art_road_width_m, cap_style="flat", join_style="mitre"
+    )
 
     sec_roads_buffered = []
     for sec_geom in sec_roads_cleaned.geometry:
-        buffered = sec_geom.buffer(part_sec_d + sec_road_width_m, cap_style="flat")
+        buffered = sec_geom.buffer(
+            part_sec_d + sec_road_width_m, cap_style="flat", join_style="mitre"
+        )
         sec_roads_buffered.append(buffered)
 
     loc_roads_broken = []
@@ -545,12 +551,6 @@ def generate_art_sec_parts_no_offgrid(
             )
             local_lines_by_block_id[block_id] = broken_lines
 
-    # Buffer local roads (original, for now)
-    loc_roads_buffered = []
-    for loc_geom in roads_loc_layer.geometry:
-        buffered = loc_geom.buffer(part_loc_d + loc_road_width_m, cap_style="flat")
-        loc_roads_buffered.append(buffered)
-
     for idx, block_row in blocks_layer.iterrows():
         block = block_row.geometry
 
@@ -646,7 +646,9 @@ def generate_art_sec_parts_no_offgrid(
                             break
 
                 # Sort by length
-                local_lines_sorted = sorted(filtered_local_lines, key=lambda line: line.length)
+                local_lines_sorted = sorted(
+                    filtered_local_lines, key=lambda line: line.length, reverse=True
+                )
 
                 local_lines = local_lines_sorted
             else:
@@ -656,8 +658,10 @@ def generate_art_sec_parts_no_offgrid(
                 current_part = part_data["geometry"]
                 split_parts = []
 
-                for local_line in local_lines:
-                    local_off = local_line.buffer(part_loc_d, join_style="mitre", cap_style="round")
+                for local_line in local_lines[:2]:
+                    local_off = extend_line(local_line, loc_road_width_m).buffer(
+                        part_loc_d, join_style="mitre", cap_style="flat"
+                    )
 
                     buffer_part_for_calculation = block_row.geometry.intersection(local_off)
                     if buffer_part_for_calculation.area * min_area_factor > block_row.geometry.area:

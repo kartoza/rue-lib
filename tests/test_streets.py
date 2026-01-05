@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 from osgeo import ogr
 
-from rue_lib.streets.operations import create_local_streets_zone
+from rue_lib.streets.local_streets import create_local_streets_zone
 
 
 class TestCreateLocalStreetsZone:

@@ -2,7 +2,6 @@
 
 import geopandas as gpd
 import pandas as pd
-from osgeo import ogr
 from shapely import wkt
 
 
@@ -18,18 +17,12 @@ def buffer_geometry(geom_wkt: str, distance: float, cap_style: int = 2, join_sty
     Returns:
         Buffered geometry as WKT string
     """
-    ogr_geom = ogr.CreateGeometryFromWkt(geom_wkt)
-
-    if ogr_geom is None:
+    try:
+        geom = wkt.loads(geom_wkt)
+        buffered = geom.buffer(distance, resolution=8, cap_style=cap_style, join_style=join_style)
+        return buffered.wkt
+    except Exception:
         return geom_wkt
-
-    quadsecs = 8
-    buffered = ogr_geom.Buffer(distance, quadsecs)
-
-    if buffered is None:
-        return geom_wkt
-
-    return buffered.ExportToWkt()
 
 
 def buffer_roads(
@@ -59,13 +52,17 @@ def buffer_roads(
 
     if not art.empty:
         art["geometry"] = art.geometry.apply(
-            lambda g: wkt.loads(buffer_geometry(g.wkt, road_arterial_width_m / 2, cap_style=2))
+            lambda g: wkt.loads(
+                buffer_geometry(g.wkt, road_arterial_width_m / 2, cap_style=2, join_style=2)
+            )
         )
         parts.append(art)
 
     if not sec.empty:
         sec["geometry"] = sec.geometry.apply(
-            lambda g: wkt.loads(buffer_geometry(g.wkt, road_secondary_width_m / 2, cap_style=2))
+            lambda g: wkt.loads(
+                buffer_geometry(g.wkt, road_secondary_width_m / 2, cap_style=2, join_style=2)
+            )
         )
         parts.append(sec)
 

@@ -14,7 +14,7 @@ from shapely.prepared import prep
 
 from rue_lib.core.helpers import feature_geom_to_shapely
 from rue_lib.streets.config import StreetConfig
-from rue_lib.streets.operations import create_local_streets_zone
+from rue_lib.streets.local_streets import create_local_streets_zone
 
 
 def is_good_cell(poly: Polygon, target_area) -> dict:
