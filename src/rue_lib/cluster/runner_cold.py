@@ -36,6 +36,7 @@ from rue_lib.cluster.cold.subdiv_block import (
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.cluster.helpers import convert_polygonz_to_polygon
 from rue_lib.core.definitions import BlockTypes
+from rue_lib.core.geometry import merge_connected_lines
 from rue_lib.streets.operations import extract_by_expression
 from rue_lib.streets.runner_utils import subtract_layer
 
@@ -95,6 +96,7 @@ def generate_cold(
         output_path,
         boundary_points_layer_name,
     )
+    merge_connected_lines(output_path, boundary_lines_layer_name)
 
     print("\nStep 4: Subtract local road buffer from cold grid...")
     cold_grid_updated_layer_name = "203_cold_grid_updated"

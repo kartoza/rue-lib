@@ -19,7 +19,7 @@ def buffer_geometry(geom_wkt: str, distance: float, cap_style: int = 2, join_sty
     """
     try:
         geom = wkt.loads(geom_wkt)
-        buffered = geom.buffer(distance, resolution=8, cap_style=cap_style, join_style=join_style)
+        buffered = geom.buffer(distance, cap_style=cap_style, join_style=join_style)
         return buffered.wkt
     except Exception:
         return geom_wkt
