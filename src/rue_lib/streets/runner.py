@@ -31,6 +31,7 @@ from .cell import (
     fix_grid_cells_with_perpendicular_lines,
     merge_small_cells_with_neighbors,
     remove_dead_end_cells,
+    remove_small_cells,
 )
 from .config import StreetConfig
 from .financial import FinancialStreet
@@ -249,8 +250,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
             target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
             area_threshold_ratio=0.5,
         )
+        print("Step 14g: Removing small cells")
+        cleaned_cells_layer = remove_small_cells(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.5,
+        )
     else:
-        # Fall back to the original off-grid cells if no perpendicular lines were generated
         print("  No fixed cells available, using original off-grid cells")
         cleaned_cells_layer = remove_dead_end_cells(
             output_gpkg, "14_off_grid_cells", "13a_dead_end_lines_buffered"
@@ -261,6 +268,13 @@ def generate_streets(cfg: StreetConfig) -> Path:
             cleaned_cells_layer,
             target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
             area_threshold_ratio=0.5,
+        )
+        print("Step 14g: Removing small cells")
+        cleaned_cells_layer = remove_small_cells(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.15,
         )
 
     print("Step 15: Generating on-grid cells")

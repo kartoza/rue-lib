@@ -184,6 +184,9 @@ def _build_mesh_and_cells(
 ):
     """Build mesh points and Voronoi cells within a rotated polygon.
 
+    Creates an evenly distributed grid of points (e.g., 3x3, 4x4) by calculating
+    the number of cells that fit in each direction and centering them.
+
     Args:
         start_x: Starting x coordinate for mesh generation.
         start_y: Starting y coordinate for mesh generation.
@@ -204,15 +207,23 @@ def _build_mesh_and_cells(
     """
     mesh_points_rot = []
 
-    y = start_y
-    while y <= maxy + grid_depth:
-        x = start_x
-        while x <= maxx + grid_width:
+    # Calculate total available space
+    total_width = maxx - start_x
+    total_height = maxy - start_y
+
+    # Calculate number of cells that fit in each direction
+    num_cols = max(1, int(math.ceil(total_width / grid_width)))
+    num_rows = max(1, int(math.ceil(total_height / grid_depth)))
+
+    # Create evenly distributed grid points
+    # Add all points to ensure even distribution (num_rows x num_cols)
+    # Voronoi cells will be clipped to the polygon later
+    for row_idx in range(num_rows):
+        y = start_y + row_idx * grid_depth
+        for col_idx in range(num_cols):
+            x = start_x + col_idx * grid_width
             p = Point(x, y)
-            if prepared_poly.context.oriented_envelope.contains(p):
-                mesh_points_rot.append(p)
-            x += grid_width
-        y += grid_depth
+            mesh_points_rot.append(p)
 
     if len(mesh_points_rot) < 4:
         return [], [], [], 0, 0.0

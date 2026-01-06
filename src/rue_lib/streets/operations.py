@@ -5,7 +5,7 @@ import os
 import geopandas as gpd
 from osgeo import ogr
 from shapely import geometry, wkb, wkt
-from shapely.errors import GEOSException, WKTReadingError
+from shapely.errors import GEOSException, ShapelyError
 from shapely.ops import split, unary_union
 
 from .geometry_utils import (
@@ -31,8 +31,8 @@ def _ogr_to_shapely(ogr_geom):
         pass
     try:
         return wkt.loads(ogr_geom.ExportToWkt())
-    except (WKTReadingError, GEOSException, AttributeError, RuntimeError):
-        # WKTReadingError: Invalid WKT string
+    except (ShapelyError, GEOSException, AttributeError, RuntimeError):
+        # ShapelyError: Invalid WKT string
         # GEOSException: GEOS topology errors
         # AttributeError: Invalid OGR geometry object
         # RuntimeError: GDAL/OGR errors
@@ -564,18 +564,135 @@ def merge_layers_without_overlaps(input_path, layer_names, output_path, output_l
     return output_layer_name
 
 
+def _merge_small_cells_with_neighbors(cells, min_area_threshold):
+    """Merge cells smaller than threshold with their nearest neighboring cell.
+
+    Args:
+        cells: List of cell dictionaries with 'geom', 'setback_id', 'line_ids', 'area_m2'
+        min_area_threshold: Minimum area in square meters. Cells below this are merged.
+
+    Returns:
+        Updated list of cells after merging
+    """
+    if not cells or min_area_threshold <= 0:
+        return cells
+
+    # Create a working copy of cells list
+    working_cells = list(cells)
+    merged_something = True
+
+    # Keep merging until no more small cells can be merged
+    while merged_something:
+        merged_something = False
+
+        # Find small cells
+        small_cells_indices = [
+            i for i, cell in enumerate(working_cells) if cell["area_m2"] < min_area_threshold
+        ]
+
+        if not small_cells_indices:
+            break
+
+        # Process each small cell
+        for small_idx in small_cells_indices:
+            if small_idx >= len(working_cells):
+                continue  # Cell may have been merged already
+
+            small_cell = working_cells[small_idx]
+            small_geom = small_cell["geom"]
+
+            # Find neighboring cells (cells that touch/intersect)
+            best_neighbor_idx = None
+            best_shared_length = 0
+
+            for neighbor_idx, neighbor_cell in enumerate(working_cells):
+                if neighbor_idx == small_idx:
+                    continue
+
+                neighbor_geom = neighbor_cell["geom"]
+
+                # Check if cells are neighbors (share a boundary)
+                if small_geom.touches(neighbor_geom) or small_geom.intersects(neighbor_geom):
+                    # Calculate shared boundary length to find best neighbor
+                    try:
+                        intersection = small_geom.intersection(neighbor_geom)
+                        if intersection.is_empty:
+                            continue
+
+                        # Get length of shared boundary
+                        if hasattr(intersection, "length"):
+                            shared_length = intersection.length
+                        else:
+                            shared_length = 0
+
+                        if shared_length > best_shared_length:
+                            best_shared_length = shared_length
+                            best_neighbor_idx = neighbor_idx
+                    except Exception as e:
+                        print(f"Warning: Failed to compute intersection: {e}")
+                        continue
+
+            # Merge with best neighbor if found
+            if best_neighbor_idx is not None:
+                neighbor_cell = working_cells[best_neighbor_idx]
+
+                # Merge geometries
+                merged_geom = unary_union([small_geom, neighbor_cell["geom"]])
+                if not merged_geom.is_valid:
+                    merged_geom = merged_geom.buffer(0)
+
+                # Merge attributes
+                merged_line_ids = list(set(small_cell["line_ids"] + neighbor_cell["line_ids"]))
+
+                # Create merged cell
+                merged_cell = {
+                    "geom": merged_geom,
+                    "setback_id": neighbor_cell["setback_id"],  # Keep neighbor's setback_id
+                    "line_ids": merged_line_ids,
+                    "area_m2": merged_geom.area,
+                }
+
+                # Remove both cells and add merged cell
+                # Remove higher index first to avoid index shift issues
+                if small_idx > best_neighbor_idx:
+                    del working_cells[small_idx]
+                    del working_cells[best_neighbor_idx]
+                else:
+                    del working_cells[best_neighbor_idx]
+                    del working_cells[small_idx]
+
+                working_cells.append(merged_cell)
+                merged_something = True
+                break  # Restart the loop with updated cells
+
+    return working_cells
+
+
 def create_on_grid_cells_from_perpendiculars(
     input_path,
     setback_layer_name,
     perp_lines_layer_name,
     output_path,
     output_layer_name,
+    min_area_threshold=None,
 ):
     """Create on-grid cells by splitting merged setback polygons with perpendicular lines.
 
     Lines are only used when their midpoint lies inside the merged setback polygons.
     Each setback polygon is split by its relevant lines, and resulting cells are written
     with basic attribution about the lines that touched them.
+
+    After cell creation, small cells (below min_area_threshold) are merged with their
+    nearest neighboring cell to avoid tiny slivers.
+
+    Args:
+        input_path: Path to input GeoPackage
+        setback_layer_name: Name of setback layer
+        perp_lines_layer_name: Name of perpendicular lines layer
+        output_path: Path to output GeoPackage
+        output_layer_name: Name for output layer
+        min_area_threshold: Minimum cell area in m². Cells below this are merged with
+                           neighbors. If None, auto-calculated as 1% of median cell area.
     """
     input_path = str(input_path)
     output_path = str(output_path)
@@ -688,18 +805,32 @@ def create_on_grid_cells_from_perpendiculars(
                 }
             )
 
+    if min_area_threshold is None:
+        if cells:
+            areas = [cell["area_m2"] for cell in cells]
+            median_area = sorted(areas)[len(areas) // 2]
+            min_area_threshold = median_area * 0.25
+        else:
+            min_area_threshold = 0
+
+    if min_area_threshold > 0 and cells:
+        cells = _merge_small_cells_with_neighbors(cells, min_area_threshold)
+
     output_data = []
     for feature_id, cell in enumerate(cells, start=1):
-        output_data.append(
-            {
-                "id": feature_id,
-                "setback_id": int(cell["setback_id"]) if cell["setback_id"] is not None else None,
-                "line_count": len(cell["line_ids"]),
-                "line_ids": ",".join(str(lid) for lid in cell["line_ids"]),
-                "area_m2": float(cell["area_m2"]),
-                "geometry": cell["geom"],
-            }
-        )
+        if cell["area_m2"] >= min_area_threshold:
+            output_data.append(
+                {
+                    "id": feature_id,
+                    "setback_id": int(cell["setback_id"])
+                    if cell["setback_id"] is not None
+                    else None,
+                    "line_count": len(cell["line_ids"]),
+                    "line_ids": ",".join(str(lid) for lid in cell["line_ids"]),
+                    "area_m2": float(cell["area_m2"]),
+                    "geometry": cell["geom"],
+                }
+            )
 
     output_gdf = gpd.GeoDataFrame(output_data, crs=crs)
 

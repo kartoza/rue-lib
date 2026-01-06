@@ -601,16 +601,38 @@ def fix_grid_cells_with_perpendicular_lines(
                     if best_v1 is None or best_v2 is None:
                         continue
 
-                    # Create quadrilateral with correct vertex order
-                    dist_v1_ps = Point(best_v1).distance(Point(perp_start))
-                    dist_v1_pe = Point(best_v1).distance(Point(perp_end))
-                    dist_v2_ps = Point(best_v2).distance(Point(perp_start))
-                    dist_v2_pe = Point(best_v2).distance(Point(perp_end))
+                    def normalize_coord(coord):
+                        """Ensure coordinate is 2D (x, y) tuple."""
+                        if isinstance(coord, (list, tuple)):
+                            return (float(coord[0]), float(coord[1]))
+                        return coord
+
+                    best_v1_2d = normalize_coord(best_v1)
+                    best_v2_2d = normalize_coord(best_v2)
+                    perp_start_2d = normalize_coord(perp_start)
+                    perp_end_2d = normalize_coord(perp_end)
+
+                    dist_v1_ps = Point(best_v1_2d).distance(Point(perp_start_2d))
+                    dist_v1_pe = Point(best_v1_2d).distance(Point(perp_end_2d))
+                    dist_v2_ps = Point(best_v2_2d).distance(Point(perp_start_2d))
+                    dist_v2_pe = Point(best_v2_2d).distance(Point(perp_end_2d))
 
                     if dist_v1_ps + dist_v2_pe < dist_v1_pe + dist_v2_ps:
-                        coords = [best_v1, best_v2, perp_end, perp_start, best_v1]
+                        coords = [
+                            best_v1_2d,
+                            best_v2_2d,
+                            perp_end_2d,
+                            perp_start_2d,
+                            best_v1_2d,
+                        ]
                     else:
-                        coords = [best_v1, best_v2, perp_start, perp_end, best_v1]
+                        coords = [
+                            best_v1_2d,
+                            best_v2_2d,
+                            perp_start_2d,
+                            perp_end_2d,
+                            best_v1_2d,
+                        ]
 
                     try:
                         merge_polygon = Polygon(coords)
@@ -626,7 +648,16 @@ def fix_grid_cells_with_perpendicular_lines(
                                 continue
 
                             original_area = result_geom.area
-                            merged = result_geom.union(merge_polygon)
+
+                            # Buffer slightly to close gaps, then union, then negative buffer
+                            gap_buffer = 0.1
+                            try:
+                                buffered_result = result_geom.buffer(gap_buffer, join_style=2)
+                                buffered_merge = merge_polygon.buffer(gap_buffer, join_style=2)
+                                merged = unary_union([buffered_result, buffered_merge])
+                                merged = merged.buffer(-gap_buffer, join_style=2)
+                            except Exception:
+                                merged = result_geom.union(merge_polygon)
 
                             if merged.geom_type == "Polygon":
                                 new_geom = merged.buffer(0)
@@ -647,10 +678,42 @@ def fix_grid_cells_with_perpendicular_lines(
                             elif merged.geom_type == "MultiPolygon":
                                 new_geom = unary_union(merged)
                                 if new_geom.geom_type == "MultiPolygon":
-                                    new_geom = max(new_geom.geoms, key=lambda p: p.area)
+                                    gap_buffer_mp = 0.1
+                                    try:
+                                        buffered_parts = [
+                                            part.buffer(gap_buffer_mp, join_style=2)
+                                            for part in new_geom.geoms
+                                        ]
+                                        merged_buffered = unary_union(buffered_parts)
+                                        new_geom = merged_buffered.buffer(
+                                            -gap_buffer_mp, join_style=2
+                                        )
+
+                                        if new_geom.geom_type == "MultiPolygon":
+                                            gdf_temp = gpd.GeoDataFrame(
+                                                {"geometry": list(new_geom.geoms)}, crs="EPSG:4326"
+                                            )
+                                            gdf_temp["dissolve_field"] = 1
+                                            dissolved = gdf_temp.dissolve(by="dissolve_field")
+                                            dissolved_geom = dissolved.geometry.iloc[0]
+
+                                            if dissolved_geom.geom_type == "Polygon":
+                                                new_geom = dissolved_geom
+                                            else:
+                                                print(
+                                                    f"    Cell {cell_idx}: Still "
+                                                    "MultiPolygon after gap-closing "
+                                                    "and dissolve, taking largest part"
+                                                )
+                                                new_geom = max(new_geom.geoms, key=lambda p: p.area)
+                                    except Exception as e:
+                                        print(
+                                            f"    Cell {cell_idx}: Gap-closing "
+                                            f"failed ({e}), taking largest polygon"
+                                        )
+                                        new_geom = max(new_geom.geoms, key=lambda p: p.area)
 
                                 new_geom = new_geom.buffer(0)
-                                # Simplify to remove unnecessary vertices on straight edges
                                 new_geom = new_geom.simplify(0.01, preserve_topology=True)
                                 area_change = new_geom.area - original_area
 
@@ -664,11 +727,17 @@ def fix_grid_cells_with_perpendicular_lines(
                                     if not cell_was_split:
                                         cells_modified += 1
                     except Exception as e:
-                        print(e)
+                        print(
+                            f"    Cell {cell_idx}: Failed to create/merge "
+                            f"polygon - {type(e).__name__}: {e}"
+                        )
                         continue
 
             except Exception as e:
-                print(e)
+                print(
+                    f"    Cell {cell_idx}: Error in merging data "
+                    f"processing - {type(e).__name__}: {e}"
+                )
                 pass
 
         if cutting_lines:
@@ -872,6 +941,63 @@ def merge_small_cells_with_neighbors(
     gdf_working.to_file(output_path, layer=output_layer_name, driver="GPKG")
 
     print(f"  Saved merged cells to layer: {output_layer_name}")
+    return output_layer_name
+
+
+def remove_small_cells(
+    output_path: Path,
+    grid_cells_layer: str,
+    target_area: float,
+    area_threshold_ratio: float = 0.15,
+) -> str:
+    """Remove cells smaller than a threshold area.
+
+    Cells with area < (target_area * area_threshold_ratio) are completely removed
+    from the dataset. This is useful for cleaning up tiny sliver cells that cannot
+    be meaningfully merged with neighbors.
+
+    Args:
+        output_path: Path to GeoPackage
+        grid_cells_layer: Name of layer containing grid cells
+        target_area: Target area for cells
+        area_threshold_ratio: Cells below this ratio are removed (default 0.15 = 15%)
+
+    Returns:
+        Name of the cleaned cells layer
+    """
+    print(f"\nRemoving small cells (< {area_threshold_ratio * 100:.0f}% of target area)...")
+
+    gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
+    print(f"  Loaded {len(gdf_cells)} grid cells")
+    print(f"  Target area: {target_area:.1f} m²")
+    print(f"  Minimum area threshold: {target_area * area_threshold_ratio:.1f} m²")
+
+    if gdf_cells.empty:
+        print("  Warning: Empty input data, returning original layer")
+        return grid_cells_layer
+
+    min_area = target_area * area_threshold_ratio
+
+    # Identify cells to keep
+    keep_mask = gdf_cells.geometry.area >= min_area
+    removed_count = (~keep_mask).sum()
+
+    print(f"  Found {removed_count} small cells to remove")
+
+    if removed_count == 0:
+        print("  No small cells found, returning original layer")
+        return grid_cells_layer
+
+    # Filter to keep only cells above threshold
+    gdf_cleaned = gdf_cells[keep_mask].copy()
+
+    print(f"  Removed {removed_count} small cells")
+    print(f"  Remaining cells: {len(gdf_cleaned)}")
+
+    output_layer_name = f"{grid_cells_layer}_removed_small"
+    gdf_cleaned.to_file(output_path, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Saved cleaned cells to layer: {output_layer_name}")
     return output_layer_name
 
 
