@@ -80,18 +80,31 @@ def merge_and_classify_on_grid_clusters(
             convex_union = unary_union(convex_geoms)
 
             try:
-                remaining = block_geom.difference(convex_union.buffer(0.000001))
+                remaining = block_geom.difference(convex_union.buffer(1))
 
                 if remaining.is_empty or remaining.area <= 0:
                     print(f"    Block {block_id}: completely removed by convex clusters")
                     continue
 
                 if remaining.geom_type == "Polygon":
-                    parts = [remaining]
+                    buffered_parts = [remaining.buffer(1).intersection(block_geom)]
                 elif remaining.geom_type == "MultiPolygon":
-                    parts = list(remaining.geoms)
+                    buffered_parts = []
+                    for poly in remaining.geoms:
+                        buffered = poly.buffer(1).intersection(block_geom)
+                        if not buffered.is_empty:
+                            if buffered.geom_type == "Polygon":
+                                buffered_parts.append(buffered)
+                            elif buffered.geom_type == "MultiPolygon":
+                                buffered_parts.extend(list(buffered.geoms))
                 else:
                     print(f"    Block {block_id}: unexpected geometry type {remaining.geom_type}")
+                    continue
+
+                parts = [p for p in buffered_parts if not p.is_empty and p.area > 0]
+
+                if not parts:
+                    print(f"    Block {block_id}: completely removed after buffer restoration")
                     continue
 
                 result_polygons.extend(convex_geoms)
@@ -175,7 +188,7 @@ def merge_and_classify_on_grid_clusters(
             record["type"] = f"{primary_type}_{secondary_type}"
         else:
             if "road_arterial" in road_types and "road_local" in road_types:
-                record["type"] = "loc"
+                record["type"] = "art"
             else:
                 record["type"] = _get_road_type_priority(road_types, remove=False)
 

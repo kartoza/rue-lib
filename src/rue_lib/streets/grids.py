@@ -8,7 +8,7 @@ from scipy.spatial import Voronoi
 from shapely import unary_union
 from shapely.affinity import rotate
 from shapely.errors import TopologicalError
-from shapely.geometry import LineString, Point, Polygon
+from shapely.geometry import LineString, MultiLineString, Point, Polygon
 from shapely.ops import nearest_points
 from shapely.prepared import prep
 
@@ -732,6 +732,36 @@ def grids_from_site(
     ds = None
 
 
+def _pick_intersection_point(
+    edge: LineString, midpoint: Point, buffer_boundary: MultiLineString
+) -> list[Point]:
+    inter = edge.intersection(buffer_boundary)
+    if inter.is_empty:
+        _, snapped = nearest_points(midpoint, buffer_boundary)
+        return snapped
+
+    if inter.geom_type == "Point":
+        return [inter]
+
+    if inter.geom_type == "MultiPoint":
+        points = list(inter.geoms)
+        return points
+
+    if inter.geom_type in ("LineString", "MultiLineString"):
+        _, snapped = nearest_points(midpoint, inter)
+        return [snapped]
+
+    if inter.geom_type == "GeometryCollection":
+        pts = [g for g in inter.geoms if g.geom_type == "Point"]
+        if pts:
+            return min(pts, key=lambda p: p.distance(midpoint))
+        _, snapped = nearest_points(midpoint, inter)
+        return [snapped]
+
+    _, snapped = nearest_points(midpoint, buffer_boundary)
+    return [snapped]
+
+
 def extract_grid_lines_in_buffer(
     output_path: Path,
     grid_cells_layer: str,
@@ -764,7 +794,6 @@ def extract_grid_lines_in_buffer(
     print(f"  Grid layer: {grid_cells_layer}")
     print(f"  Buffer layer: {buffer_layer}")
 
-    # Read the grid cells and buffer zone
     gdf_cells = gpd.read_file(output_path, layer=grid_cells_layer)
     gdf_buffer = gpd.read_file(output_path, layer=buffer_layer)
 
@@ -780,7 +809,7 @@ def extract_grid_lines_in_buffer(
         return None
 
     # Dissolve buffer to a single geometry and take its boundary
-    buffer_geom = gdf_buffer.geometry.unary_union
+    buffer_geom = unary_union(gdf_buffer.geometry)
     buffer_boundary = buffer_geom.boundary
 
     def norm_point(pt):
@@ -854,65 +883,38 @@ def extract_grid_lines_in_buffer(
         print("  Warning: No internal lines intersect the buffer boundary!")
         return None
 
-    # Helper to pick a single Point from intersection geometry
-    def pick_intersection_point(edge: LineString, midpoint: Point):
-        inter = edge.intersection(buffer_boundary)
-        if inter.is_empty:
-            _, snapped = nearest_points(midpoint, buffer_boundary)
-            return snapped
-
-        if inter.geom_type == "Point":
-            return inter
-
-        if inter.geom_type == "MultiPoint":
-            points = list(inter.geoms)
-            return min(points, key=lambda p: p.distance(midpoint))
-
-        if inter.geom_type in ("LineString", "MultiLineString"):
-            _, snapped = nearest_points(midpoint, inter)
-            return snapped
-
-        if inter.geom_type == "GeometryCollection":
-            pts = [g for g in inter.geoms if g.geom_type == "Point"]
-            if pts:
-                return min(pts, key=lambda p: p.distance(midpoint))
-            _, snapped = nearest_points(midpoint, inter)
-            return snapped
-
-        _, snapped = nearest_points(midpoint, buffer_boundary)
-        return snapped
-
     points = []
     attrs = []
 
     for line_idx, edge in enumerate(internal_lines):
-        midpoint = edge.interpolate(0.5, normalized=True)
-        inter_point = pick_intersection_point(edge, midpoint)
+        midpoint = edge.centroid.buffer(0.1)
+        inter_points = _pick_intersection_point(edge, midpoint, buffer_boundary)
 
-        if not isinstance(inter_point, Point) or inter_point.is_empty:
+        if not all(isinstance(pt, Point) and not pt.is_empty for pt in inter_points):
             continue
 
-        coord_start = edge.coords[0]
-        coord_end = edge.coords[-1]
-        x1, y1 = coord_start[0], coord_start[1]
-        x2, y2 = coord_end[0], coord_end[1]
-        vx, vy = x2 - x1, y2 - y1
-        length = math.hypot(vx, vy)
-        if length == 0:
-            continue
+        for inter_point in inter_points:
+            coord_start = edge.coords[0]
+            coord_end = edge.coords[-1]
+            x1, y1 = coord_start[0], coord_start[1]
+            x2, y2 = coord_end[0], coord_end[1]
+            vx, vy = x2 - x1, y2 - y1
+            length = math.hypot(vx, vy)
+            if length == 0:
+                continue
 
-        dx = vx / length
-        dy = vy / length
+            dx = vx / length
+            dy = vy / length
 
-        points.append(inter_point)
-        attrs.append(
-            {
-                "line_id": line_idx,
-                "line_length": float(edge.length),
-                "dx": dx,
-                "dy": dy,
-            }
-        )
+            points.append(inter_point)
+            attrs.append(
+                {
+                    "line_id": line_idx,
+                    "line_length": float(edge.length),
+                    "dx": dx,
+                    "dy": dy,
+                }
+            )
 
     print(f"  Created {len(points)} points at grid/buffer intersections")
 
