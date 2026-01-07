@@ -5,9 +5,11 @@ from __future__ import annotations
 import math
 import os
 
+import geopandas as gpd
 from osgeo import ogr, osr
 from shapely.errors import GEOSException
 from shapely.geometry import Polygon
+from shapely.ops import linemerge
 
 from rue_lib.core.exceptions import GeometryError
 
@@ -429,3 +431,55 @@ def remove_vertices_by_angle(polygon: Polygon, min_angle_threshold: float = 175.
         # TypeError: Wrong input type
         # If creation fails, return original
         return polygon
+
+
+def merge_connected_lines(gpkg_path: str, layer_name: str) -> None:
+    """
+    Merge connected line segments in a GeoPackage layer.
+
+    Reads the specified layer, merges all connected line geometries using
+    linemerge, and writes the result back to the same layer. Properties that
+    are common across all input features are preserved.
+
+    Args:
+        gpkg_path: Path to the GeoPackage file
+        layer_name: Name of the layer containing line geometries to merge
+    """
+    roads = gpd.read_file(gpkg_path, layer=layer_name)
+    if roads.empty:
+        return
+
+    try:
+        merged_geom = linemerge(list(roads.geometry))
+
+        if merged_geom.geom_type == "MultiLineString":
+            geometries = list(merged_geom.geoms)
+        elif merged_geom.geom_type == "LineString":
+            geometries = [merged_geom]
+        else:
+            geometries = [geom for geom in merged_geom.geoms if geom.geom_type == "LineString"]
+
+        # Preserve properties that are common across all input features
+        common_properties = {}
+        if len(roads) > 0:
+            # Get non-geometry columns
+            property_columns = [col for col in roads.columns if col != "geometry"]
+
+            # For each property, check if all values are the same
+            for col in property_columns:
+                unique_values = roads[col].unique()
+                # If all features have the same value for this property, keep it
+                if len(unique_values) == 1:
+                    common_properties[col] = unique_values[0]
+
+        # Create GeoDataFrame with merged geometries and common properties
+        roads_merged = gpd.GeoDataFrame(geometry=geometries, crs=roads.crs)
+
+        # Add common properties to all merged features
+        for col, value in common_properties.items():
+            roads_merged[col] = value
+
+        roads_merged.to_file(gpkg_path, layer=layer_name, driver="GPKG")
+    except (ValueError, Exception) as e:
+        print(f"Warning: Could not merge lines in {layer_name}: {e}")
+        return

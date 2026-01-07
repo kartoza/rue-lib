@@ -6,13 +6,15 @@ from pathlib import Path
 
 import geopandas as gpd
 
+from rue_lib.core.geometry import merge_connected_lines
 from rue_lib.core.helpers import remove_layer_from_gpkg
 from rue_lib.geo import to_metric_crs
 from rue_lib.site.config import SiteConfig
 from rue_lib.site.financial import FinancialSite
 from rue_lib.site.io import read_roads, read_site, save_geojson
 from rue_lib.site.roads import buffer_roads
-from rue_lib.streets.operations import erase_layer
+from rue_lib.streets.operations import extract_by_expression
+from rue_lib.streets.runner_utils import subtract_layer
 
 
 def generate_parcels(cfg: SiteConfig) -> Path:
@@ -43,6 +45,8 @@ def generate_parcels(cfg: SiteConfig) -> Path:
     site = read_site(cfg.site_path)
     roads = read_roads(cfg.roads_path)
 
+    roads_layer_name = "roads"
+
     if site.crs and site.crs.is_projected:
         site_m = site
     else:
@@ -64,16 +68,34 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         cfg.road_arterial_width_m - cfg.road_local_width_m,
         cfg.road_secondary_width_m - cfg.road_local_width_m,
     )
+    extract_by_expression(
+        gpkg_path, roads_layer_name, "road_type = 'road_art'", gpkg_path, "02_arterial_roads"
+    )
+    extract_by_expression(
+        gpkg_path, roads_layer_name, "type = 'road_sec'", gpkg_path, "03_secondary_roads"
+    )
+
+    # Merge connected lines in both arterial and secondary roads before subtraction
+    merge_connected_lines(gpkg_path, "02_arterial_roads")
+    merge_connected_lines(gpkg_path, "03_secondary_roads")
 
     if not roads_buf_m.empty:
         roads_buf_m.to_file(gpkg_path, layer="roads_buffered", driver="GPKG")
-        erase_layer(
-            input_path=str(gpkg_path),
-            input_layer_name="site",
-            erase_path=str(gpkg_path),
-            erase_layer_name="roads_buffered",
-            output_path=str(gpkg_path),
+        subtract_layer(
+            input_gpkg=str(gpkg_path),
+            base_layer_name="site",
+            erase_layer_name="02_arterial_roads",
+            output_gpkg=str(gpkg_path),
             output_layer_name="parcels",
+            buffer_distance=(cfg.road_arterial_width_m - cfg.road_local_width_m) / 2,
+        )
+        subtract_layer(
+            input_gpkg=str(gpkg_path),
+            base_layer_name="parcels",
+            erase_layer_name="03_secondary_roads",
+            output_gpkg=str(gpkg_path),
+            output_layer_name="parcels",
+            buffer_distance=(cfg.road_secondary_width_m - cfg.road_local_width_m) / 2,
         )
     else:
         site_m.to_file(gpkg_path, layer="parcels", driver="GPKG")

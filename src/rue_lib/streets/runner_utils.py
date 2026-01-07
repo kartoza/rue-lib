@@ -1704,3 +1704,239 @@ def subtract_layer(
 
     print(f"  Created layer: {output_layer_name}")
     return output_layer_name
+
+
+def subtract_layer_per_polygon(
+    input_gpkg: str,
+    base_layer_name: str,
+    erase_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    buffer_distance: float = 0.0,
+    simplify: bool = False,
+) -> str:
+    """
+    Subtract layer per polygon, processing each base polygon individually.
+
+    For each polygon in the base layer:
+    1. Find edges that intersect with the erase geometry
+    2. Connect edges into linestrings where they share endpoints
+    3. Buffer the linestrings
+    4. Subtract the buffered lines from the polygon
+
+    This approach gives more precise control than bulk subtraction.
+
+    Args:
+        input_gpkg: Path to input GeoPackage containing both layers
+        base_layer_name: Name of the layer to subtract from
+        erase_layer_name: Name of the layer to subtract
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for the output layer
+        buffer_distance: Buffer distance to apply to extracted linestrings
+        simplify: Whether to simplify the buffered erase geometry
+
+    Returns:
+        Name of the output layer
+    """
+    print(f"\nProcessing per-polygon subtraction: {base_layer_name} - {erase_layer_name}")
+
+    gdf_base = gpd.read_file(input_gpkg, layer=base_layer_name)
+    gdf_erase = gpd.read_file(input_gpkg, layer=erase_layer_name)
+
+    if gdf_base.empty:
+        raise ValueError(f"Layer '{base_layer_name}' is empty")
+    if gdf_erase.empty:
+        print("  Erase layer is empty. Writing base layer unchanged...")
+        gdf_base.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
+
+    if gdf_erase.crs is not None and gdf_base.crs is not None and gdf_erase.crs != gdf_base.crs:
+        gdf_erase = gdf_erase.to_crs(gdf_base.crs)
+
+    gdf_base = gdf_base.copy()
+    gdf_erase = gdf_erase.copy()
+    gdf_base["geometry"] = gdf_base.geometry.apply(_fix_geom)
+    gdf_erase["geometry"] = gdf_erase.geometry.apply(_fix_geom)
+    gdf_base = gdf_base[gdf_base.geometry.notnull()].reset_index(drop=True)
+    gdf_erase = gdf_erase[gdf_erase.geometry.notnull()].reset_index(drop=True)
+
+    print(f"  Processing {len(gdf_base)} polygons from base layer...")
+
+    erase_union = unary_union(list(gdf_erase.geometry))
+    if buffer_distance > 0 and simplify:
+        simplify_tolerance = buffer_distance * 0.1
+        erase_union = erase_union.buffer(
+            buffer_distance * 2, cap_style=CAP_STYLE.round, join_style=JOIN_STYLE.round
+        )
+        erase_union = erase_union.simplify(simplify_tolerance, preserve_topology=True)
+
+    result_geometries = []
+
+    for idx, row in gdf_base.iterrows():
+        base_geom = row.geometry
+
+        if base_geom is None or base_geom.is_empty:
+            result_geometries.append(None)
+            continue
+
+        # Extract edges that intersect with erase_union
+        intersecting_edges = _extract_intersecting_edges(base_geom, erase_union)
+
+        if not intersecting_edges:
+            # No intersecting edges, keep original geometry
+            result_geometries.append(base_geom)
+            continue
+
+        # Connect edges into linestrings
+        connected_lines = _connect_edges(intersecting_edges)
+
+        if not connected_lines:
+            result_geometries.append(base_geom)
+            continue
+
+        # Buffer the connected linestrings
+        if buffer_distance > 0:
+            buffered_lines = [
+                line.buffer(
+                    buffer_distance,
+                    cap_style=CAP_STYLE.square,
+                    join_style=JOIN_STYLE.mitre,
+                )
+                for line in connected_lines
+            ]
+            subtract_geom = unary_union(buffered_lines)
+        else:
+            subtract_geom = unary_union(connected_lines)
+
+        try:
+            result_geom = base_geom.difference(subtract_geom)
+            result_geometries.append(result_geom)
+        except Exception as e:
+            print(f"  Warning: Failed to subtract from polygon {idx}: {e}")
+            result_geometries.append(base_geom)
+
+    out = gdf_base.copy()
+    out["geometry"] = result_geometries
+    out["geometry"] = out.geometry.apply(_fix_geom)
+    out = out[out.geometry.notnull()].reset_index(drop=True)
+
+    out = gpd.GeoDataFrame(out, geometry="geometry", crs=gdf_base.crs)
+    out.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+
+    print(f"  Created layer: {output_layer_name}")
+    return output_layer_name
+
+
+def _extract_intersecting_edges(geom, erase_union):
+    """Extract edges from a geometry that intersect with erase_union.
+
+    Returns:
+        List of edge: edge
+    """
+    edges = []
+
+    if geom.geom_type == "Polygon":
+        coords = list(geom.boundary.coords)
+        for i in range(len(coords) - 1):
+            edge = LineString([coords[i], coords[i + 1]])
+            if edge.centroid.intersects(erase_union):
+                edges.append(edge)
+
+    elif geom.geom_type == "MultiPolygon":
+        for poly in geom.geoms:
+            if poly.is_empty:
+                continue
+            coords = list(poly.boundary.coords)
+            for i in range(len(coords) - 1):
+                edge = LineString([coords[i], coords[i + 1]])
+                if edge.centroid.intersects(erase_union):
+                    edges.append(edge)
+    return edges
+
+
+def _connect_edges(edges):
+    """Connect edges that share endpoints into continuous linestrings."""
+    if not edges:
+        return []
+
+    # Build adjacency map
+    endpoint_map = {}
+    for edge in edges:
+        start = edge.coords[0]
+        end = edge.coords[-1]
+
+        if start not in endpoint_map:
+            endpoint_map[start] = []
+        if end not in endpoint_map:
+            endpoint_map[end] = []
+
+        endpoint_map[start].append(edge)
+        endpoint_map[end].append(edge)
+
+    # Find connected components
+    visited = set()
+    connected_lines = []
+
+    for edge in edges:
+        if id(edge) in visited:
+            continue
+
+        # Start a new connected component
+        component_coords = list(edge.coords)
+        visited.add(id(edge))
+
+        # Try to extend forward
+        current_end = component_coords[-1]
+        while True:
+            found_next = False
+            if current_end in endpoint_map:
+                for next_edge in endpoint_map[current_end]:
+                    if id(next_edge) not in visited:
+                        visited.add(id(next_edge))
+                        next_coords = list(next_edge.coords)
+
+                        # Check which end connects
+                        if next_coords[0] == current_end:
+                            component_coords.extend(next_coords[1:])
+                            current_end = next_coords[-1]
+                        elif next_coords[-1] == current_end:
+                            component_coords.extend(reversed(next_coords[:-1]))
+                            current_end = next_coords[0]
+                        else:
+                            continue
+
+                        found_next = True
+                        break
+            if not found_next:
+                break
+
+        # Try to extend backward
+        current_start = component_coords[0]
+        while True:
+            found_prev = False
+            if current_start in endpoint_map:
+                for prev_edge in endpoint_map[current_start]:
+                    if id(prev_edge) not in visited:
+                        visited.add(id(prev_edge))
+                        prev_coords = list(prev_edge.coords)
+
+                        # Check which end connects
+                        if prev_coords[-1] == current_start:
+                            component_coords = prev_coords[:-1] + component_coords
+                            current_start = prev_coords[0]
+                        elif prev_coords[0] == current_start:
+                            component_coords = list(reversed(prev_coords))[:-1] + component_coords
+                            current_start = prev_coords[-1]
+                        else:
+                            continue
+
+                        found_prev = True
+                        break
+            if not found_prev:
+                break
+
+        # Create linestring from connected component
+        if len(component_coords) >= 2:
+            connected_lines.append(LineString(component_coords))
+
+    return connected_lines

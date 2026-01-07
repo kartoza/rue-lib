@@ -131,16 +131,32 @@ def extract_cold_boundary_lines_from_vertices(
 
         coords = [coord for _, coord in vertices_with_position]
 
-        # check if it's closing by comparing last and first points with local roads layer
         is_closing = False
         for _, road_row in gdf_local_roads.iterrows():
             road_geom = road_row.geometry
-            line = LineString([coords[0], coords[-1]])
             if road_geom is None or road_geom.is_empty:
                 continue
-            if line.centroid.buffer(1).intersects(road_geom):
-                is_closing = True
-                break
+            line = LineString([coords[0], coords[-1]])
+            line_length = line.length
+            line_buffered = line.buffer(1.0)
+            if line_buffered.intersects(road_geom):
+                # Check if the intersection is significant (at least 70% of line length)
+                intersection = line_buffered.intersection(road_geom)
+                if not intersection.is_empty:
+                    # Get the length of the intersection
+                    if hasattr(intersection, "length"):
+                        intersection_length = intersection.length
+                    else:
+                        # For non-linear geometries (like polygons), use the line's intersection
+                        line_intersection = line.intersection(road_geom.buffer(1.0))
+                        intersection_length = (
+                            line_intersection.length if hasattr(line_intersection, "length") else 0
+                        )
+
+                    # Check if intersection is at least 70% of original line length
+                    if intersection_length >= 0.7 * line_length:
+                        is_closing = True
+                        break
 
         if is_closing:
             if coords[0] != coords[-1]:

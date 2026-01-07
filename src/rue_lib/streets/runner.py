@@ -4,7 +4,12 @@ from pathlib import Path
 import geopandas as gpd
 from osgeo import gdal, ogr
 
-from rue_lib.core.geometry import buffer_layer, get_utm_zone_from_layer, reproject_layer
+from rue_lib.core.geometry import (
+    buffer_layer,
+    get_utm_zone_from_layer,
+    merge_connected_lines,
+    reproject_layer,
+)
 from rue_lib.streets.blocks import generate_on_grid_blocks
 from rue_lib.streets.cold_boundaries_utils import (
     extract_cold_boundary_lines_from_vertices,
@@ -31,6 +36,7 @@ from .cell import (
     fix_grid_cells_with_perpendicular_lines,
     merge_small_cells_with_neighbors,
     remove_dead_end_cells,
+    remove_small_cells,
 )
 from .config import StreetConfig
 from .financial import FinancialStreet
@@ -100,6 +106,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
     extract_by_expression(
         output_path, roads_layer_name, "road_type = 'road_loc'", output_path, "05_local_roads"
     )
+
+    print("Step 5b: Merging connected lines in secondary roads...")
+    merge_connected_lines(output_path, "05_secondary_roads")
+    merge_connected_lines(output_path, "04_arterial_roads")
 
     preferred_depth_on_grid_arterial = (
         cfg.part_art_d
@@ -249,8 +259,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
             target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
             area_threshold_ratio=0.5,
         )
+        print("Step 14g: Removing small cells")
+        cleaned_cells_layer = remove_small_cells(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.5,
+        )
     else:
-        # Fall back to the original off-grid cells if no perpendicular lines were generated
         print("  No fixed cells available, using original off-grid cells")
         cleaned_cells_layer = remove_dead_end_cells(
             output_gpkg, "14_off_grid_cells", "13a_dead_end_lines_buffered"
@@ -261,6 +277,13 @@ def generate_streets(cfg: StreetConfig) -> Path:
             cleaned_cells_layer,
             target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
             area_threshold_ratio=0.5,
+        )
+        print("Step 14g: Removing small cells")
+        cleaned_cells_layer = remove_small_cells(
+            output_gpkg,
+            cleaned_cells_layer,
+            target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
+            area_threshold_ratio=0.15,
         )
 
     print("Step 15: Generating on-grid cells")
@@ -452,7 +475,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "04_arterial_roads",
         output_gpkg,
         local_roads_layer_name,
-        cfg.road_arterial_width_m / 2.0,
+        (cfg.road_arterial_width_m / 2.0) + 0.01,
     )
 
     print("Step 17: Merging all grid layers with grid_type information...")
