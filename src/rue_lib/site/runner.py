@@ -69,7 +69,7 @@ def generate_parcels(cfg: SiteConfig) -> Path:
         cfg.road_secondary_width_m - cfg.road_local_width_m,
     )
     extract_by_expression(
-        gpkg_path, roads_layer_name, "road_type = 'road_art'", gpkg_path, "02_arterial_roads"
+        gpkg_path, roads_layer_name, "type = 'road_art'", gpkg_path, "02_arterial_roads"
     )
     extract_by_expression(
         gpkg_path, roads_layer_name, "type = 'road_sec'", gpkg_path, "03_secondary_roads"
