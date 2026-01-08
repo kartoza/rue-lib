@@ -51,7 +51,21 @@ def split_polygon_by_line_shapely(
     if not result_polys:
         result_polys.append(poly)
 
-    return result_polys
+    buffered_results = []
+    for part in result_polys:
+        buffered_part = part.buffer(buffer_width)
+        restored_part = buffered_part.intersection(poly)
+        if isinstance(restored_part, Polygon):
+            buffered_results.append(restored_part)
+        elif isinstance(restored_part, MultiPolygon):
+            largest = max(restored_part.geoms, key=lambda p: p.area)
+            buffered_results.append(largest)
+        elif not restored_part.is_empty:
+            buffered_results.append(part)
+        else:
+            buffered_results.append(part)
+
+    return buffered_results if buffered_results else result_polys
 
 
 def line_end_intersects_buffer(line: ogr.Geometry, buffer_geom: ogr.Geometry) -> bool:
@@ -139,6 +153,7 @@ def find_concave_points(
                 "x": geom.x,
                 "y": geom.y,
                 "vertex_id": vertex_id,
+                "angle_deg": row.get("angle_deg", 0),
             }
         )
     for block_id in points_by_block:
@@ -152,29 +167,8 @@ def find_concave_points(
         if num_points < 3:
             continue
 
-        for i, current_point in enumerate(points):
-            prev_point = points[(i - 1) % num_points]
-            next_point = points[(i + 1) % num_points]
-            v1_x = current_point["x"] - prev_point["x"]
-            v1_y = current_point["y"] - prev_point["y"]
-
-            v2_x = next_point["x"] - current_point["x"]
-            v2_y = next_point["y"] - current_point["y"]
-
-            # Calculate distances to previous and next points
-            dist_to_prev = math.sqrt(v1_x * v1_x + v1_y * v1_y)
-            dist_to_next = math.sqrt(v2_x * v2_x + v2_y * v2_y)
-
-            # Skip if either distance is too small
-            if dist_to_prev < min_distance or dist_to_next < min_distance:
-                skipped_too_close += 1
-                continue
-
-            dot = v1_x * v2_x + v1_y * v2_y
-            cross = v1_x * v2_y - v1_y * v2_x
-            angle_rad = math.atan2(cross, dot)
-            angle_deg = math.degrees(angle_rad)
-
+        for _i, current_point in enumerate(points):
+            angle_deg = current_point["angle_deg"]
             if angle_deg < -80:
                 concave_points.append(
                     {
@@ -372,6 +366,10 @@ def subdivide_blocks_by_concave_points(
                 "x": geom.x,
                 "y": geom.y,
                 "vertex_id": vertex_id,
+                "next_x": row.get("next_x", 0),
+                "next_y": row.get("next_y", 0),
+                "prev_x": row.get("prev_x", 0),
+                "prev_y": row.get("prev_y", 0),
             }
         )
 
@@ -393,7 +391,7 @@ def subdivide_blocks_by_concave_points(
 
         block_geom = grid_geometries[block_id]
 
-        for i, point in enumerate(boundary_points):
+        for _i, point in enumerate(boundary_points):
             point_x = point["x"]
             point_y = point["y"]
 
@@ -410,17 +408,10 @@ def subdivide_blocks_by_concave_points(
             if not is_concave:
                 continue
 
-            num_points = len(boundary_points)
-            prev_idx = (i - 1) % num_points
-            next_idx = (i + 1) % num_points
-
-            prev_point = boundary_points[prev_idx]
-            next_point = boundary_points[next_idx]
-
-            prev_x = prev_point["x"]
-            prev_y = prev_point["y"]
-            next_x = next_point["x"]
-            next_y = next_point["y"]
+            prev_x = point.get("next_x", 0)
+            prev_y = point.get("next_y", 0)
+            next_x = point.get("prev_x", 0)
+            next_y = point.get("prev_y", 0)
 
             dir1_x = prev_x - point_x
             dir1_y = prev_y - point_y
@@ -593,7 +584,7 @@ def subdivide_blocks_by_concave_points(
                 working_blocks[key] = poly
                 continue
 
-            parts = split_polygon_by_line_shapely(poly, line_geom)
+            parts = split_polygon_by_line_shapely(poly, line_geom, buffer_width=0.1)
 
             for part in parts:
                 new_local_id = (
@@ -628,6 +619,7 @@ def subdivide_blocks_by_concave_points(
                 "id": block_id,
                 "orig_block_id": orig_block_id,
                 "geometry": poly,
+                "area": poly.area,
                 "is_concave": is_concave,
                 "concave_x": concave_x_val,
                 "concave_y": concave_y_val,

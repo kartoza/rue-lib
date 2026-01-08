@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import geopandas as gpd
@@ -395,6 +396,8 @@ def extract_road_adjacent_vertices(
         else f"{output_layer_name}_lines"
     )
 
+    block_boundaries = {}
+
     for block_idx, grid_row in gdf_grid.iterrows():
         block_id = grid_row.get("id", block_idx)
         grid_geom = grid_row.geometry
@@ -412,6 +415,10 @@ def extract_road_adjacent_vertices(
             continue
         for line in lines:
             coords = list(line.coords)
+
+            # Store all boundary coordinates for this block
+            block_boundaries[block_id] = grid_geom
+
             for vertex_id, (x, y) in enumerate(coords):
                 point = Point(x, y)
                 point_buffer = point.buffer(0.1)
@@ -448,16 +455,13 @@ def extract_road_adjacent_vertices(
         priority_road_type = get_priority_road_type(road_types)
         verts_sorted = sorted(verts, key=lambda v: v["vertex_id"])
 
-        # Create line segments one at a time between consecutive vertices
         for i in range(len(verts_sorted) - 1):
             v1 = verts_sorted[i]
             v2 = verts_sorted[i + 1]
 
-            # Only create line if vertices are consecutive
             if v2["vertex_id"] == v1["vertex_id"] + 1:
                 coords = [(v1["x"], v1["y"]), (v2["x"], v2["y"])]
                 line = LineString(coords)
-                # Check if the centroid of the line intersects with roads
                 line_centroid = line.centroid.buffer(1)
                 centroid_intersects_road = any(
                     line_centroid.intersects(road_row.geometry)
@@ -473,7 +477,74 @@ def extract_road_adjacent_vertices(
                         }
                     )
 
-        for v in verts:
+        boundary_geom = block_boundaries.get(block_id)
+        if boundary_geom is None:
+            continue
+
+        boundary = boundary_geom.boundary
+        if boundary is None or boundary.is_empty:
+            continue
+
+        if boundary.geom_type == "LineString":
+            boundary_coords = list(boundary.coords)
+        elif boundary.geom_type == "MultiLineString":
+            boundary_coords = list(boundary.geoms[0].coords)
+        else:
+            continue
+
+        num_boundary_verts = len(boundary_coords)
+
+        for v in verts_sorted:
+            vertex_id = v["vertex_id"]
+            if num_boundary_verts >= 3 and vertex_id < num_boundary_verts:
+                min_distance = 5.0  # meters
+                current_x, current_y = boundary_coords[vertex_id]
+                prev_vertex_id = (vertex_id - 1) % num_boundary_verts
+                steps = 0
+                while steps < num_boundary_verts - 2:
+                    prev_x, prev_y = boundary_coords[prev_vertex_id]
+                    dist_to_prev = math.sqrt((current_x - prev_x) ** 2 + (current_y - prev_y) ** 2)
+                    if dist_to_prev >= min_distance:
+                        break
+                    prev_vertex_id = (prev_vertex_id - 1) % num_boundary_verts
+                    steps += 1
+
+                next_vertex_id = (vertex_id + 1) % num_boundary_verts
+                steps = 0
+                while steps < num_boundary_verts - 2:
+                    next_x, next_y = boundary_coords[next_vertex_id]
+                    dist_to_next = math.sqrt((current_x - next_x) ** 2 + (current_y - next_y) ** 2)
+                    if dist_to_next >= min_distance:
+                        break
+                    next_vertex_id = (next_vertex_id + 1) % num_boundary_verts
+                    steps += 1
+
+                prev_x, prev_y = boundary_coords[prev_vertex_id]
+                next_x, next_y = boundary_coords[next_vertex_id]
+
+                cross_line = LineString([(prev_x, prev_y), (next_x, next_y)])
+                cross_line_centroid = cross_line.centroid.buffer(0.1)
+                is_interior = False
+                if cross_line_centroid.intersects(boundary_geom):
+                    is_interior = True
+
+                v1_x = current_x - prev_x
+                v1_y = current_y - prev_y
+
+                v2_x = next_x - current_x
+                v2_y = next_y - current_y
+
+                dot = v1_x * v2_x + v1_y * v2_y
+                cross = v1_x * v2_y - v1_y * v2_x
+                angle_rad = math.atan2(cross, dot)
+                angle_deg = math.degrees(angle_rad)
+                if is_interior:
+                    angle_deg = abs(angle_deg)
+                else:
+                    angle_deg = -abs(angle_deg)
+            else:
+                angle_deg = 0.0
+
             points_to_write.append(
                 {
                     "geometry": Point(v["x"], v["y"]),
@@ -483,23 +554,23 @@ def extract_road_adjacent_vertices(
                     "orig_id": block_id,
                     "road_type": priority_road_type,
                     "line_id": block_id,
-                    "angle_deg": 0.0,
+                    "angle_deg": angle_deg,
+                    "next_x": next_x,
+                    "next_y": next_y,
+                    "prev_x": prev_x,
+                    "prev_y": prev_y,
                 }
             )
 
-    # Write lines layer
     if lines_to_write:
         gdf_lines = gpd.GeoDataFrame(lines_to_write, geometry="geometry", crs=gdf_grid.crs)
     else:
-        # Create empty layer with proper schema
         gdf_lines = gpd.GeoDataFrame([], geometry=[], crs=gdf_grid.crs)
     gdf_lines.to_file(output_gpkg, layer=lines_layer_name, driver="GPKG")
 
-    # Write points layer
     if points_to_write:
         gdf_points = gpd.GeoDataFrame(points_to_write, geometry="geometry", crs=gdf_grid.crs)
     else:
-        # Create empty layer with proper schema
         gdf_points = gpd.GeoDataFrame([], geometry=[], crs=gdf_grid.crs)
     gdf_points.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
