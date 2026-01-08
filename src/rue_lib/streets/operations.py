@@ -577,11 +577,9 @@ def _merge_small_cells_with_neighbors(cells, min_area_threshold):
     if not cells or min_area_threshold <= 0:
         return cells
 
-    # Create a working copy of cells list
     working_cells = list(cells)
     merged_something = True
 
-    # Keep merging until no more small cells can be merged
     while merged_something:
         merged_something = False
 

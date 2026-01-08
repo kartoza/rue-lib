@@ -6,9 +6,7 @@ from osgeo import ogr
 from rue_lib.streets.config import StreetConfig
 from rue_lib.streets.operations import (
     break_multipart_features,
-    cleanup_grid_blocks,
     clip_layer,
-    create_grid_from_on_grid,
     erase_layer,
 )
 
@@ -397,51 +395,6 @@ def generate_on_grid_blocks(output_path: Path, site_layer_name: str, cfg: Street
         "12_secondary_setback_final",
         output_path,
         "12_secondary_setback_final",
-    )
-
-    print("Create grid from on-grid arterial setback...")
-    create_grid_from_on_grid(
-        output_path,
-        "11_arterial_setback_final",
-        "04_arterial_roads",
-        cfg.off_grid_partitions_preferred_width,
-        output_path,
-        "11a_arterial_setback_grid",
-        road_buffer_distance=cfg.road_arterial_width_m,
-    )
-
-    print("Clean up grid blocks...")
-    cleanup_grid_blocks(
-        output_path,
-        "11a_arterial_setback_grid",
-        output_path,
-        "11_arterial_setback_grid_cleaned",
-        cfg.on_grid_partition_depth_arterial_roads * cfg.off_grid_partitions_preferred_width * 0.5,
-    )
-
-    print("Create grid from on-grid secondary setback...")
-    create_grid_from_on_grid(
-        output_path,
-        "12_secondary_setback_final",
-        "05_secondary_roads",
-        cfg.off_grid_partitions_preferred_width,
-        output_path,
-        "12a_secondary_setback_grid",
-        intersected_setbacks_layer_name="10_intersected_setbacks",
-        road_buffer_distance=cfg.road_secondary_width_m,
-    )
-
-    print("Clean up grid blocks...")
-    cleanup_grid_blocks(
-        output_path,
-        "12a_secondary_setback_grid",
-        output_path,
-        "12_secondary_setback_grid_cleaned",
-        (
-            cfg.on_grid_partition_depth_secondary_roads
-            * cfg.off_grid_partitions_preferred_width
-            * 0.5
-        ),
     )
 
     return output_path
