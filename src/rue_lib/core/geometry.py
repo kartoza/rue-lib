@@ -307,8 +307,7 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
             wkb_data = bytes(wkb_data)
         shapely_geom = shapely_wkb.loads(wkb_data)
 
-        # Buffer with sharp edges: join_style=2 (mitre), cap_style=2 (square)
-        buffered_shapely = shapely_geom.buffer(distance, join_style=2, cap_style=2)
+        buffered_shapely = shapely_geom.buffer(distance, join_style="mitre", cap_style="square")
 
         # Convert back to OGR
         buffered = ogr.CreateGeometryFromWkb(buffered_shapely.wkb)

@@ -9,6 +9,8 @@ from shapely.errors import TopologicalError
 from shapely.geometry import CAP_STYLE, JOIN_STYLE, MultiLineString
 from shapely.ops import split
 
+from rue_lib.core.geometry_sampling import extend_line
+
 try:
     # Shapely 2.x
     from shapely import make_valid as _make_valid
@@ -20,6 +22,10 @@ from rue_lib.core.geometry import buffer_layer
 from .operations import (
     clip_layer,
 )
+
+
+def segments(curve):
+    return list(map(LineString, zip(curve.coords[:-1], curve.coords[1:])))
 
 
 def merge_setback_layers(
@@ -1309,6 +1315,8 @@ def create_perpendicular_lines_from_guide_points(
     site_boundary_lines_layer: str,
     site_polygon_layer: str,
     guide_points_layer: str,
+    setback_layer: str,
+    intersected_setbacks_layer: str,
     line_length: float,
     output_layer_name: str = "13_site_boundary_perp_from_points",
 ) -> str | None:
@@ -1342,6 +1350,8 @@ def create_perpendicular_lines_from_guide_points(
     gdf_boundary = gpd.read_file(output_path, layer=site_boundary_lines_layer)
     gdf_site = gpd.read_file(output_path, layer=site_polygon_layer)
     gdf_points = gpd.read_file(output_path, layer=guide_points_layer)
+    gdf_setbacks = gpd.read_file(output_path, layer=setback_layer)
+    gdf_intersected_setbacks = gpd.read_file(output_path, layer=intersected_setbacks_layer)
 
     print(f"  Loaded {len(gdf_boundary)} boundary line(s)")
     print(f"  Loaded {len(gdf_site)} site polygon feature(s)")
@@ -1474,29 +1484,83 @@ def create_perpendicular_lines_from_guide_points(
         if not touching_segments:
             continue
 
-        # Corner: create one perpendicular for each touching segment
         if pt_type == "corner":
-            used = 0
+            corner_lines = []
             for _idx, seg in enumerate(touching_segments):
                 line = perpendicular_line_from_segment_at_point(seg, pt)
                 if line is None or line.length == 0:
                     continue
-                lines.append(line)
+                corner_lines.append(line)
+
+            if not corner_lines:
+                seg = touching_segments[0]
+                line = perpendicular_line_from_segment_at_point(seg, pt)
+                if line is not None and line.length > 0:
+                    corner_lines.append(line)
+
+            if len(corner_lines) == 2:
+                for setback in gdf_setbacks.itertuples():
+                    setback_geom = setback.geometry
+                    if setback_geom is None or setback_geom.is_empty:
+                        continue
+                    if not setback_geom.intersects(pt.buffer(0.1)):
+                        continue
+
+                    try:
+                        all_parts = []
+                        parts = split(setback_geom, corner_lines[0])
+                        for part in parts.geoms:
+                            remaining_parts = split(part, corner_lines[1])
+                            for subpart in remaining_parts.geoms:
+                                all_parts.append(subpart)
+
+                        if not all_parts:
+                            continue
+
+                        corner_part = sorted(all_parts, key=lambda p: p.centroid.distance(pt))[0]
+
+                        for intersected in gdf_intersected_setbacks.itertuples():
+                            intersected_geoms = intersected.geometry
+                            if intersected_geoms.geom_type == "MultiPolygon":
+                                geoms_to_check = intersected_geoms.geoms
+                            else:
+                                geoms_to_check = [intersected_geoms]
+
+                            for intersected_geom in geoms_to_check:
+                                if intersected_geom is None or intersected_geom.is_empty:
+                                    continue
+                                if not corner_part.intersects(intersected_geom):
+                                    continue
+                                if intersected_geom.area > corner_part.area:
+                                    intersecting_lines = []
+                                    intersected_geom_lines = intersected_geom.boundary
+
+                                    if intersected_geom_lines.geom_type == "MultiLineString":
+                                        all_segments = []
+                                        for intersected_geom_line in intersected_geom_lines.geoms:
+                                            all_segments.extend(segments(intersected_geom_line))
+                                    else:
+                                        all_segments = segments(intersected_geom_lines)
+
+                                    for intersected_geom_line in all_segments:
+                                        if intersected_geom_line.intersects(pt.buffer(0.1)):
+                                            extended = extend_line(
+                                                intersected_geom_line, line_length * 0.25
+                                            )
+                                            intersecting_lines.append(extended)
+                                    if len(intersecting_lines) == 2:
+                                        corner_lines = intersecting_lines
+                                        break
+                    except Exception as e:
+                        print(f"  Warning: Failed to process setback for corner point {idx}: {e}")
+                        continue
+
+            for corner_line in corner_lines:
+                lines.append(corner_line)
                 rec = row.drop(labels="geometry").to_dict()
                 rec["source_point_index"] = idx
                 rec["source_point_type"] = pt_type
                 records.append(rec)
-                used += 1
-            if used == 0:
-                # Fallback: at least try with the closest segment
-                seg = touching_segments[0]
-                line = perpendicular_line_from_segment_at_point(seg, pt)
-                if line is not None and line.length > 0:
-                    lines.append(line)
-                    rec = row.drop(labels="geometry").to_dict()
-                    rec["source_point_index"] = idx
-                    rec["source_point_type"] = pt_type
-                    records.append(rec)
         else:
             # Non-corner: use only the closest touching segment
             closest_seg = None

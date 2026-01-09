@@ -372,7 +372,7 @@ def extract_road_adjacent_vertices(
     """
     Extract vertices from erased cold grid boundary that intersect with the roads buffer.
 
-    Writes both:
+    Writes three layers:
     - A points layer containing the road-adjacent vertices
     - A lines layer containing the boundary lines that touch the roads buffer
 
@@ -395,7 +395,6 @@ def extract_road_adjacent_vertices(
         if "points" in output_layer_name
         else f"{output_layer_name}_lines"
     )
-
     block_boundaries = {}
 
     for block_idx, grid_row in gdf_grid.iterrows():
@@ -523,10 +522,17 @@ def extract_road_adjacent_vertices(
                 next_x, next_y = boundary_coords[next_vertex_id]
 
                 cross_line = LineString([(prev_x, prev_y), (next_x, next_y)])
-                cross_line_centroid = cross_line.centroid.buffer(0.1)
+
                 is_interior = False
-                if cross_line_centroid.intersects(boundary_geom):
-                    is_interior = True
+                line_length = cross_line.length
+                if line_length > 0:
+                    check_fractions = [0.15, 0.5, 0.85]
+                    for fraction in check_fractions:
+                        point_along_line = cross_line.interpolate(fraction, normalized=True)
+                        point_buffer = point_along_line.buffer(0.1)
+                        if point_buffer.intersects(boundary_geom):
+                            is_interior = True
+                            break
 
                 v1_x = current_x - prev_x
                 v1_y = current_y - prev_y
@@ -577,6 +583,6 @@ def extract_road_adjacent_vertices(
     total_vertices = len(points_to_write)
     total_lines = len(lines_to_write)
     print(f"  Extracted {total_vertices} vertices from road-adjacent boundaries")
-    print(f"  Created lines layer: {lines_layer_name} ({total_lines} features)")
     print(f"  Created points layer: {output_layer_name}")
+    print(f"  Created lines layer: {lines_layer_name} ({total_lines} features)")
     return output_layer_name, lines_layer_name

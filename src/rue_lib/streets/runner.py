@@ -300,6 +300,14 @@ def generate_streets(cfg: StreetConfig) -> Path:
         min_line_length_threshold=preferred_width_off_cluster_grid,
     )
 
+    print("Merge arterial and secondary setbacks with overlaps resolved...")
+    merge_layers_without_overlaps(
+        output_path,
+        ["10a_arterial_setback_clipped", "10b_secondary_setback_clipped"],
+        output_path,
+        "10_setback_clipped_merged",
+    )
+
     print("Step 15b: Creating perpendicular lines from guide points...")
     site_boundary_perp_from_points = "15b_site_boundary_perp_from_points"
     _guide_perp_layer = create_perpendicular_lines_from_guide_points(
@@ -307,16 +315,10 @@ def generate_streets(cfg: StreetConfig) -> Path:
         "13_site_boundary_lines",
         "09_site_minus_all_setbacks",
         site_boundary_points,
+        setback_layer="10_setback_clipped_merged",
+        intersected_setbacks_layer="10_intersected_setbacks",
         line_length=max(preferred_depth_on_grid_secondary, preferred_depth_on_grid_arterial) * 1.05,
         output_layer_name=site_boundary_perp_from_points,
-    )
-
-    print("Merge arterial and secondary setbacks with overlaps resolved...")
-    merge_layers_without_overlaps(
-        output_path,
-        ["10a_arterial_setback_clipped", "10b_secondary_setback_clipped"],
-        output_path,
-        "10_setback_clipped_merged",
     )
 
     print("Step 16: Creating on-grid cells from merged setbacks and perpendiculars...")
