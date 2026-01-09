@@ -13,7 +13,7 @@ def extend_line(line: LineString, extension_m: float) -> LineString:
     """Extend a LineString by a given distance at both ends.
 
     Args:
-        line: The LineString to extend
+        line: The LineString to extend (supports 2D and 3D coordinates)
         extension_m: Distance in meters to extend at each end
 
     Returns:
@@ -24,27 +24,51 @@ def extend_line(line: LineString, extension_m: float) -> LineString:
 
     coords = list(line.coords)
 
+    has_z = line.has_z
+
     # Extend start
-    x1, y1 = coords[0]
-    x2, y2 = coords[1]
+    if has_z:
+        x1, y1, z1 = coords[0][0], coords[0][1], coords[0][2]
+        x2, y2, z2 = coords[1][0], coords[1][1], coords[1][2]
+    else:
+        x1, y1 = coords[0][0], coords[0][1]
+        x2, y2 = coords[1][0], coords[1][1]
+
     dx, dy = x2 - x1, y2 - y1
     length = (dx**2 + dy**2) ** 0.5
     if length > 0:
         dx, dy = dx / length, dy / length
-        new_start = (x1 - dx * extension_m, y1 - dy * extension_m)
+        if has_z:
+            new_start = (x1 - dx * extension_m, y1 - dy * extension_m, z1)
+        else:
+            new_start = (x1 - dx * extension_m, y1 - dy * extension_m)
     else:
-        new_start = (x1, y1)
+        if has_z:
+            new_start = (x1, y1, z1)
+        else:
+            new_start = (x1, y1)
 
     # Extend end
-    x1, y1 = coords[-2]
-    x2, y2 = coords[-1]
+    if has_z:
+        x1, y1, z1 = coords[-2][0], coords[-2][1], coords[-2][2]
+        x2, y2, z2 = coords[-1][0], coords[-1][1], coords[-1][2]
+    else:
+        x1, y1 = coords[-2][0], coords[-2][1]
+        x2, y2 = coords[-1][0], coords[-1][1]
+
     dx, dy = x2 - x1, y2 - y1
     length = (dx**2 + dy**2) ** 0.5
     if length > 0:
         dx, dy = dx / length, dy / length
-        new_end = (x2 + dx * extension_m, y2 + dy * extension_m)
+        if has_z:
+            new_end = (x2 + dx * extension_m, y2 + dy * extension_m, z2)
+        else:
+            new_end = (x2 + dx * extension_m, y2 + dy * extension_m)
     else:
-        new_end = (x2, y2)
+        if has_z:
+            new_end = (x2, y2, z2)
+        else:
+            new_end = (x2, y2)
 
     return LineString([new_start] + coords + [new_end])
 
