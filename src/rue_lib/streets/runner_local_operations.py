@@ -280,6 +280,7 @@ def create_dead_end_lines(
 def build_base_polygons(
     output_gpkg: Path,
     site_minus_roads_layer: str,
+    roads_buffer_layer: str,
     local_roads_layer: str,
     output_layer_name: str = "09_base_polygons",
     line_extension: float = 2.0,
@@ -290,6 +291,8 @@ def build_base_polygons(
     """
     gdf_site_minus = gpd.read_file(output_gpkg, layer=site_minus_roads_layer)
     gdf_local_lines = gpd.read_file(output_gpkg, layer=local_roads_layer)
+    gdf_roads_buffer = gpd.read_file(output_gpkg, layer=roads_buffer_layer)
+    roads_buffer = unary_union(gdf_roads_buffer.geometry)
 
     line_geoms = []
     base_crs = gdf_site_minus.crs or gdf_local_lines.crs
@@ -309,7 +312,14 @@ def build_base_polygons(
         if geom is None or geom.is_empty:
             continue
         if geom.geom_type == "LineString":
-            line_geoms.append(extend_line(geom, line_extension))
+            should_extend = False
+            geom_start = geom.interpolate(0)
+            geom_end = geom.interpolate(geom.length)
+            if geom_start.buffer(0.1).intersects(roads_buffer) or geom_end.buffer(0.1).intersects(
+                roads_buffer
+            ):
+                should_extend = True
+            line_geoms.append(extend_line(geom, line_extension) if should_extend else geom)
         elif geom.geom_type == "MultiLineString":
             line_geoms.extend([extend_line(g, line_extension) for g in geom.geoms])
 
