@@ -7,6 +7,7 @@ from osgeo import ogr
 
 from rue_lib.core.geometry import get_utm_zone_from_layer, reproject_layer
 from rue_lib.site.roads import buffer_roads
+from rue_lib.streets.cold_boundaries_utils import extract_cold_boundary_lines_from_vertices
 from rue_lib.streets.financial import FinancialStreet
 from rue_lib.streets.grids import generate_local_streets
 from rue_lib.streets.runner_utils import polygons_to_lines_graph_based, subtract_layer
@@ -119,9 +120,10 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
     build_base_polygons(
         output_gpkg,
         site_minus_roads_layer=site_layer_name,
+        roads_buffer_layer=input_roads_buffer_layer_name,
         local_roads_layer=local_roads_layer,
         output_layer_name=base_polygons_layer,
-        line_extension=cfg.road_locals_width_m,
+        line_extension=cfg.road_locals_width_m / 2.0 + 0.01,
     )
 
     # Step 8: Classify blocks by road type
@@ -202,15 +204,27 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
         cold_boundary_layer,
     )
 
+    cold_boundary_lines_layer = None
+    local_roads_vertices_layer = "11_local_roads_vertices"
+    if ogr.Open(str(output_gpkg)).GetLayerByName(cold_boundary_layer):
+        cold_boundary_lines_layer = extract_cold_boundary_lines_from_vertices(
+            output_gpkg,
+            cold_boundary_layer,
+            local_roads_vertices_layer,
+            local_roads_layer_name,
+            output_layer_name="12b_cold_boundary_lines",
+        )
+
     cold_boundary_subtracted_layer = "13_cold_boundary_subtracted"
-    if ogr.Open(str(output_gpkg)).GetLayerByName(local_roads_layer_name):
+    if cold_boundary_lines_layer:
         subtract_layer(
             output_gpkg,
             cold_boundary_layer,
-            local_roads_layer_name,
+            cold_boundary_lines_layer,
             output_gpkg,
             cold_boundary_subtracted_layer,
             (cfg.road_locals_width_m / 2.0) + 0.001,
+            simplify=True,
         )
         cold_boundary_layer = cold_boundary_subtracted_layer
 
