@@ -6,7 +6,9 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
+import geopandas as gpd
 from osgeo import ogr
+from shapely.validation import make_valid
 
 from rue_lib.cluster.config import ClusterConfig
 from rue_lib.core.geometry import get_utm_zone_from_layer, reproject_layer
@@ -22,6 +24,47 @@ from ..core.roads import extract_roads_buffer
 from .helpers import assign_cluster_type
 from .runner_cold import generate_cold
 from .runner_warm import generate_warm
+
+
+def validate_and_clean_layer(gpkg_path: Path, layer_name: str) -> None:
+    """
+    Validate and clean geometries in a layer to prevent issues with viewers.
+
+    This function:
+    - Removes features with None/empty geometries
+    - Fixes invalid geometries using make_valid
+    - Ensures all geometries are valid Polygons or MultiPolygons
+
+    Args:
+        gpkg_path: Path to the GeoPackage file
+        layer_name: Name of the layer to validate and clean
+    """
+    print(f"Validating and cleaning layer: {layer_name}...")
+
+    gdf = gpd.read_file(gpkg_path, layer=layer_name)
+    initial_count = len(gdf)
+
+    gdf = gdf[~gdf.geometry.is_empty & gdf.geometry.notna()]
+
+    invalid_mask = ~gdf.geometry.is_valid
+    invalid_count = invalid_mask.sum()
+
+    if invalid_count > 0:
+        print(f"  Found {invalid_count} invalid geometries, fixing...")
+        gdf.loc[invalid_mask, "geometry"] = gdf.loc[invalid_mask, "geometry"].apply(make_valid)
+
+    valid_geom_types = ["Polygon", "MultiPolygon"]
+    gdf = gdf[gdf.geometry.geom_type.isin(valid_geom_types)]
+
+    final_count = len(gdf)
+    removed_count = initial_count - final_count
+
+    if removed_count > 0:
+        print(f"  Removed {removed_count} invalid/empty features")
+
+    print(f"  Final feature count: {final_count}")
+    gdf.to_file(gpkg_path, layer=layer_name, driver="GPKG")
+    print(f"  Layer {layer_name} cleaned and saved")
 
 
 def generate_clusters(cfg: ClusterConfig) -> Path:
@@ -142,6 +185,8 @@ def generate_clusters(cfg: ClusterConfig) -> Path:
         block_layer_name=input_blocks_layer_name,
         final_layer_name=final_layer_name,
     )
+
+    validate_and_clean_layer(output_gpkg, final_layer_name)
 
     print("Exporting merged grids to GeoJSON...")
     output_geojson = out_dir / "outputs.geojson"

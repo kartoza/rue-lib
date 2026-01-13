@@ -307,7 +307,7 @@ def buffer_layer(input_path, layer_name, distance, output_path, output_layer_nam
             wkb_data = bytes(wkb_data)
         shapely_geom = shapely_wkb.loads(wkb_data)
 
-        buffered_shapely = shapely_geom.buffer(distance, join_style="mitre", cap_style="square")
+        buffered_shapely = shapely_geom.buffer(distance, join_style="mitre", cap_style="flat")
 
         # Convert back to OGR
         buffered = ogr.CreateGeometryFromWkb(buffered_shapely.wkb)

@@ -88,6 +88,7 @@ def generate_parcels(cfg: SiteConfig) -> Path:
             output_gpkg=str(gpkg_path),
             output_layer_name="parcels",
             buffer_distance=(cfg.road_arterial_width_m - cfg.road_local_width_m) / 2,
+            buffer_cap_style="flat",
         )
         subtract_layer(
             input_gpkg=str(gpkg_path),
@@ -96,6 +97,7 @@ def generate_parcels(cfg: SiteConfig) -> Path:
             output_gpkg=str(gpkg_path),
             output_layer_name="parcels",
             buffer_distance=(cfg.road_secondary_width_m - cfg.road_local_width_m) / 2,
+            buffer_cap_style="flat",
         )
     else:
         site_m.to_file(gpkg_path, layer="parcels", driver="GPKG")

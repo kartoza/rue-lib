@@ -679,7 +679,7 @@ def grids_from_site(
                 if i == j or other_grid["merged"]:
                     continue
 
-                distance = grid["geom"].distance(other_grid["geom"])
+                distance = grid["geom"].centroid.distance(other_grid["geom"].centroid)
                 if distance < min_distance:
                     min_distance = distance
                     closest_idx = j
@@ -745,7 +745,8 @@ def _pick_intersection_point(
 
     if inter.geom_type == "MultiPoint":
         points = list(inter.geoms)
-        return points
+        points = sorted(points, key=lambda p: p.distance(midpoint))
+        return [points[0]]
 
     if inter.geom_type in ("LineString", "MultiLineString"):
         _, snapped = nearest_points(midpoint, inter)
@@ -889,6 +890,12 @@ def extract_grid_lines_in_buffer(
     for line_idx, edge in enumerate(internal_lines):
         midpoint = edge.centroid.buffer(0.1)
         inter_points = _pick_intersection_point(edge, midpoint, buffer_boundary)
+
+        # If line is inside the buffer, skip it
+        line_start = edge.interpolate(0.15, normalized=True)
+        line_end = edge.interpolate(0.85, normalized=True)
+        if all(buffer_geom.contains(pt) for pt in [line_start, line_end]):
+            continue
 
         if not all(isinstance(pt, Point) and not pt.is_empty for pt in inter_points):
             continue

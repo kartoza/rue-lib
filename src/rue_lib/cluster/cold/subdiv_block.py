@@ -5,6 +5,7 @@ import geopandas as gpd
 from osgeo import ogr
 from shapely.geometry import LineString, MultiLineString, MultiPolygon, Point, Polygon
 
+from rue_lib.cluster.off_grid import extend_line
 from rue_lib.core.definitions import ClusterTypes, ColorTypes
 
 
@@ -707,7 +708,8 @@ def subdivide_blocks_by_concave_points(
                     if not geom.intersects(line_geom):
                         continue
                     geom = working_buffered_geoms.pop(key)
-                    parts = split_polygon_by_line_shapely(geom, line_geom)
+                    extended_line = extend_line(line_geom, 2)
+                    parts = split_polygon_by_line_shapely(geom, extended_line)
                     for part in parts:
                         new_key = max(working_buffered_geoms.keys() or [key]) + 1
                         working_buffered_geoms[new_key] = part
