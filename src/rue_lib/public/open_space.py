@@ -382,6 +382,7 @@ def allocate_open_spaces(
                         parcel_centroid,
                     )
 
+                    # Find and allocate one adjacent on-grid block
                     loc_loc_adjacent = find_adjacent_blocks(
                         concave_block, blocks_in_site, ClusterTypes.ON_GRID_LOC_LOC
                     )

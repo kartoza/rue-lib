@@ -53,7 +53,9 @@ def buffer_roads(
     if not art.empty:
         art["geometry"] = art.geometry.apply(
             lambda g: wkt.loads(
-                buffer_geometry(g.wkt, road_arterial_width_m / 2, cap_style=2, join_style=2)
+                buffer_geometry(
+                    g.wkt, road_arterial_width_m / 2, cap_style="flat", join_style="mitre"
+                )
             )
         )
         parts.append(art)
@@ -61,7 +63,9 @@ def buffer_roads(
     if not sec.empty:
         sec["geometry"] = sec.geometry.apply(
             lambda g: wkt.loads(
-                buffer_geometry(g.wkt, road_secondary_width_m / 2, cap_style=2, join_style=2)
+                buffer_geometry(
+                    g.wkt, road_secondary_width_m / 2, cap_style="flat", join_style="mitre"
+                )
             )
         )
         parts.append(sec)

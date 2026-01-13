@@ -1626,6 +1626,8 @@ def subtract_layer(
     output_layer_name: str,
     buffer_distance: float = 0.0,
     simplify: bool = False,
+    buffer_cap_style=CAP_STYLE.square,
+    buffer_join_style=JOIN_STYLE.mitre,
 ) -> str:
     """
     Subtract one layer from another using geometric difference (GeoPandas/Shapely).
@@ -1676,7 +1678,7 @@ def subtract_layer(
         # Buffer the erase geometry if buffer_distance is specified
         if buffer_distance > 0:
             erase_union = erase_union.buffer(
-                buffer_distance, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+                buffer_distance, cap_style=buffer_cap_style, join_style=buffer_join_style
             )
 
             if simplify:
@@ -1688,7 +1690,7 @@ def subtract_layer(
         else:
             # Small buffer to clean geometry
             erase_union = erase_union.buffer(
-                0.001, cap_style=CAP_STYLE.square, join_style=JOIN_STYLE.mitre
+                0.001, cap_style=buffer_cap_style, join_style=buffer_join_style
             )
         erased_geom = gdf_base.geometry.difference(erase_union)
 
