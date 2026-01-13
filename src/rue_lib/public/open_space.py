@@ -410,7 +410,7 @@ def allocate_open_spaces(
             ].copy()
 
             if remaining_off_grid0.empty:
-                break
+                continue
 
             remaining_off_grid0 = remaining_off_grid0.sort_values("distance", ascending=False)
 
