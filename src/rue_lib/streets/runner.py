@@ -264,7 +264,7 @@ def generate_streets(cfg: StreetConfig) -> Path:
             output_gpkg,
             cleaned_cells_layer,
             target_area=preferred_depth_off_cluster_grid * preferred_width_off_cluster_grid,
-            area_threshold_ratio=0.5,
+            area_threshold_ratio=0.35,
         )
     else:
         print("  No fixed cells available, using original off-grid cells")
