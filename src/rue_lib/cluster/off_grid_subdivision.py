@@ -5,10 +5,52 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-from shapely.geometry import Polygon
+from shapely.geometry import LineString, Polygon
 
 from rue_lib.cluster.classification import classify_plot_by_area
 from rue_lib.cluster.helpers import convert_to_quadrilateral
+
+
+def find_edge_closest_to_roads(
+    quad: Polygon,
+    roads: gpd.GeoDataFrame,
+) -> int:
+    """
+    Find which edge of a quadrilateral is closest to arterial roads.
+
+    This determines the orientation of the grid - the edge closest to arterial
+    roads is considered the "front" (width direction).
+
+    Args:
+        quad: Quadrilateral polygon
+        roads: GeoDataFrame with arterial roads
+
+    Returns:
+        Index of the edge (0-3) closest to arterial roads
+    """
+    coords = list(quad.exterior.coords)[:-1]
+    if len(coords) != 4:
+        return 0  # Default to first edge if not a quadrilateral
+
+    # Create edges as LineStrings
+    edges = []
+    for i in range(4):
+        edge = LineString([coords[i], coords[(i + 1) % 4]])
+        edges.append(edge)
+
+    # Find minimum distance from each edge to any arterial road
+    min_distances = []
+    for edge in edges:
+        edge_center = edge.centroid
+        min_dist = float("inf")
+        for _, road_row in roads.iterrows():
+            dist = edge_center.distance(road_row.geometry)
+            if dist < min_dist:
+                min_dist = dist
+        min_distances.append(min_dist)
+
+    # Return index of edge with minimum distance to arterial roads
+    return min_distances.index(min(min_distances))
 
 
 def create_grid_positions(
@@ -16,6 +58,7 @@ def create_grid_positions(
     part_og_w: float,
     part_og_d: float,
     swap_orientation: bool = False,
+    front_edge_index: int = None,
 ) -> list[list[tuple[float, float]]]:
     """
     Create a grid of positions within a quadrilateral for plot subdivision.
@@ -24,9 +67,11 @@ def create_grid_positions(
 
     Args:
         quad: Quadrilateral polygon to subdivide
-        part_og_w: Off-grid plot width (meters)
-        part_og_d: Off-grid plot depth (meters)
+        part_og_w: Off-grid plot width (meters) - along the front edge
+        part_og_d: Off-grid plot depth (meters) - perpendicular to front edge
         swap_orientation: If True, swap width and depth
+        front_edge_index: Index of edge to use as front (closest to arterial road).
+                         If None, uses x-axis alignment heuristic.
 
     Returns:
         2D list of (x, y) positions: positions[i][j] = (x, y)
@@ -44,15 +89,20 @@ def create_grid_positions(
         edges.append((p0, edge_vec))
         lengths.append(edge_len)
 
-    x_dots = []
-    for i in range(4):
-        edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else edges[i][1]
-        dot = np.dot([1, 0], edge_vec_norm[:2])
-        x_dots.append(dot)
+    # Determine which edge is the "front" (width direction)
+    if front_edge_index is not None:
+        # Use the specified front edge (closest to arterial road)
+        a = front_edge_index
+    else:
+        # Fallback: use x-axis alignment heuristic
+        x_dots = []
+        for i in range(4):
+            edge_vec_norm = edges[i][1] / lengths[i] if lengths[i] > 0 else edges[i][1]
+            dot = np.dot([1, 0], edge_vec_norm[:2])
+            x_dots.append(dot)
+        sorted_indices = sorted(range(4), key=lambda i: x_dots[i])
+        a = sorted_indices[-1]
 
-    sorted_indices = sorted(range(4), key=lambda i: x_dots[i])
-
-    a = sorted_indices[-1]
     b = (a + 1) % 4
     c = (a + 2) % 4
     d = (a + 3) % 4
@@ -177,6 +227,7 @@ def subdivide_off_grid(
     part_og_d: float = 140.0,
     swap_orientation: bool = False,
     min_plot_area: float = None,
+    front_edge_index: int = None,
 ) -> list[Polygon]:
     """
     Subdivide an off-grid polygon into a grid of smaller plots.
@@ -189,10 +240,11 @@ def subdivide_off_grid(
 
     Args:
         off_grid: Off-grid polygon to subdivide
-        part_og_w: Plot width (meters)
-        part_og_d: Plot depth (meters)
+        part_og_w: Plot width (meters) - along the front edge
+        part_og_d: Plot depth (meters) - perpendicular to front edge
         swap_orientation: If True, swap width and depth
         min_plot_area: Minimum plot area (m²). Defaults to 30% of target plot size
+        front_edge_index: Index of edge to use as front (closest to arterial road)
 
     Returns:
         List of plot polygons
@@ -217,6 +269,7 @@ def subdivide_off_grid(
             part_og_w,
             part_og_d,
             swap_orientation,
+            front_edge_index=front_edge_index,
         )
     except Exception as e:
         print(f"Warning: Failed to create grid positions: {e}")
@@ -250,6 +303,7 @@ def extract_off_grid_cluster(
     part_og_d: float,
     output_layer_name: str,
     min_plot_area: float,
+    roads_layer_name: str = None,
 ):
     """
     Extract and subdivide off-grid areas into plot clusters.
@@ -261,14 +315,29 @@ def extract_off_grid_cluster(
     Args:
         output_path: Path to the GeoPackage file containing off-grid data
         off_grids_layer_name: Name of the layer containing off-grid geometries
-        part_og_w: Target plot width in meters
-        part_og_d: Target plot depth in meters
+        part_og_w: Target plot width in meters (along front edge near arterial road)
+        part_og_d: Target plot depth in meters (perpendicular to front edge)
         output_layer_name: Layer name for the output plots
+        min_plot_area: Minimum plot area threshold
+        roads_layer_name: Name of roads layer to determine orientation (optional)
 
     Returns:
-        None (currently collects plots but doesn't return them)
+        Layer name of the output
     """
     off_grids_layer = gpd.read_file(output_path, layer=off_grids_layer_name)
+
+    # Load arterial roads if roads layer is provided
+    arterial_roads = None
+    if roads_layer_name:
+        try:
+            roads_layer = gpd.read_file(output_path, layer=roads_layer_name)
+            # Filter to arterial roads only
+            arterial_roads = roads_layer[roads_layer["type"] == "road_arterial"]
+            if arterial_roads.empty:
+                arterial_roads = None
+        except Exception as e:
+            print(f"    Warning: Could not load arterial roads: {e}")
+            arterial_roads = None
 
     all_plots = []
 
@@ -282,6 +351,13 @@ def extract_off_grid_cluster(
         print(f"    Off-grid area: {off_grid_geom.area:.2f} m²")
 
         try:
+            # Determine front edge based on proximity to arterial roads
+            front_edge_index = None
+            if arterial_roads is not None and not arterial_roads.empty:
+                quad = convert_to_quadrilateral(off_grid_geom, min_area=100.0)
+                if quad is not None:
+                    front_edge_index = find_edge_closest_to_roads(quad, arterial_roads)
+
             # Subdivide the off-grid area using oriented approach
             plots = subdivide_off_grid(
                 block_id,
@@ -289,6 +365,7 @@ def extract_off_grid_cluster(
                 part_og_w=part_og_w,
                 part_og_d=part_og_d,
                 min_plot_area=min_plot_area,
+                front_edge_index=front_edge_index,
             )
 
             print(f"    ✓ Created {len(plots)} plots")

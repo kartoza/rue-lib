@@ -135,6 +135,7 @@ def generate_warm(
             part_og_d=part_og_d,
             output_layer_name=off_grid_inner_cluster_layer_name,
             min_plot_area=part_og_w * part_og_d * cfg.off_grid_plot_threshold,
+            roads_layer_name=roads_layer_name,
         )
         print("Step 6: Subdiv side off grid into parts...")
         off_grid_side_cluster_layer_name = "109_side_grid_subdiv"
@@ -145,6 +146,7 @@ def generate_warm(
             part_og_d=part_og_d,
             output_layer_name=off_grid_side_cluster_layer_name,
             min_plot_area=part_loc_d * part_og_w * cfg.off_grid_plot_threshold,
+            roads_layer_name=roads_layer_name,
         )
 
     print("Step 8: generate art sec parts no offgrid ")
