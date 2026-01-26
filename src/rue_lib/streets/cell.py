@@ -875,8 +875,9 @@ def merge_small_cells_with_neighbors(
         edges.sort(reverse=True, key=lambda x: x[0])
 
         neighbor_idx = None
+        small_cell_area_ratio = small_cell_row.get("area_ratio", 0.0)
 
-        for edge_length, edge in edges:
+        for edge_length, edge in edges[:2]:
             for idx, row in gdf_working.iterrows():
                 if idx == small_cell_idx:
                     continue
@@ -884,10 +885,16 @@ def merge_small_cells_with_neighbors(
                 other_geom = row.geometry
 
                 if edge.distance(other_geom) < 0.1:
-                    intersection = edge.intersection(other_geom.boundary)
+                    intersection = edge.buffer(0.1).intersection(other_geom.boundary)
                     if intersection.length > edge_length * 0.8:
-                        neighbor_idx = idx
-                        break
+                        # Check if neighbor is suitable for merging:
+                        # 1. Neighbor area_ratio < 0.8, OR
+                        # 2. Sum of both area_ratios is around 1 (within 0.2 tolerance)
+                        neighbor_area_ratio = row.get("area_ratio", 0.0)
+                        sum_area_ratios = small_cell_area_ratio + neighbor_area_ratio
+                        if neighbor_area_ratio < 0.8 or abs(sum_area_ratios - 1.0) < 0.2:
+                            neighbor_idx = idx
+                            break
 
             if neighbor_idx is not None:
                 break
@@ -906,12 +913,12 @@ def merge_small_cells_with_neighbors(
         neighbor_geom = neighbor_row.geometry
         neighbor_area = neighbor_geom.area
 
-        merged_geom = unary_union([small_cell_geom, neighbor_geom])
+        merged_geom = unary_union([small_cell_geom.buffer(0.1), neighbor_geom.buffer(0.1)])
 
         if merged_geom.geom_type == "MultiPolygon":
             merged_geom = max(merged_geom.geoms, key=lambda p: p.area)
 
-        merged_geom = merged_geom.buffer(0)
+        merged_geom = merged_geom.buffer(-0.1)
         merged_area = merged_geom.area
 
         print(
