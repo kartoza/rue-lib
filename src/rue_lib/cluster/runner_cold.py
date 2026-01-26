@@ -15,6 +15,7 @@ from rue_lib.cluster.cold.cluster_on_grid import (
     create_perpendicular_lines_from_front_points,
     extract_off_grid_adjacent_lines,
     extract_vertices_from_lines,
+    merge_small_width_off_grid2_clusters,
     merge_vertices_into_lines_by_angle,
     sample_points_along_front_lines,
 )
@@ -311,12 +312,22 @@ def generate_cold(
         target_area_m2=cfg.off_grid_cluster_width * cfg.off_grid_cluster_depth,
     )
 
+    print("\nStep 21b: Merge small-width off_grid2 clusters...")
+    clusters_merged_layer = "219b_off_grid_cold_clusters_merged"
+    merge_small_width_off_grid2_clusters(
+        output_path,
+        clusters_layer,
+        output_path,
+        clusters_merged_layer,
+        min_edge_width=cfg.off_grid_cluster_width * 0.9,
+    )
+
     print("\nStep 22: Merge and classify off-grid cold clusters...")
     off_grid_final_layer = "220_final_cold_off_grid_clusters"
     merge_and_classify_off_grid_clusters(
         output_path,
         off_grid_block,
-        clusters_layer,
+        clusters_merged_layer,
         output_path,
         off_grid_final_layer,
     )
