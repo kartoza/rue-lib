@@ -3,6 +3,7 @@ import math
 
 from osgeo import ogr
 from shapely.geometry import LineString, MultiLineString
+from shapely.ops import substring
 
 
 def is_duplicate(new_geom, existing_geoms):
@@ -396,3 +397,19 @@ def merge_connected_edges(edges_with_info):
             merged_results.append((merged_line, setback_id, avg_distance, total_length))
 
     return merged_results
+
+
+def trim_line(geom, trim_distance):
+    """Trim the first and last portion of a line by the specified distance.
+
+    Args:
+        geom: Shapely LineString geometry
+        trim_distance: Distance to trim from both ends
+
+    Returns:
+        Trimmed LineString, or None if the line is too short
+    """
+    length = geom.length
+    if length <= 2 * trim_distance:
+        return None
+    return substring(geom, trim_distance, length - trim_distance)
