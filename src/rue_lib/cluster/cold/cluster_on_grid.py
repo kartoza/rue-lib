@@ -1242,6 +1242,7 @@ def create_off_grid_cold_clusters(
                                 {
                                     "id": cluster_id,
                                     "orig_id": block_orig_id,
+                                    "line_id": block_row.get("line_id"),
                                     "type": cluster_type,
                                     "area": float(part.area),
                                     "color": ColorTypes[cluster_type],
@@ -1396,6 +1397,7 @@ def create_off_grid_cold_clusters(
                                     "orig_id": block_orig_id,
                                     "type": cluster_type,
                                     "area": float(part.area),
+                                    "line_id": block_row.get("line_id"),
                                     "color": ColorTypes[cluster_type],
                                 }
                             )
@@ -1430,6 +1432,7 @@ def create_off_grid_cold_clusters(
                     "id": cluster_id,
                     "orig_id": orig_id,
                     "type": _type,
+                    "line_id": block_row.get("line_id"),
                     "color": ColorTypes[_type],
                     "area": float(block_geom.area),
                 }
@@ -1503,5 +1506,177 @@ def create_off_grid_cold_clusters(
     gdf_clusters = temp_gdf
     gdf_clusters.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
     print(f"  Created {len(gdf_clusters)} cluster polygons (after merging)")
+
+    return output_layer_name
+
+
+def merge_small_width_off_grid2_clusters(
+    input_gpkg: str,
+    clusters_layer_name: str,
+    output_gpkg: str,
+    output_layer_name: str,
+    min_edge_width: float = 10.0,
+) -> str:
+    """
+    Merge off_grid2 blocks that have small edge width with off_grid1 neighbors.
+
+    This function identifies off_grid2 clusters where the shared edge with
+    off_grid1 neighbors is smaller than a threshold, then merges them with
+    the smallest neighboring off_grid2 cluster.
+
+    Args:
+        input_gpkg: Path to input GeoPackage containing clusters
+        clusters_layer_name: Name of the layer containing cluster polygons
+        output_gpkg: Path to output GeoPackage
+        output_layer_name: Name for the output layer
+        min_edge_width: Minimum edge width threshold (meters). Clusters with
+                       smaller shared edges will be merged.
+
+    Returns:
+        Name of the output layer
+    """
+    gdf = gpd.read_file(input_gpkg, layer=clusters_layer_name)
+
+    if gdf.empty:
+        print("  No clusters to process")
+        gdf.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
+
+    # Find off_grid2 clusters
+    off_grid2_mask = gdf["type"] == "off_grid2"
+    off_grid2_indices = gdf[off_grid2_mask].index.tolist()
+
+    print(f"  Found {len(off_grid2_indices)} off_grid2 clusters to check")
+
+    small_edge_clusters = []
+
+    adjacency_buffer = 0.5
+
+    for idx in off_grid2_indices:
+        cluster_geom = gdf.loc[idx, "geometry"]
+        cluster_orig_id = gdf.loc[idx, "orig_id"]
+        line_id = gdf.loc[idx, "line_id"]
+
+        # Buffer the cluster geometry slightly to detect adjacent polygons
+        cluster_buffered = cluster_geom.buffer(adjacency_buffer)
+
+        # Find adjacent off_grid1 clusters
+        for other_idx in gdf.index:
+            if other_idx == idx:
+                continue
+            other_type = gdf.loc[other_idx, "type"]
+            other_line_id = gdf.loc[other_idx, "line_id"]
+            if other_type != "off_grid1":
+                continue
+
+            if other_line_id != line_id:
+                continue
+
+            other_geom = gdf.loc[other_idx, "geometry"]
+
+            try:
+                cluster_boundary = cluster_geom.boundary
+                other_boundary = other_geom.boundary
+
+                boundary_intersection = cluster_boundary.intersection(other_boundary)
+
+                if boundary_intersection.is_empty:
+                    continue
+
+                edge_length = 0
+                if boundary_intersection.geom_type == "LineString":
+                    edge_length = boundary_intersection.length
+                elif boundary_intersection.geom_type == "MultiLineString":
+                    edge_length = sum(line.length for line in boundary_intersection.geoms)
+                elif boundary_intersection.geom_type == "GeometryCollection":
+                    for geom in boundary_intersection.geoms:
+                        if hasattr(geom, "length"):
+                            edge_length += geom.length
+                elif hasattr(boundary_intersection, "length"):
+                    edge_length = boundary_intersection.length
+                elif boundary_intersection.geom_type in ["Polygon", "MultiPolygon"]:
+                    if boundary_intersection.geom_type == "Polygon":
+                        edge_length = max(
+                            0, boundary_intersection.length / 2 - adjacency_buffer * 2
+                        )
+                    else:
+                        for poly in boundary_intersection.geoms:
+                            edge_length += max(0, poly.length / 2 - adjacency_buffer * 2)
+
+                if edge_length > 0 and edge_length < min_edge_width:
+                    small_edge_clusters.append(
+                        {
+                            "idx": idx,
+                            "edge_length": edge_length,
+                            "orig_id": cluster_orig_id,
+                        }
+                    )
+                    print(f"    Found off_grid2 cluster {idx} with small edge: {edge_length:.1f}m")
+                    break
+
+            except Exception as e:
+                print(f"    Warning: Error calculating edge for cluster {idx}: {e}")
+                continue
+
+    print(f"  Found {len(small_edge_clusters)} off_grid2 clusters with small edge width")
+
+    if not small_edge_clusters:
+        gdf.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
+        return output_layer_name
+
+    small_edge_clusters.sort(key=lambda x: x["edge_length"])
+
+    merged_away = set()
+    merged_count = 0
+
+    for cluster_info in small_edge_clusters:
+        idx = cluster_info["idx"]
+        if idx in merged_away:
+            continue
+
+        cluster_geom = gdf.loc[idx, "geometry"]
+        cluster_orig_id = gdf.loc[idx, "orig_id"]
+
+        cluster_buffered = cluster_geom.buffer(adjacency_buffer)
+
+        adjacent_off_grid2 = []
+        for other_idx in gdf.index:
+            if other_idx == idx or other_idx in merged_away:
+                continue
+            other_type = gdf.loc[other_idx, "type"]
+            if other_type != "off_grid2":
+                continue
+
+            other_geom = gdf.loc[other_idx, "geometry"]
+            if cluster_buffered.intersects(other_geom):
+                adjacent_off_grid2.append({"idx": other_idx, "area": gdf.loc[other_idx, "area"]})
+
+        if not adjacent_off_grid2:
+            continue
+
+        adjacent_off_grid2.sort(key=lambda x: x["area"])
+        smallest_neighbor = adjacent_off_grid2[0]
+        neighbor_idx = smallest_neighbor["idx"]
+
+        neighbor_geom = gdf.loc[neighbor_idx, "geometry"]
+        merged_geom = unary_union([cluster_geom, neighbor_geom])
+        merged_area = float(merged_geom.area)
+
+        gdf.loc[neighbor_idx, "geometry"] = merged_geom
+        gdf.loc[neighbor_idx, "area"] = merged_area
+
+        merged_away.add(idx)
+        merged_count += 1
+        print(
+            f"    Merged off_grid2 cluster {idx} (edge={cluster_info['edge_length']:.1f}m) "
+            f"into cluster {neighbor_idx}"
+        )
+
+    if merged_away:
+        gdf = gdf.drop(index=list(merged_away))
+        gdf = gdf.reset_index(drop=True)
+
+    print(f"  Total merged: {merged_count} small-edge off_grid2 clusters")
+    gdf.to_file(output_gpkg, layer=output_layer_name, driver="GPKG")
 
     return output_layer_name
