@@ -9,6 +9,110 @@ from shapely.ops import linemerge
 GeomInput = Union[str, bytes, bytearray, memoryview]
 
 
+def extend_line_to_geometry(
+    line: LineString,
+    target_geometry,
+    extend_start: bool = False,
+    extend_end: bool = False,
+    max_extension: float = 100.0,
+    overshoot: float = 0.01,
+) -> LineString:
+    """Extend a LineString at specified ends until it touches target geometry.
+
+    Args:
+        line: The LineString to extend
+        target_geometry: The geometry to extend towards (e.g., lines to intersect)
+        extend_start: Whether to extend from the start of the line
+        extend_end: Whether to extend from the end of the line
+        max_extension: Maximum distance to extend
+        overshoot: Small distance to extend past intersection for polygon creation
+
+    Returns:
+        A new LineString extended to touch target_geometry
+    """
+    if not isinstance(line, LineString) or len(line.coords) < 2:
+        return line
+
+    if not extend_start and not extend_end:
+        return line
+
+    coords = list(line.coords)
+    new_start = coords[0]
+    new_end = coords[-1]
+
+    if extend_start:
+        x1, y1 = coords[0][0], coords[0][1]
+        x2, y2 = coords[1][0], coords[1][1]
+        dx, dy = x1 - x2, y1 - y2
+        seg_len = (dx**2 + dy**2) ** 0.5
+        if seg_len > 0:
+            dx, dy = dx / seg_len, dy / seg_len
+            ext_x, ext_y = x1 + dx * max_extension, y1 + dy * max_extension
+            ray = LineString([(x1, y1), (ext_x, ext_y)])
+            intersection = ray.intersection(target_geometry)
+            if not intersection.is_empty:
+                # Get intersection point
+                if intersection.geom_type == "Point":
+                    int_pt = intersection
+                elif hasattr(intersection, "geoms"):
+                    # Find closest point to line start
+                    min_dist = float("inf")
+                    int_pt = None
+                    for geom in intersection.geoms:
+                        if geom.geom_type == "Point":
+                            dist = ((geom.x - x1) ** 2 + (geom.y - y1) ** 2) ** 0.5
+                            if dist < min_dist:
+                                min_dist = dist
+                                int_pt = geom
+                else:
+                    int_pt = None
+
+                if int_pt is not None:
+                    # Extend slightly past intersection for polygon creation
+                    new_start = (int_pt.x + dx * overshoot, int_pt.y + dy * overshoot)
+
+    if extend_end:
+        x1, y1 = coords[-2][0], coords[-2][1]
+        x2, y2 = coords[-1][0], coords[-1][1]
+        dx, dy = x2 - x1, y2 - y1
+        seg_len = (dx**2 + dy**2) ** 0.5
+        if seg_len > 0:
+            dx, dy = dx / seg_len, dy / seg_len
+            ext_x, ext_y = x2 + dx * max_extension, y2 + dy * max_extension
+            ray = LineString([(x2, y2), (ext_x, ext_y)])
+            intersection = ray.intersection(target_geometry)
+            if not intersection.is_empty:
+                # Get intersection point
+                if intersection.geom_type == "Point":
+                    int_pt = intersection
+                elif hasattr(intersection, "geoms"):
+                    # Find closest point to line end
+                    min_dist = float("inf")
+                    int_pt = None
+                    for geom in intersection.geoms:
+                        if geom.geom_type == "Point":
+                            dist = ((geom.x - x2) ** 2 + (geom.y - y2) ** 2) ** 0.5
+                            if dist < min_dist:
+                                min_dist = dist
+                                int_pt = geom
+                else:
+                    int_pt = None
+
+                if int_pt is not None:
+                    # Extend slightly past intersection for polygon creation
+                    new_end = (int_pt.x + dx * overshoot, int_pt.y + dy * overshoot)
+
+    # Build new coordinate list
+    new_coords = []
+    if new_start != coords[0]:
+        new_coords.append(new_start)
+    new_coords.extend(coords)
+    if new_end != coords[-1]:
+        new_coords.append(new_end)
+
+    return LineString(new_coords)
+
+
 def extend_line(line: LineString, extension_m: float) -> LineString:
     """Extend a LineString by a given distance at both ends.
 
