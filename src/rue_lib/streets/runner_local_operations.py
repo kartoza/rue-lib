@@ -8,7 +8,7 @@ import geopandas as gpd
 from shapely import LineString, unary_union
 from shapely.ops import polygonize
 
-from rue_lib.core.geometry_sampling import extend_line
+from rue_lib.core.geometry_sampling import extend_line_to_geometry
 
 from .runner_utils import subtract_layer
 
@@ -308,20 +308,45 @@ def build_base_polygons(
                 line_geoms.append(LineString(poly.exterior))
                 line_geoms.extend(LineString(ring) for ring in poly.interiors if not ring.is_empty)
 
+    # Create union of site boundaries for intersection checking
+    target_lines = unary_union(line_geoms)
+
     for geom in gdf_local_lines.geometry:
         if geom is None or geom.is_empty:
             continue
         if geom.geom_type == "LineString":
-            should_extend = False
             geom_start = geom.interpolate(0)
             geom_end = geom.interpolate(geom.length)
-            if geom_start.buffer(0.1).intersects(roads_buffer) or geom_end.buffer(0.1).intersects(
-                roads_buffer
-            ):
-                should_extend = True
-            line_geoms.append(extend_line(geom, line_extension) if should_extend else geom)
+            extend_start = geom_start.buffer(10).intersects(roads_buffer)
+            extend_end = geom_end.buffer(10).intersects(roads_buffer)
+            if extend_start or extend_end:
+                extended_geom = extend_line_to_geometry(
+                    geom,
+                    target_lines,
+                    extend_start=extend_start,
+                    extend_end=extend_end,
+                    max_extension=line_extension,
+                )
+                line_geoms.append(extended_geom)
+            else:
+                line_geoms.append(geom)
         elif geom.geom_type == "MultiLineString":
-            line_geoms.extend([extend_line(g, line_extension) for g in geom.geoms])
+            for g in geom.geoms:
+                g_start = g.interpolate(0)
+                g_end = g.interpolate(g.length)
+                extend_start = g_start.buffer(1).intersects(roads_buffer)
+                extend_end = g_end.buffer(1).intersects(roads_buffer)
+                if extend_start or extend_end:
+                    extended_g = extend_line_to_geometry(
+                        g,
+                        target_lines,
+                        extend_start=extend_start,
+                        extend_end=extend_end,
+                        max_extension=line_extension,
+                    )
+                    line_geoms.append(extended_g)
+                else:
+                    line_geoms.append(g)
 
     if not line_geoms:
         print("  Warning: no line geometries available to polygonize")

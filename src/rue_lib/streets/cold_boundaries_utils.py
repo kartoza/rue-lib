@@ -162,16 +162,36 @@ def extract_cold_boundary_lines_from_vertices(
             if coords[0] != coords[-1]:
                 coords.append(coords[0])
 
-        line_string = LineString(coords)
-        out_lines.append(line_string)
-        records.append(
-            {
-                "cold_id": cold_id,
-                "segment_idx": 0,
-                "segment_length": float(line_string.length),
-                "num_vertices": len(coords),
-            }
-        )
+        valid_coords = [coords[0]]
+        for i in range(len(coords) - 1):
+            segment = LineString([coords[i], coords[i + 1]])
+            if segment.within(cold_geom.buffer(1)) or cold_geom.buffer(1).contains(segment):
+                valid_coords.append(coords[i + 1])
+            else:
+                if len(valid_coords) >= 2:
+                    line_string = LineString(valid_coords)
+                    out_lines.append(line_string)
+                    records.append(
+                        {
+                            "cold_id": cold_id,
+                            "segment_idx": len(out_lines) - 1,
+                            "segment_length": float(line_string.length),
+                            "num_vertices": len(valid_coords),
+                        }
+                    )
+                valid_coords = [coords[i + 1]] if i + 1 < len(coords) else []
+
+        if len(valid_coords) >= 2:
+            line_string = LineString(valid_coords)
+            out_lines.append(line_string)
+            records.append(
+                {
+                    "cold_id": cold_id,
+                    "segment_idx": len(out_lines) - 1,
+                    "segment_length": float(line_string.length),
+                    "num_vertices": len(valid_coords),
+                }
+            )
 
     if not out_lines:
         print("  Warning: no cold boundary lines were created from vertices")
