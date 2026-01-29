@@ -123,7 +123,7 @@ def generate_streets_with_local_roads(cfg: StreetConfig, local_roads_geojson: st
         roads_buffer_layer=input_roads_buffer_layer_name,
         local_roads_layer=local_roads_layer,
         output_layer_name=base_polygons_layer,
-        line_extension=cfg.road_locals_width_m / 2.0 + 0.01,
+        line_extension=cfg.road_locals_width_m,
     )
 
     # Step 8: Classify blocks by road type
